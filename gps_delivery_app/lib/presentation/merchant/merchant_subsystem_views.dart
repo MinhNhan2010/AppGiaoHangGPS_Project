@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
@@ -156,13 +157,74 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildScreenSelectorBar(),
-        const SizedBox(height: AppSpacing.md),
-        _buildActiveMerchantScreen(context),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 900) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 250,
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                decoration: BoxDecoration(
+                  color: AppColors.darkSidebar,
+                  borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(AppSpacing.sm),
+                      child: Text(
+                        'MERCHANT PORTAL B2B\n${_store.merchantStoreName}',
+                        style: const TextStyle(
+                          color: AppColors.surface,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const Divider(color: Colors.white24),
+                    ...List.generate(_screenTitles.length, (index) {
+                      final selected = _selectedScreenIndex == index;
+                      return ListTile(
+                        dense: true,
+                        selected: selected,
+                        selectedTileColor: AppColors.accent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        title: Text(
+                          _screenTitles[index],
+                          style: TextStyle(
+                            color:
+                                selected ? AppColors.surface : Colors.white70,
+                            fontSize: 12,
+                            fontWeight:
+                                selected ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        onTap: () =>
+                            setState(() => _selectedScreenIndex = index),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(child: _buildActiveMerchantScreen(context)),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildScreenSelectorBar(),
+            const SizedBox(height: AppSpacing.md),
+            _buildActiveMerchantScreen(context),
+          ],
+        );
+      },
     );
   }
 
@@ -588,13 +650,20 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      const Text(
-                        'FLASH DELIVERY • CODE-128: GHN-987654321',
-                        style: TextStyle(fontWeight: FontWeight.w800),
+                      Expanded(
+                        child: Code128BarcodeWidget(
+                          data: 'GHN-987654321-${ord.trackingCode}',
+                          height: 44,
+                        ),
                       ),
-                      const Icon(Icons.qr_code_2, size: 42),
+                      const SizedBox(width: AppSpacing.md),
+                      QrMatrixPainterWidget(
+                        payload:
+                            '${ord.trackingCode}|${ord.recipientPhone}|${ord.codAmount.toStringAsFixed(0)}',
+                        size: 68,
+                      ),
                     ],
                   ),
                   const Divider(),

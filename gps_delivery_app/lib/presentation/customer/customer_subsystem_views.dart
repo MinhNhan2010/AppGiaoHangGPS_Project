@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/pricing_estimate.dart';
 import '../../domain/enums/order_status.dart';
@@ -438,6 +440,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   /// Hình 8.4: UC03 Tạo đơn hàng giao nhận & Chọn gói dịch vụ (Siêu tốc 30p, Tiêu chuẩn, Tiết kiệm)
   Widget _buildCreateOrderView() {
+    final dropoffSuggestions =
+        SmartDispatchEngine.searchAddressSuggestions(_dropoffCtrl.text);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -455,6 +460,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 labelText: 'Điểm lấy hàng (Pickup Point - Màu xanh lá)',
                 prefixIcon: Icon(Icons.my_location, color: AppColors.success),
               ),
+              onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: AppSpacing.sm),
             TextField(
@@ -463,6 +469,32 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 labelText: 'Điểm giao hàng (Drop-off Point - Màu cam)',
                 prefixIcon: Icon(Icons.location_on, color: AppColors.accent),
               ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Gợi ý Geocoding Autocomplete (Chạm để chọn tọa độ GPS thực):',
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: dropoffSuggestions.map((place) {
+                return ActionChip(
+                  avatar: const Icon(
+                    Icons.place,
+                    size: 14,
+                    color: AppColors.accent,
+                  ),
+                  label: Text(
+                    '${place.title} (${place.location.latitude.toStringAsFixed(4)}, ${place.location.longitude.toStringAsFixed(4)})',
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  onPressed: () =>
+                      setState(() => _dropoffCtrl.text = place.fullAddress),
+                );
+              }).toList(),
             ),
             const SizedBox(height: AppSpacing.sm),
             Row(
@@ -572,6 +604,12 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
       voucherDiscount: discountVal,
     );
 
+    final paymentSig = SecurityAndBarcodeUtils.generatePaymentSignature(
+      orderCode: '#DH${100000 + _store.orders.length * 1423}',
+      amount: estimate.totalAmount,
+      method: _selectedPaymentMethod,
+    );
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -664,6 +702,55 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 );
               }).toList(),
             ),
+            if (_selectedPaymentMethod != 'Tiền mặt (COD)') ...[
+              const SizedBox(height: AppSpacing.sm),
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                decoration: BoxDecoration(
+                  color: AppColors.background,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.primary),
+                ),
+                child: Row(
+                  children: [
+                    QrMatrixPainterWidget(
+                      payload: '$_selectedPaymentMethod|$paymentSig',
+                      size: 72,
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Mã QR Thanh toán $_selectedPaymentMethod (RULE-FIN-04)',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            'Idempotency Hash: $paymentSig',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                          const Text(
+                            'Trạng thái Webhook IPN: Sẵn sàng xác thực tự động',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.success,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: AppSpacing.md),
             SizedBox(
               width: double.infinity,
@@ -739,6 +826,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   /// Hình 8.6: UC07 Theo dõi vị trí Tài xế trên bản đồ 3D Real-time
   Widget _buildLiveGpsTrackingView() {
     final activeOrder = _store.orders.first;
+    final remMeters = _store.distanceFromDriverToDropoffMeters();
+    final etaMinutes = (remMeters / 500.0).ceil().clamp(1, 45);
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -754,9 +844,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               is3dMode: _store.isMap3dEnabled,
               speedKmh: _store.currentSpeedKmh,
               onToggle3d: _store.toggleMap3d,
+              progressFraction: _store.routeProgressStep / 10.0,
               nextTurnInstruction:
-                  'Tài xế đang di chuyển • Còn 1.2 km (ETA: 14:30)',
-              roadName: activeOrder.dropoffAddress,
+                  'Tài xế cách điểm giao ${(remMeters / 1000).toStringAsFixed(2)} km (ETA: $etaMinutes phút)',
+              roadName:
+                  'Kalman GPS: (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})',
             ),
             const SizedBox(height: AppSpacing.md),
             Row(
@@ -813,6 +905,14 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               spacing: 8,
               runSpacing: 8,
               children: [
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                  ),
+                  onPressed: () => _store.stepDriverAlongRoute(),
+                  icon: const Icon(Icons.gps_fixed, size: 18),
+                  label: const Text('Bước tiến GPS (Kalman 2D)'),
+                ),
                 ElevatedButton.icon(
                   onPressed: () => setState(() => _selectedScreenIndex = 5),
                   icon: const Icon(Icons.chat_bubble_outline, size: 18),

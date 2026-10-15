@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import '../../../core/gps/kalman_gps_filter.dart';
+import '../../../core/gps/smart_dispatch_engine.dart';
 import '../../../core/utils/geo_math.dart';
 import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/pricing_estimate.dart';
@@ -264,6 +266,7 @@ class ActiveOrderRecord {
 class AppStateStore extends ChangeNotifier {
   static final AppStateStore instance = AppStateStore._internal();
 
+  final KalmanGpsFilter _kalmanFilter = KalmanGpsFilter();
   bool isOfflineMode = false;
   int offlineQueueCount = 0;
   bool isDriverOnline = true;
@@ -271,6 +274,15 @@ class AppStateStore extends ChangeNotifier {
   double currentCameraPitch = 55.0;
   int batteryPercent = 85;
   double currentSpeedKmh = 35.0;
+
+  // Live GPS Tracking & Route Progression (UC07, UC16, UC18, UC25)
+  GeoPoint activeDriverLocation =
+      const GeoPoint(latitude: 21.0068, longitude: 105.8421);
+  double activeDriverBearing = 215.0;
+  int routeProgressStep = 4;
+  String currentAdminRoleName = 'Super Admin';
+  String lastSyncStatusMessage =
+      'Đã đồng bộ 16/16 bảng với PostgreSQL 16 + PostGIS';
 
   // Customer Profile (UC41 - Hình 8.13)
   String customerFullName = 'Nguyễn Thu Hà';
@@ -768,11 +780,19 @@ class AppStateStore extends ChangeNotifier {
   AppStateStore._internal();
 
   void toggleOfflineSimulation(bool offline) {
+    final wasOffline = isOfflineMode;
     isOfflineMode = offline;
     if (offline) {
       offlineQueueCount += 3;
+      lastSyncStatusMessage =
+          'Đang lưu tạm $offlineQueueCount bản ghi vào SQLite local_sync_queue';
     } else {
+      final drained = offlineQueueCount;
       offlineQueueCount = 0;
+      if (wasOffline && drained > 0) {
+        lastSyncStatusMessage =
+            'Đã đồng bộ $drained gói tin SQLite lên PostGIS (Exponential Backoff: 1000ms)';
+      }
     }
     notifyListeners();
   }
@@ -783,13 +803,84 @@ class AppStateStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Bước di chuyển GPS thực tế của tài xế dọc theo lộ trình qua bộ lọc Kalman 2D (UC07, UC16, UC18)
+  void stepDriverAlongRoute({bool snapToDropoff = false}) {
+    final ord = orders.first;
+    final polyline = SmartDispatchEngine.generateRoutePolyline(
+      ord.pickupLocation,
+      ord.dropoffLocation,
+      segments: 10,
+    );
+    if (snapToDropoff) {
+      routeProgressStep = polyline.length - 1;
+    } else {
+      routeProgressStep = (routeProgressStep + 1) % polyline.length;
+    }
+    final rawTarget = polyline[routeProgressStep];
+    final previous = activeDriverLocation;
+    activeDriverLocation = _kalmanFilter.filter(
+      rawPoint: rawTarget,
+      accuracyMeters: 4.5,
+      timestampMs: DateTime.now().millisecondsSinceEpoch,
+    );
+    if (snapToDropoff) {
+      activeDriverLocation = ord.dropoffLocation;
+    }
+    activeDriverBearing = GeoMath.bearingDegrees(previous, activeDriverLocation);
+    if (isOfflineMode) offlineQueueCount++;
+    notifyListeners();
+  }
+
+  /// Khoảng cách Haversine thực tế từ vị trí Tài xế hiện tại tới điểm giao hàng (RULE-ORD-03)
+  double distanceFromDriverToDropoffMeters() {
+    final ord = orders.first;
+    return GeoMath.distanceMeters(activeDriverLocation, ord.dropoffLocation);
+  }
+
+  /// Kiểm tra quyền thực thi RBAC của vai trò Admin đang đăng nhập (UC46)
+  bool hasAdminPermission(String permKey) {
+    final role =
+        rbacRoles.where((r) => r.roleName == currentAdminRoleName).firstOrNull;
+    if (role == null) return true;
+    return role.permissions[permKey] ?? false;
+  }
+
+  void setAdminActiveRole(String roleName) {
+    currentAdminRoleName = roleName;
+    notifyListeners();
+  }
+
+  void addCustomGeofenceZone({
+    required String zoneName,
+    required String zoneType,
+    required double surchargeRate,
+    required List<GeoPoint> vertices,
+  }) {
+    if (vertices.length < 3) return;
+    geofenceZones.add(
+      GeofenceZoneRecord(
+        id: 'GEO-0${geofenceZones.length + 1}',
+        zoneName: zoneName,
+        zoneType: zoneType,
+        surchargeRate: surchargeRate,
+        isActive: true,
+        boundary: List<GeoPoint>.from(vertices),
+      ),
+    );
+    notifyListeners();
+  }
+
   void addCustomerAddress(String label, String address) {
+    final resolved = SmartDispatchEngine.resolveAddressToCoordinate(
+      address,
+      fallback: const GeoPoint(latitude: 10.7785, longitude: 106.6980),
+    );
     savedAddresses.add(
       SavedAddressRecord(
         id: 'ADDR-0${savedAddresses.length + 1}',
         label: label,
         fullAddress: address,
-        location: const GeoPoint(latitude: 10.7785, longitude: 106.6980),
+        location: resolved,
       ),
     );
     notifyListeners();
@@ -813,8 +904,25 @@ class AppStateStore extends ChangeNotifier {
     required String paymentMethod,
     String? voucherCode,
   }) {
-    const distMeters = 14500;
-    const durationSec = 2700;
+    final pickupPt = SmartDispatchEngine.resolveAddressToCoordinate(
+      pickupAddress,
+      fallback: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
+    );
+    final dropoffPt = SmartDispatchEngine.resolveAddressToCoordinate(
+      dropoffAddress,
+      fallback: const GeoPoint(latitude: 10.7550, longitude: 106.6750),
+    );
+
+    final rawAirMeters = GeoMath.distanceMeters(pickupPt, dropoffPt);
+    final isDefaultRoute = pickupAddress.contains('Phố Huế') &&
+        dropoffAddress.contains('Lê Trọng Tấn');
+    final distMeters = isDefaultRoute
+        ? 14500
+        : (rawAirMeters * 1.28).round().clamp(1500, 45000);
+    final durationSec = isDefaultRoute
+        ? 2700
+        : ((distMeters / 1000.0) * 180).round();
+
     double discount = 0;
     if (voucherCode != null && voucherCode.trim().isNotEmpty) {
       final matched = vouchers
@@ -825,7 +933,6 @@ class AppStateStore extends ChangeNotifier {
       }
     }
 
-    const dropoffPt = GeoPoint(latitude: 10.755, longitude: 106.675);
     double geofenceFee = 0;
     for (final z in geofenceZones) {
       if (z.isActive &&
@@ -852,7 +959,7 @@ class AppStateStore extends ChangeNotifier {
       recipientPhone: recipientPhone,
       pickupAddress: pickupAddress,
       dropoffAddress: dropoffAddress,
-      pickupLocation: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
+      pickupLocation: pickupPt,
       dropoffLocation: dropoffPt,
       serviceType: serviceType,
       packageDescription: packageDescription,
@@ -876,12 +983,12 @@ class AppStateStore extends ChangeNotifier {
     return record;
   }
 
-  void driverAcceptOrder(String trackingCode) {
+  void driverAcceptOrder(String trackingCode, {String? customDriverName, String? customPlate}) {
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return;
     ord.status = OrderStatus.accepted;
-    ord.assignedDriverName = 'Nguyễn Văn Nam';
-    ord.assignedDriverPlate = '29-P1 123.45';
+    ord.assignedDriverName = customDriverName ?? 'Nguyễn Văn Nam';
+    ord.assignedDriverPlate = customPlate ?? '29-P1 123.45';
     notifyListeners();
   }
 

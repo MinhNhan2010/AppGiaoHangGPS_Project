@@ -304,6 +304,9 @@ class Map3dPerspectiveWidget extends StatelessWidget {
   final bool is3dMode;
   final VoidCallback? onToggle3d;
   final double height;
+  final double progressFraction;
+  final ValueChanged<Offset>? onTapRelativePoint;
+  final List<Offset> drawnPolygonPoints;
 
   const Map3dPerspectiveWidget({
     super.key,
@@ -313,6 +316,9 @@ class Map3dPerspectiveWidget extends StatelessWidget {
     this.is3dMode = true,
     this.onToggle3d,
     this.height = 280,
+    this.progressFraction = 0.35,
+    this.onTapRelativePoint,
+    this.drawnPolygonPoints = const [],
   });
 
   @override
@@ -322,147 +328,168 @@ class Map3dPerspectiveWidget extends StatelessWidget {
       child: SizedBox(
         height: height,
         width: double.infinity,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _Map3dCanvasPainter(is3dMode: is3dMode),
-              ),
-            ),
-            // Turn-by-Turn Navigation Header (Hình 8.18 & Hình 8.51)
-            Positioned(
-              top: 12,
-              left: 12,
-              right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: AppColors.darkSidebar.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.turn_right,
-                      color: AppColors.surface,
-                      size: 28,
-                    ),
-                    const SizedBox(width: AppSpacing.sm),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            nextTurnInstruction,
-                            style: const TextStyle(
-                              color: AppColors.surface,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14,
-                            ),
-                          ),
-                          Text(
-                            is3dMode
-                                ? 'Góc nhìn 3D Pitch 55° • Zoom 17.0 • $roadName'
-                                : 'Chế độ 2D Overview • Zoom 14.5 • $roadName',
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 11,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // Speedometer Badge (35 km/h - Hình 8.51)
-            Positioned(
-              top: 78,
-              right: 14,
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: BoxDecoration(
-                  color: AppColors.darkSidebar,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.danger, width: 2.5),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      speedKmh.toStringAsFixed(0),
-                      style: const TextStyle(
-                        color: AppColors.surface,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 15,
-                      ),
-                    ),
-                    const Text(
-                      'km/h',
-                      style: TextStyle(color: Colors.white70, fontSize: 9),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // 3D Toggle & Compass Buttons (Hình 8.51)
-            Positioned(
-              bottom: 16,
-              right: 14,
-              child: Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return GestureDetector(
+              onTapUp: onTapRelativePoint == null
+                  ? null
+                  : (details) {
+                      final relX = (details.localPosition.dx /
+                              constraints.maxWidth)
+                          .clamp(0.0, 1.0);
+                      final relY = (details.localPosition.dy /
+                              constraints.maxHeight)
+                          .clamp(0.0, 1.0);
+                      onTapRelativePoint!(Offset(relX, relY));
+                    },
+              child: Stack(
                 children: [
-                  InkWell(
-                    onTap: onToggle3d,
-                    child: Container(
-                      width: 42,
-                      height: 42,
-                      alignment: Alignment.center,
-                      decoration: const BoxDecoration(
-                        color: AppColors.surface,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: Colors.black26, blurRadius: 6),
-                        ],
-                      ),
-                      child: Text(
-                        is3dMode ? '3D' : '2D',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primary,
-                        ),
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _Map3dCanvasPainter(
+                        is3dMode: is3dMode,
+                        progressFraction: progressFraction,
+                        drawnPolygonPoints: drawnPolygonPoints,
                       ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Container(
-                    width: 42,
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: const BoxDecoration(
-                      color: AppColors.surface,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(color: Colors.black26, blurRadius: 6),
-                      ],
+                  // Turn-by-Turn Navigation Header (Hình 8.18 & Hình 8.51)
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    right: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.md,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.darkSidebar.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.turn_right,
+                            color: AppColors.surface,
+                            size: 28,
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  nextTurnInstruction,
+                                  style: const TextStyle(
+                                    color: AppColors.surface,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                Text(
+                                  is3dMode
+                                      ? 'Góc nhìn 3D Pitch 55° • Zoom 17.0 • $roadName'
+                                      : 'Chế độ 2D Overview • Zoom 14.5 • $roadName',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    child: const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  ),
+                  // Speedometer Badge (35 km/h - Hình 8.51)
+                  Positioned(
+                    top: 78,
+                    right: 14,
+                    child: Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: AppColors.darkSidebar,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: AppColors.danger, width: 2.5),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            speedKmh.toStringAsFixed(0),
+                            style: const TextStyle(
+                              color: AppColors.surface,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const Text(
+                            'km/h',
+                            style: TextStyle(color: Colors.white70, fontSize: 9),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  // 3D Toggle & Compass Buttons (Hình 8.51)
+                  Positioned(
+                    bottom: 16,
+                    right: 14,
+                    child: Column(
                       children: [
-                        Icon(
-                          Icons.navigation,
-                          size: 16,
-                          color: AppColors.danger,
+                        InkWell(
+                          onTap: onToggle3d,
+                          child: Container(
+                            width: 42,
+                            height: 42,
+                            alignment: Alignment.center,
+                            decoration: const BoxDecoration(
+                              color: AppColors.surface,
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(color: Colors.black26, blurRadius: 6),
+                              ],
+                            ),
+                            child: Text(
+                              is3dMode ? '3D' : '2D',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                          ),
                         ),
-                        Text(
-                          'N',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
+                        const SizedBox(height: 8),
+                        Container(
+                          width: 42,
+                          height: 42,
+                          alignment: Alignment.center,
+                          decoration: const BoxDecoration(
+                            color: AppColors.surface,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: Colors.black26, blurRadius: 6),
+                            ],
+                          ),
+                          child: const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.navigation,
+                                size: 16,
+                                color: AppColors.danger,
+                              ),
+                              Text(
+                                'N',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -470,8 +497,8 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                   ),
                 ],
               ),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -480,8 +507,14 @@ class Map3dPerspectiveWidget extends StatelessWidget {
 
 class _Map3dCanvasPainter extends CustomPainter {
   final bool is3dMode;
+  final double progressFraction;
+  final List<Offset> drawnPolygonPoints;
 
-  const _Map3dCanvasPainter({required this.is3dMode});
+  const _Map3dCanvasPainter({
+    required this.is3dMode,
+    required this.progressFraction,
+    required this.drawnPolygonPoints,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -515,6 +548,36 @@ class _Map3dCanvasPainter extends CustomPainter {
       }
     }
 
+    // Draw custom Geofence Polygon if present (UC44 - Hình 8.33)
+    if (drawnPolygonPoints.isNotEmpty) {
+      final polyFill = Paint()
+        ..color = AppColors.accent.withValues(alpha: 0.28)
+        ..style = PaintingStyle.fill;
+      final polyStroke = Paint()
+        ..color = AppColors.accent
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke;
+
+      final polyPath = Path();
+      for (var i = 0; i < drawnPolygonPoints.length; i++) {
+        final pt = Offset(
+          drawnPolygonPoints[i].dx * size.width,
+          drawnPolygonPoints[i].dy * size.height,
+        );
+        if (i == 0) {
+          polyPath.moveTo(pt.dx, pt.dy);
+        } else {
+          polyPath.lineTo(pt.dx, pt.dy);
+        }
+        canvas.drawCircle(pt, 5, Paint()..color = AppColors.danger);
+      }
+      if (drawnPolygonPoints.length >= 3) {
+        polyPath.close();
+        canvas.drawPath(polyPath, polyFill);
+      }
+      canvas.drawPath(polyPath, polyStroke);
+    }
+
     // Draw 3D Route Ribbon (#00B4D8 with #0077B6 casing - Table 16)
     final casingPaint = Paint()
       ..color = AppColors.routeRibbonCasing
@@ -528,16 +591,32 @@ class _Map3dCanvasPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round
       ..style = PaintingStyle.stroke;
 
+    final p0 = Offset(size.width * 0.40, size.height * 0.92);
+    final p1 = Offset(size.width * 0.53, size.height * 0.26);
+    final p2 = Offset(size.width * 0.72, size.height * 0.26);
+
     final routePath = Path()
-      ..moveTo(size.width * 0.40, size.height * 0.92)
-      ..lineTo(size.width * 0.53, size.height * 0.26)
-      ..lineTo(size.width * 0.72, size.height * 0.26);
+      ..moveTo(p0.dx, p0.dy)
+      ..lineTo(p1.dx, p1.dy)
+      ..lineTo(p2.dx, p2.dy);
 
     canvas.drawPath(routePath, casingPaint);
     canvas.drawPath(routePath, ribbonPaint);
 
-    // Draw Driver 3D Marker at foreground
-    final driverCenter = Offset(size.width * 0.43, size.height * 0.76);
+    // Draw Drop-off Pin at end of route
+    canvas.drawCircle(p2, 8, Paint()..color = AppColors.accent);
+
+    // Interpolate Driver 3D Marker position along p0 -> p1 -> p2
+    final t = progressFraction.clamp(0.0, 1.0);
+    final Offset driverCenter;
+    if (t <= 0.7) {
+      final segT = t / 0.7;
+      driverCenter = Offset.lerp(p0, p1, segT)!;
+    } else {
+      final segT = (t - 0.7) / 0.3;
+      driverCenter = Offset.lerp(p1, p2, segT)!;
+    }
+
     canvas.drawCircle(
       driverCenter,
       16,
@@ -552,5 +631,7 @@ class _Map3dCanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _Map3dCanvasPainter oldDelegate) =>
-      oldDelegate.is3dMode != is3dMode;
+      oldDelegate.is3dMode != is3dMode ||
+      oldDelegate.progressFraction != progressFraction ||
+      oldDelegate.drawnPolygonPoints.length != drawnPolygonPoints.length;
 }

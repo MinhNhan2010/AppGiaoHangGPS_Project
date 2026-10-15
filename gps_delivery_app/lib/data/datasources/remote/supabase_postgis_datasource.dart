@@ -7,14 +7,40 @@ import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/order_entity.dart';
 import '../../../domain/enums/order_status.dart';
 
+/// Datasource kết nối trực tiếp tới 16 bảng PostgreSQL 16 + PostGIS trên Supabase (Chương 11 & 12)
 class SupabasePostgisDatasource {
   SupabaseClient _requireClient() {
     if (!EnvConfig.isSupabaseConfigured) {
       throw const NetworkSyncException(
-        message: 'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY. Chuyển sang chế độ lưu trữ SQLite Offline.',
+        message:
+            'Chưa cấu hình SUPABASE_URL / SUPABASE_ANON_KEY. Chuyển sang chế độ lưu trữ SQLite Offline.',
       );
     }
     return Supabase.instance.client;
+  }
+
+  /// Truy vấn tổng quát cho bất kỳ bảng nào trong 16 bảng CSDL (Bảng 11.1 - 11.16)
+  Future<List<Map<String, dynamic>>> fetchTableRecords(
+    String tableName, {
+    int limit = 100,
+  }) async {
+    final client = _requireClient();
+    final rows = await client.from(tableName).select().limit(limit);
+    return List<Map<String, dynamic>>.from(rows);
+  }
+
+  /// Upsert bản ghi bất kỳ vào 16 bảng (`users`, `saved_addresses`, `merchant_profiles`,
+  /// `pickup_points`, `pricing_configs`, `vouchers`, `payments`, `wallets`,
+  /// `wallet_transactions`, `withdrawal_requests`, `order_disputes`, `driver_reviews`,
+  /// `geofence_zones`, `notifications`, `orders`, `drivers`)
+  Future<Map<String, dynamic>> upsertTableRecord(
+    String tableName,
+    Map<String, dynamic> payload,
+  ) async {
+    final client = _requireClient();
+    final res =
+        await client.from(tableName).upsert(payload).select().single();
+    return res;
   }
 
   Future<OrderEntity> insertOrder(OrderEntity order) async {

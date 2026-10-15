@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gps_delivery_app/core/gps/gps_integrity_validator.dart';
 import 'package:gps_delivery_app/core/gps/kalman_gps_filter.dart';
+import 'package:gps_delivery_app/core/gps/smart_dispatch_engine.dart';
 import 'package:gps_delivery_app/core/utils/geo_math.dart';
+import 'package:gps_delivery_app/core/utils/security_and_barcode_utils.dart';
 import 'package:gps_delivery_app/data/datasources/local/app_state_store.dart';
 import 'package:gps_delivery_app/domain/entities/geo_point.dart';
 import 'package:gps_delivery_app/domain/entities/pricing_estimate.dart';
@@ -137,4 +139,50 @@ void main() {
       expect(newOrder.status, OrderStatus.accepted);
     },
   );
+
+  test(
+    'TC-09: SmartDispatchEngine, SecurityAndBarcodeUtils, RBAC & Live Route Progression',
+    () {
+      final store = AppStateStore.instance;
+
+      // 1. SmartDispatchEngine ranking (3km -> 5km -> 8km + weighted formula)
+      final ranked = SmartDispatchEngine.rankDriversForPickup(
+        pickupLocation: const GeoPoint(latitude: 10.7769, longitude: 106.7009),
+        drivers: store.drivers,
+      );
+      expect(ranked, isNotEmpty);
+      expect(ranked.first.totalScore, greaterThan(0.5));
+
+      // 2. SecurityAndBarcodeUtils phone masking & payment signature
+      expect(
+        SecurityAndBarcodeUtils.maskPhoneNumber(
+          '0912345678',
+          shouldMask: true,
+        ),
+        '0912***678',
+      );
+      final sig1 = SecurityAndBarcodeUtils.generatePaymentSignature(
+        orderCode: 'GH-882910',
+        amount: 138250,
+        method: 'Tiền mặt (COD)',
+      );
+      expect(sig1.length, equals(16));
+
+      // 3. RBAC permission enforcement
+      store.setAdminActiveRole('Hỗ trợ CSKH');
+      expect(store.hasAdminPermission('Tài chính: Thanh toán'), isFalse);
+      store.setAdminActiveRole('Super Admin');
+      expect(store.hasAdminPermission('Tài chính: Thanh toán'), isTrue);
+
+      // 4. Step driver along route & 100m geofence
+      store.stepDriverAlongRoute(snapToDropoff: true);
+      expect(store.routeProgressStep, equals(10));
+      expect(
+        store.distanceFromDriverToDropoffMeters(),
+        lessThanOrEqualTo(100.0),
+      );
+    },
+  );
 }
+
+

@@ -27,11 +27,20 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   // UC28: Trả lời khiếu nại
   final TextEditingController _replyTicketCtrl = TextEditingController();
 
-  // UC44: Kiểm tra điểm Geofence
+  // UC44: Kiểm tra điểm Geofence & Vẽ Polygon trực tiếp trên bản đồ
   final TextEditingController _testLatCtrl =
       TextEditingController(text: '10.7520');
   final TextEditingController _testLngCtrl =
       TextEditingController(text: '106.6720');
+  final TextEditingController _newZoneNameCtrl = TextEditingController(
+    text: 'Vùng Phụ phí Khu Công nghệ cao Q.9',
+  );
+  final List<Offset> _draftPolygonOffsets = [
+    const Offset(0.25, 0.45),
+    const Offset(0.55, 0.42),
+    const Offset(0.60, 0.72),
+    const Offset(0.28, 0.75),
+  ];
   String _geofenceCheckResult =
       'Nhấn Kiểm tra để xác định vùng Geofence bằng thuật toán Ray-Casting';
 
@@ -81,19 +90,139 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     _replyTicketCtrl.dispose();
     _testLatCtrl.dispose();
     _testLngCtrl.dispose();
+    _newZoneNameCtrl.dispose();
     _broadcastTitleCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildScreenSelectorBar(),
-        const SizedBox(height: AppSpacing.md),
-        _buildActiveAdminScreen(context),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        if (constraints.maxWidth >= 900) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 265,
+                padding: const EdgeInsets.all(AppSpacing.sm),
+                decoration: BoxDecoration(
+                  color: AppColors.darkSidebar,
+                  borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(AppSpacing.sm),
+                      child: Text(
+                        'ADMIN PORTAL CMS\nVai trò: ${_store.currentAdminRoleName}',
+                        style: const TextStyle(
+                          color: AppColors.surface,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const Divider(color: Colors.white24),
+                    ...List.generate(_screenTitles.length, (index) {
+                      final selected = _selectedScreenIndex == index;
+                      return ListTile(
+                        dense: true,
+                        selected: selected,
+                        selectedTileColor: AppColors.primary,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        title: Text(
+                          _screenTitles[index],
+                          style: TextStyle(
+                            color:
+                                selected ? AppColors.surface : Colors.white70,
+                            fontSize: 12,
+                            fontWeight:
+                                selected ? FontWeight.w700 : FontWeight.w500,
+                          ),
+                        ),
+                        onTap: () =>
+                            setState(() => _selectedScreenIndex = index),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildActiveAdminRoleHeader(),
+                    const SizedBox(height: AppSpacing.sm),
+                    _buildActiveAdminScreen(context),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildActiveAdminRoleHeader(),
+            const SizedBox(height: AppSpacing.xs),
+            _buildScreenSelectorBar(),
+            const SizedBox(height: AppSpacing.md),
+            _buildActiveAdminScreen(context),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildActiveAdminRoleHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.admin_panel_settings_outlined,
+            size: 18,
+            color: AppColors.primary,
+          ),
+          const SizedBox(width: 6),
+          const Text(
+            'Phiên quyền RBAC:',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: _store.rbacRoles.map((r) {
+                  final active = _store.currentAdminRoleName == r.roleName;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(
+                        r.roleName,
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      selected: active,
+                      onSelected: (_) => _store.setAdminActiveRole(r.roleName),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -180,6 +309,15 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               ],
             ),
             const Divider(),
+            Text(
+              'Trạng thái Đồng bộ CSDL: ${_store.lastSyncStatusMessage}',
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
             const Text(
               'Danh sách vận đơn thời gian thực trên toàn hệ thống:',
               style: TextStyle(fontWeight: FontWeight.w700),
@@ -257,7 +395,8 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 '${_store.customerFullName} (${_store.customerPhone})',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: Text('Vai trò: CUSTOMER • Email: ${_store.customerEmail}'),
+              subtitle:
+                  Text('Vai trò: CUSTOMER • Email: ${_store.customerEmail}'),
               trailing: const Chip(label: Text('Hoạt động')),
             ),
             ListTile(
@@ -267,7 +406,9 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 '${_store.merchantStoreName} (MST: ${_store.merchantTaxCode})',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              subtitle: Text('Vai trò: MERCHANT • Đại diện: ${_store.merchantRepresentative}'),
+              subtitle: Text(
+                'Vai trò: MERCHANT • Đại diện: ${_store.merchantRepresentative}',
+              ),
               trailing: const Chip(label: Text('Đã xác thực')),
             ),
           ],
@@ -276,8 +417,10 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     );
   }
 
-  /// Hình 8.26: UC24 Xét duyệt Hồ sơ Tài xế (KYC)
+  /// Hình 8.26: UC24 Xét duyệt Hồ sơ Tài xế (KYC + Kiểm tra quyền RBAC 'Tài xế: Phê duyệt')
   Widget _buildDriverKycApprovalView() {
+    final canApproveDriver = _store.hasAdminPermission('Tài xế: Phê duyệt');
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -288,6 +431,14 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               'Hình 8.26: Xét duyệt Hồ sơ Đăng ký Tài xế KYC (UC24)',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (!canApproveDriver)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '🔒 Vai trò hiện tại không có quyền "Tài xế: Phê duyệt" (Cấu hình tại UC46).',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12),
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm),
             ..._store.drivers.map(
               (drv) => Container(
@@ -315,13 +466,16 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () =>
-                          _store.updateDriverApproval(drv.id, 'Đã duyệt'),
+                      onPressed: canApproveDriver
+                          ? () =>
+                              _store.updateDriverApproval(drv.id, 'Đã duyệt')
+                          : null,
                       child: const Text('Duyệt hồ sơ'),
                     ),
                     TextButton(
-                      onPressed: () =>
-                          _store.updateDriverApproval(drv.id, 'Từ chối'),
+                      onPressed: canApproveDriver
+                          ? () => _store.updateDriverApproval(drv.id, 'Từ chối')
+                          : null,
                       child: const Text(
                         'Từ chối',
                         style: TextStyle(color: AppColors.danger),
@@ -364,9 +518,11 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               is3dMode: _store.isMap3dEnabled,
               speedKmh: _store.currentSpeedKmh,
               onToggle3d: _store.toggleMap3d,
+              progressFraction: _store.routeProgressStep / 10.0,
               nextTurnInstruction:
                   'Trung tâm Điều hành PostGIS • 520 Tài xế đang phát tọa độ',
-              roadName: 'Toàn thành phố TP. Hồ Chí Minh & Hà Nội',
+              roadName:
+                  'Tọa độ xe #1: (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})',
             ),
           ],
         ),
@@ -376,6 +532,8 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
 
   /// Hình 8.28: UC26 Cấu hình Công thức Tính cước & Phụ phí
   Widget _buildDynamicPricingConfigView() {
+    final canEditSystem = _store.hasAdminPermission('Hệ thống: Cài đặt');
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -392,6 +550,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 Expanded(
                   child: TextField(
                     controller: _baseFareCtrl,
+                    enabled: canEditSystem,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: 'Giá mở cửa 2km đầu (VNĐ)',
@@ -402,6 +561,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 Expanded(
                   child: TextField(
                     controller: _perKmCtrl,
+                    enabled: canEditSystem,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: 'Đơn giá mỗi km tiếp theo (VNĐ/km)',
@@ -415,15 +575,17 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               title: const Text('Phụ phí giờ cao điểm (+10.000đ)'),
               subtitle: const Text('Áp dụng từ 17:00 - 19:00'),
               value: _store.isPeakSurchargeActive,
-              onChanged: (v) =>
-                  setState(() => _store.isPeakSurchargeActive = v),
+              onChanged: canEditSystem
+                  ? (v) => setState(() => _store.isPeakSurchargeActive = v)
+                  : null,
             ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('Phụ phí thời tiết xấu / Mưa ngập (+15.000đ)'),
               value: _store.isWeatherSurchargeActive,
-              onChanged: (v) =>
-                  setState(() => _store.isWeatherSurchargeActive = v),
+              onChanged: canEditSystem
+                  ? (v) => setState(() => _store.isWeatherSurchargeActive = v)
+                  : null,
             ),
             SizedBox(
               width: double.infinity,
@@ -431,19 +593,22 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.accent,
                 ),
-                onPressed: () {
-                  setState(() {
-                    _store.baseFareConfig =
-                        double.tryParse(_baseFareCtrl.text) ?? 25000;
-                    _store.pricePerKmConfig =
-                        double.tryParse(_perKmCtrl.text) ?? 5000;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Đã cập nhật cấu hình giá cước hệ thống!'),
-                    ),
-                  );
-                },
+                onPressed: canEditSystem
+                    ? () {
+                        setState(() {
+                          _store.baseFareConfig =
+                              double.tryParse(_baseFareCtrl.text) ?? 25000;
+                          _store.pricePerKmConfig =
+                              double.tryParse(_perKmCtrl.text) ?? 5000;
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content:
+                                Text('Đã cập nhật cấu hình giá cước hệ thống!'),
+                          ),
+                        );
+                      }
+                    : null,
                 child: const Text('Lưu cấu hình Bảng giá'),
               ),
             ),
@@ -548,8 +713,10 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     );
   }
 
-  /// Hình 8.31: UC29 Đối soát Tài chính & Phê duyệt Rút tiền
+  /// Hình 8.31: UC29 Đối soát Tài chính & Phê duyệt Rút tiền (Kiểm tra quyền RBAC 'Tài chính: Thanh toán')
   Widget _buildFinancialWithdrawalApprovalView() {
+    final canApprovePayout = _store.hasAdminPermission('Tài chính: Thanh toán');
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -560,6 +727,14 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               'Hình 8.31: Đối soát Tài chính & Duyệt Lệnh Rút tiền (UC29)',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (!canApprovePayout)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '🔒 Vai trò hiện tại không có quyền "Tài chính: Thanh toán" (Cấu hình tại UC46).',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12),
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm),
             ..._store.withdrawalRequests.map(
               (req) => ListTile(
@@ -575,13 +750,17 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     TextButton(
-                      onPressed: () =>
-                          _store.updateWithdrawalStatus(req.id, 'Đã duyệt'),
+                      onPressed: canApprovePayout
+                          ? () =>
+                              _store.updateWithdrawalStatus(req.id, 'Đã duyệt')
+                          : null,
                       child: const Text('Duyệt lệnh'),
                     ),
                     TextButton(
-                      onPressed: () =>
-                          _store.updateWithdrawalStatus(req.id, 'Từ chối'),
+                      onPressed: canApprovePayout
+                          ? () =>
+                              _store.updateWithdrawalStatus(req.id, 'Từ chối')
+                          : null,
                       child: const Text(
                         'Từ chối',
                         style: TextStyle(color: AppColors.danger),
@@ -599,6 +778,8 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
 
   /// Hình 8.32: UC43 Quản lý & Điều phối Đơn hàng Thủ công
   Widget _buildManualOrderDispatchView() {
+    final canEditOrder = _store.hasAdminPermission('Đơn: Sửa');
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -621,7 +802,9 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                   'Trạng thái: ${ord.status.displayName} • Tài xế: ${ord.assignedDriverName ?? "Chưa có tài xế"}',
                 ),
                 trailing: ElevatedButton(
-                  onPressed: () => _store.driverAcceptOrder(ord.trackingCode),
+                  onPressed: canEditOrder
+                      ? () => _store.driverAcceptOrder(ord.trackingCode)
+                      : null,
                   child: const Text('Gán tài xế ngay'),
                 ),
               ),
@@ -632,7 +815,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     );
   }
 
-  /// Hình 8.33: UC44 Quản lý Vùng hoạt động Geofencing Polygon
+  /// Hình 8.33: UC44 Quản lý Vùng hoạt động Geofencing Polygon (Tương tác chấm đỉnh trên bản đồ)
   Widget _buildGeofencePolygonZonesView() {
     return Card(
       child: Padding(
@@ -644,7 +827,73 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               'Hình 8.33: Quản lý Vùng Hoạt động Geofencing Polygon (UC44)',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
-            const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: 6),
+            const Text(
+              'Chạm trực tiếp lên bản đồ bên dưới để thêm đỉnh đa giác (Polygon Vertex) mới:',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Map3dPerspectiveWidget(
+              height: 220,
+              is3dMode: false,
+              drawnPolygonPoints: _draftPolygonOffsets,
+              nextTurnInstruction:
+                  'Công cụ Vẽ Đa giác PostGIS • Đã chấm ${_draftPolygonOffsets.length} đỉnh',
+              roadName: 'Chạm lên bản đồ để thêm đỉnh Polygon',
+              onTapRelativePoint: (relOffset) {
+                setState(() {
+                  _draftPolygonOffsets.add(relOffset);
+                });
+              },
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _newZoneNameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Tên vùng Geofence mới',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton(
+                  onPressed: () => setState(() => _draftPolygonOffsets.clear()),
+                  child: const Text('Xóa đỉnh'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: _draftPolygonOffsets.length >= 3
+                      ? () {
+                          final vertices = _draftPolygonOffsets
+                              .map(
+                                (o) => GeoPoint(
+                                  latitude: 10.740 + o.dy * 0.05,
+                                  longitude: 106.660 + o.dx * 0.06,
+                                ),
+                              )
+                              .toList();
+                          _store.addCustomGeofenceZone(
+                            zoneName: _newZoneNameCtrl.text,
+                            zoneType: 'SURCHARGE_ZONE',
+                            surchargeRate: 20000,
+                            vertices: vertices,
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Đã lưu vùng Polygon mới vào bảng geofence_zones!',
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                  child: const Text('Lưu Polygon mới'),
+                ),
+              ],
+            ),
+            const Divider(),
             ..._store.geofenceZones.map(
               (z) => SwitchListTile(
                 contentPadding: EdgeInsets.zero,

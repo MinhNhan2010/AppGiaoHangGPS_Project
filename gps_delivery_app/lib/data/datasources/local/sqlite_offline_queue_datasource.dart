@@ -34,7 +34,7 @@ class OfflineSyncRecord {
 
 class SqliteOfflineQueueDatasource {
   static const String _dbFileName = 'gps_delivery_offline.db';
-  static const int _dbVersion = 1;
+  static const int _dbVersion = 2;
   static const Uuid _uuid = Uuid();
 
   sqflite.Database? _database;
@@ -48,30 +48,82 @@ class SqliteOfflineQueueDatasource {
       fullPath,
       version: _dbVersion,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE local_sync_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            idempotency_key TEXT UNIQUE NOT NULL,
-            action_type TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            retry_count INTEGER NOT NULL DEFAULT 0,
-            sync_status TEXT NOT NULL DEFAULT 'PENDING',
-            created_at_ms INTEGER NOT NULL
-          )
-        ''');
-
-        await db.execute('''
-          CREATE TABLE cached_active_orders (
-            id TEXT PRIMARY KEY,
-            tracking_code TEXT NOT NULL,
-            customer_id TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            updated_at_ms INTEGER NOT NULL
-          )
-        ''');
+        await _createTables(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        await _createTables(db);
       },
     );
     return _database!;
+  }
+
+  Future<void> _createTables(sqflite.Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS local_sync_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        idempotency_key TEXT UNIQUE NOT NULL,
+        action_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        sync_status TEXT NOT NULL DEFAULT 'PENDING',
+        created_at_ms INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS cached_active_orders (
+        id TEXT PRIMARY KEY,
+        tracking_code TEXT NOT NULL,
+        customer_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      )
+    ''');
+
+    // Lưu trữ bền vững cho toàn bộ 16 bảng dữ liệu (Bảng 11.1 - 11.16)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS local_relational_entities (
+        table_name TEXT NOT NULL,
+        record_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL,
+        PRIMARY KEY (table_name, record_id)
+      )
+    ''');
+  }
+
+  Future<void> upsertEntityRecord({
+    required String tableName,
+    required String recordId,
+    required Map<String, dynamic> payload,
+  }) async {
+    final db = await database;
+    await db.insert(
+      'local_relational_entities',
+      {
+        'table_name': tableName,
+        'record_id': recordId,
+        'payload_json': jsonEncode(payload),
+        'updated_at_ms': DateTime.now().millisecondsSinceEpoch,
+      },
+      conflictAlgorithm: sqflite.ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getEntityRecords(String tableName) async {
+    final db = await database;
+    final rows = await db.query(
+      'local_relational_entities',
+      where: 'table_name = ?',
+      whereArgs: [tableName],
+      orderBy: 'updated_at_ms DESC',
+    );
+    return rows
+        .map(
+          (r) =>
+              jsonDecode(r['payload_json'] as String) as Map<String, dynamic>,
+        )
+        .toList();
   }
 
   Future<String> enqueueAction({

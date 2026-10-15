@@ -1,8 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/gps/gps_integrity_validator.dart';
+import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/order_status.dart';
 import '../widgets/system_state_screens.dart';
@@ -29,15 +32,16 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       TextEditingController(text: '29A-123.45');
   String _vehicleType = 'Xe máy';
 
-  // UC15: Countdown 28s
+  // UC15: Countdown 28s & Smart Dispatch
   int _countdownSeconds = 28;
+  Timer? _dispatchCountdownTimer;
+  final Set<String> _rejectedDriverIds = {};
 
   // UC18: POD & OTP 4 số
   final TextEditingController _podOtpCtrl =
       TextEditingController(text: '4829');
   final TextEditingController _podRecipientCtrl =
       TextEditingController(text: 'Nguyễn Thị Minh An');
-  bool _hasCapturedPodPhoto = true;
 
   // UC19: Rút tiền Ví tài xế
   final TextEditingController _withdrawAmountCtrl =
@@ -73,8 +77,45 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     if (mounted) setState(() {});
   }
 
+  void _toggleDispatchTimer() {
+    if (_dispatchCountdownTimer?.isActive ?? false) {
+      _dispatchCountdownTimer?.cancel();
+      setState(() {});
+      return;
+    }
+    _dispatchCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        if (_countdownSeconds > 1) {
+          _countdownSeconds--;
+        } else {
+          _countdownSeconds = 28;
+          t.cancel();
+          _reassignToNextCandidate();
+        }
+      });
+    });
+    setState(() {});
+  }
+
+  void _reassignToNextCandidate() {
+    final targetOrder = _store.orders.first;
+    final ranked = SmartDispatchEngine.rankDriversForPickup(
+      pickupLocation: targetOrder.pickupLocation,
+      drivers: _store.drivers,
+      excludedDriverIds: _rejectedDriverIds,
+    );
+    if (ranked.isNotEmpty) {
+      _rejectedDriverIds.add(ranked.first.driver.id);
+    }
+  }
+
   @override
   void dispose() {
+    _dispatchCountdownTimer?.cancel();
     _store.removeListener(_onStoreChanged);
     _drvNameCtrl.dispose();
     _drvCitizenCtrl.dispose();
@@ -366,9 +407,18 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     );
   }
 
-  /// Hình 8.17: UC15 Nhận thông báo đơn hàng mới (Countdown 28s)
+  /// Hình 8.17: UC15 Nhận thông báo đơn hàng mới (Countdown 28s & Smart Dispatch RULE-DSP-01..04)
   Widget _buildIncomingOrderPopupView() {
     final targetOrder = _store.orders.first;
+    final rankedCandidates = SmartDispatchEngine.rankDriversForPickup(
+      pickupLocation: targetOrder.pickupLocation,
+      drivers: _store.drivers,
+      excludedDriverIds: _rejectedDriverIds,
+    );
+    final topCandidate =
+        rankedCandidates.isNotEmpty ? rankedCandidates.first : null;
+    final isTimerRunning = _dispatchCountdownTimer?.isActive ?? false;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -380,23 +430,56 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               children: [
                 Expanded(
                   child: Text(
-                    'Hình 8.17: Popup Nhận Cuốc Xe Mới (UC15)',
+                    'Hình 8.17: Popup Nhận Cuốc Xe Mới (UC15 - Smart Dispatch)',
                     style: Theme.of(context).textTheme.headlineMedium,
                   ),
                 ),
-                CircleAvatar(
-                  radius: 22,
-                  backgroundColor: AppColors.accent,
-                  child: Text(
-                    '${_countdownSeconds}s',
-                    style: const TextStyle(
-                      color: AppColors.surface,
-                      fontWeight: FontWeight.w800,
+                InkWell(
+                  onTap: _toggleDispatchTimer,
+                  child: CircleAvatar(
+                    radius: 22,
+                    backgroundColor:
+                        isTimerRunning ? AppColors.danger : AppColors.accent,
+                    child: Text(
+                      '${_countdownSeconds}s',
+                      style: const TextStyle(
+                        color: AppColors.surface,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 6),
+            if (topCandidate != null)
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.radar, size: 18, color: AppColors.primary),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Ứng viên #1 (Bán kính ${topCandidate.searchRadiusTierMeters ~/ 1000}km): ${topCandidate.driver.fullName} (${topCandidate.driver.licensePlate}) • Điểm Trọng số: ${topCandidate.totalScore.toStringAsFixed(3)}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _toggleDispatchTimer,
+                      child: Text(isTimerRunning ? 'Tạm dừng' : 'Chạy 28s'),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm),
             Container(
               padding: const EdgeInsets.all(AppSpacing.md),
@@ -412,15 +495,15 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        '${targetOrder.serviceType.displayName.toUpperCase()} • 14.5 km',
+                        '${targetOrder.serviceType.displayName.toUpperCase()} • ${(targetOrder.distanceMeters / 1000).toStringAsFixed(1)} km',
                         style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           color: AppColors.primary,
                         ),
                       ),
-                      Text(
+                      const Text(
                         'Thu nhập ròng: 55.000đ',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 16,
                           color: AppColors.success,
@@ -451,16 +534,17 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                     onPressed: () {
                       setState(() {
                         _countdownSeconds = 28;
+                        _reassignToNextCandidate();
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
                           content: Text(
-                            'Đã từ chối cuốc xe. Hệ thống tự động điều phối tài xế kế tiếp.',
+                            'Đã từ chối cuốc xe. Smart Dispatch tự động chuyển sang tài xế xếp hạng kế tiếp (RULE-DSP-02).',
                           ),
                         ),
                       );
                     },
-                    child: const Text('Từ chối'),
+                    child: const Text('Từ chối (Chuyển tiếp)'),
                   ),
                 ),
                 const SizedBox(width: AppSpacing.sm),
@@ -471,7 +555,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                       backgroundColor: AppColors.success,
                     ),
                     onPressed: () {
-                      _store.driverAcceptOrder(targetOrder.trackingCode);
+                      _dispatchCountdownTimer?.cancel();
+                      _store.driverAcceptOrder(
+                        targetOrder.trackingCode,
+                        customDriverName: topCandidate?.driver.fullName,
+                        customPlate: topCandidate?.driver.licensePlate,
+                      );
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
@@ -496,6 +585,14 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   /// Hình 8.18: UC16 Điều hướng 3D GPS Turn-by-Turn tới điểm lấy/giao hàng
   Widget _buildTurnByTurnNavigationView() {
     final activeOrder = _store.orders.first;
+    final remMeters = _store.distanceFromDriverToDropoffMeters();
+    final shouldMaskPhone = activeOrder.status == OrderStatus.delivered ||
+        activeOrder.status == OrderStatus.cancelled;
+    final displayPhone = SecurityAndBarcodeUtils.maskPhoneNumber(
+      activeOrder.recipientPhone,
+      shouldMask: shouldMaskPhone,
+    );
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -512,21 +609,29 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               is3dMode: _store.isMap3dEnabled,
               speedKmh: _store.currentSpeedKmh,
               onToggle3d: _store.toggleMap3d,
+              progressFraction: _store.routeProgressStep / 10.0,
               nextTurnInstruction: 'Rẽ phải sau 150m vào Phố Huế',
-              roadName: 'Đường Bà Triệu • ETA: 12 phút (3.5 km)',
+              roadName:
+                  'Còn ${(remMeters / 1000).toStringAsFixed(2)} km • Góc hướng: ${_store.activeDriverBearing.toStringAsFixed(0)}°',
             ),
             const SizedBox(height: AppSpacing.md),
             Row(
               children: [
                 Expanded(
                   child: Text(
-                    'Khách nhận: ${activeOrder.recipientName} (${activeOrder.recipientPhone})',
+                    'Khách nhận: ${activeOrder.recipientName} ($displayPhone)',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
+                OutlinedButton.icon(
+                  onPressed: () => _store.stepDriverAlongRoute(),
+                  icon: const Icon(Icons.my_location, size: 16),
+                  label: const Text('Bước tiến GPS'),
+                ),
+                const SizedBox(width: 6),
                 ElevatedButton(
                   onPressed: () => setState(() => _selectedScreenIndex = 4),
-                  child: const Text('Cập nhật trạng thái (UC17)'),
+                  child: const Text('Cập nhật (UC17)'),
                 ),
               ],
             ),
@@ -622,9 +727,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     );
   }
 
-  /// Hình 8.20: UC18 Xác nhận giao hàng thành công (POD Photo + OTP 4 số)
+  /// Hình 8.20: UC18 Xác nhận giao hàng thành công (POD Photo + OTP 4 số + Kiểm tra <= 100m RULE-ORD-03)
   Widget _buildPodConfirmationView() {
     final ord = _store.orders.first;
+    final distMeters = _store.distanceFromDriverToDropoffMeters();
+    final isWithin100m = distMeters <= 100.0;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -636,45 +744,42 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: AppSpacing.sm),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.success),
-              ),
-              child: Row(
+            PodGpsWatermarkPhotoCard(
+              driverLocation: _store.activeDriverLocation,
+              recipientName: _podRecipientCtrl.text,
+              otpCode: _podOtpCtrl.text,
+              distanceToDropoffMeters: distMeters,
+            ),
+            if (!isWithin100m) ...[
+              const SizedBox(height: 8),
+              Row(
                 children: [
-                  const Icon(
-                    Icons.camera_alt,
-                    size: 36,
-                    color: AppColors.success,
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
+                  const Expanded(
                     child: Text(
-                      _hasCapturedPodPhoto
-                          ? 'Đã chụp ảnh kiện hàng kèm Watermark GPS (21.0145, 105.8512) lúc 14:25'
-                          : 'Chưa chụp ảnh POD',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      '⚠️ RULE-ORD-03: Tài xế phải cách điểm giao <= 100m mới được phép xác nhận hoàn tất POD.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.danger,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                  TextButton(
-                    onPressed: () => setState(
-                      () => _hasCapturedPodPhoto = !_hasCapturedPodPhoto,
-                    ),
-                    child: const Text('Chụp lại'),
+                  TextButton.icon(
+                    onPressed: () =>
+                        _store.stepDriverAlongRoute(snapToDropoff: true),
+                    icon: const Icon(Icons.near_me, size: 16),
+                    label: const Text('Tiến vào vùng < 100m'),
                   ),
                 ],
               ),
-            ),
+            ],
             const SizedBox(height: AppSpacing.sm),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _podRecipientCtrl,
+                    onChanged: (_) => setState(() {}),
                     decoration:
                         const InputDecoration(labelText: 'Tên người thực nhận'),
                   ),
@@ -684,6 +789,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                   child: TextField(
                     controller: _podOtpCtrl,
                     maxLength: 4,
+                    onChanged: (_) => setState(() {}),
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: 'Mã OTP xác nhận (4 chữ số)',
@@ -697,25 +803,33 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               width: double.infinity,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.success,
+                  backgroundColor:
+                      isWithin100m ? AppColors.success : AppColors.textSecondary,
                 ),
                 onPressed: () {
+                  if (!isWithin100m) {
+                    _store.stepDriverAlongRoute(snapToDropoff: true);
+                  }
                   _store.driverAdvanceOrderStatus(
                     ord.trackingCode,
                     podNote:
-                        'POD: ${_podRecipientCtrl.text} • OTP ${_podOtpCtrl.text} • GPS Watermark Verified',
+                        'POD: ${_podRecipientCtrl.text} • OTP ${_podOtpCtrl.text} • GPS (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})',
                   );
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Hoàn tất giao đơn ${ord.trackingCode}! Đã cộng +55.000đ vào Ví tài xế.',
+                        'Hoàn tất giao đơn ${ord.trackingCode}! SĐT người nhận đã được tự động ẩn (Phone Masking).',
                       ),
                     ),
                   );
                   setState(() => _selectedScreenIndex = 6);
                 },
                 icon: const Icon(Icons.task_alt),
-                label: const Text('HOÀN TẤT GIAO HÀNG (POD)'),
+                label: Text(
+                  isWithin100m
+                      ? 'HOÀN TẤT GIAO HÀNG (POD)'
+                      : 'DI CHUYỂN TỚI ĐIỂM GIAO (< 100M) & HOÀN TẤT POD',
+                ),
               ),
             ),
           ],
