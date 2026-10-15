@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gps_delivery_app/core/gps/gps_integrity_validator.dart';
+import 'package:gps_delivery_app/core/gps/kalman_gps_filter.dart';
 import 'package:gps_delivery_app/core/utils/geo_math.dart';
+import 'package:gps_delivery_app/data/datasources/local/app_state_store.dart';
 import 'package:gps_delivery_app/domain/entities/geo_point.dart';
 import 'package:gps_delivery_app/domain/entities/pricing_estimate.dart';
 import 'package:gps_delivery_app/domain/enums/order_status.dart';
@@ -8,56 +10,131 @@ import 'package:gps_delivery_app/domain/enums/service_type.dart';
 import 'package:gps_delivery_app/main.dart';
 
 void main() {
-  testWidgets('GpsDeliveryApp renders architecture dashboard and UC05 estimate', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(const GpsDeliveryApp());
+  testWidgets(
+    'TC-05..TC-08: GpsDeliveryApp renders all 4 subsystems (Customer, Driver, Merchant, Admin) and System States',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(const GpsDeliveryApp());
 
-    expect(
-      find.text('Hệ Thống Giao Hàng Định Vị GPS Đa Nền Tảng'),
-      findsOneWidget,
-    );
-    expect(find.text('Phân hệ Khách hàng'), findsWidgets);
-  });
+      expect(
+        find.text('Hệ Thống Giao Hàng Định Vị GPS Đa Nền Tảng'),
+        findsOneWidget,
+      );
+      // Mặc định: Phân hệ Khách hàng (Hình 8.4: UC03 Tạo đơn & Chọn gói dịch vụ)
+      expect(
+        find.text('Hình 8.4: Tạo đơn hàng & Chọn gói dịch vụ (UC03)'),
+        findsOneWidget,
+      );
 
-  test('UC05 Express 14.5km + Peak + PROMO20K equals 138,250 VND (Hình 8.5)', () {
-    final estimate = PricingEstimate.calculate(
-      serviceType: DeliveryServiceType.express30m,
-      distanceMeters: 14500,
-      durationSeconds: 2700,
-      isPeakHour: true,
-      voucherDiscount: 20000,
-    );
+      // Chuyển sang Phân hệ Tài xế (Hình 8.16: UC14)
+      await tester.tap(find.text('Phân hệ Tài xế'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Hình 8.16: Trang chủ Tài xế & Trạng thái Hoạt động (UC14)'),
+        findsOneWidget,
+      );
 
-    expect(estimate.baseFare, 15000);
-    expect(estimate.distanceFare, 123250);
-    expect(estimate.surchargeFee, 20000);
-    expect(estimate.discountAmount, 20000);
-    expect(estimate.totalAmount, 138250);
-  });
+      // Chuyển sang Phân hệ Cửa hàng B2B (Hình 8.38: UC32)
+      await tester.tap(find.text('Phân hệ Cửa hàng / Người gửi'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Hình 8.38: Tạo Đơn Giao hàng Lẻ B2B (UC32)'),
+        findsOneWidget,
+      );
 
-  test('OrderStatus FSM enforces valid and invalid transitions (Table 22)', () {
-    expect(OrderStatus.draft.canTransitionTo(OrderStatus.searching), isTrue);
-    expect(OrderStatus.draft.canTransitionTo(OrderStatus.delivered), isFalse);
-    expect(OrderStatus.inTransit.canTransitionTo(OrderStatus.delivered), isTrue);
-    expect(OrderStatus.delivered.canTransitionTo(OrderStatus.cancelled), isFalse);
-  });
+      // Chuyển sang Phân hệ Quản trị Admin (Hình 8.24: UC22)
+      await tester.tap(find.text('Phân hệ Quản trị viên'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Hình 8.24: Dashboard Tổng quan Hệ thống (UC22)'),
+        findsOneWidget,
+      );
+    },
+  );
 
-  test('Ray-Casting Point-in-Polygon & Adaptive Battery Policy (Table 36)', () {
-    const polygon = [
-      GeoPoint(latitude: 10.76, longitude: 106.68),
-      GeoPoint(latitude: 10.76, longitude: 106.71),
-      GeoPoint(latitude: 10.79, longitude: 106.71),
-      GeoPoint(latitude: 10.79, longitude: 106.68),
-    ];
-    const insidePoint = GeoPoint(latitude: 10.7769, longitude: 106.6953);
-    expect(GeoMath.isPointInPolygon(insidePoint, polygon), isTrue);
+  test(
+    'TC-01: UC05 Express 14.5km + Peak + PROMO20K equals 138,250 VND (Hình 8.5)',
+    () {
+      final estimate = PricingEstimate.calculate(
+        serviceType: DeliveryServiceType.express30m,
+        distanceMeters: 14500,
+        durationSeconds: 2700,
+        isPeakHour: true,
+        voucherDiscount: 20000,
+      );
 
-    final lowBatteryPolicy = GpsIntegrityValidator.resolvePolicy(
-      batteryLevelPercent: 15,
-      isCharging: false,
-    );
-    expect(lowBatteryPolicy.enable3dBuildings, isFalse);
-    expect(lowBatteryPolicy.cameraPitch, 0.0);
-  });
+      expect(estimate.baseFare, 15000);
+      expect(estimate.distanceFare, 123250);
+      expect(estimate.surchargeFee, 20000);
+      expect(estimate.discountAmount, 20000);
+      expect(estimate.totalAmount, 138250);
+    },
+  );
+
+  test(
+    'TC-02: OrderStatus FSM enforces valid and invalid transitions (Table 22)',
+    () {
+      expect(OrderStatus.draft.canTransitionTo(OrderStatus.searching), isTrue);
+      expect(OrderStatus.draft.canTransitionTo(OrderStatus.delivered), isFalse);
+      expect(
+        OrderStatus.inTransit.canTransitionTo(OrderStatus.delivered),
+        isTrue,
+      );
+      expect(
+        OrderStatus.delivered.canTransitionTo(OrderStatus.cancelled),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'TC-03 & TC-04: Ray-Casting Point-in-Polygon, Kalman Filter & Adaptive Battery Policy (Table 36)',
+    () {
+      const polygon = [
+        GeoPoint(latitude: 10.76, longitude: 106.68),
+        GeoPoint(latitude: 10.76, longitude: 106.71),
+        GeoPoint(latitude: 10.79, longitude: 106.71),
+        GeoPoint(latitude: 10.79, longitude: 106.68),
+      ];
+      const insidePoint = GeoPoint(latitude: 10.7769, longitude: 106.6953);
+      expect(GeoMath.isPointInPolygon(insidePoint, polygon), isTrue);
+
+      final kalman = KalmanGpsFilter();
+      final smoothed = kalman.filter(
+        rawPoint: const GeoPoint(
+          latitude: 10.7769,
+          longitude: 106.6953,
+        ),
+        accuracyMeters: 8.0,
+        timestampMs: 1700000000000,
+      );
+      expect(smoothed.latitude, closeTo(10.7769, 0.001));
+
+      final lowBatteryPolicy = GpsIntegrityValidator.resolvePolicy(
+        batteryLevelPercent: 15,
+        isCharging: false,
+      );
+      expect(lowBatteryPolicy.enable3dBuildings, isFalse);
+      expect(lowBatteryPolicy.cameraPitch, 0.0);
+
+      // Kiểm chứng AppStateStore đồng bộ trạng thái giữa các phân hệ
+      final store = AppStateStore.instance;
+      final initialCount = store.orders.length;
+      final newOrder = store.createNewOrder(
+        pickupAddress: '123 Lê Lợi, Q.1',
+        dropoffAddress: '456 Nguyễn Huệ, Q.1',
+        recipientName: 'Khách Test',
+        recipientPhone: '0912345678',
+        packageDescription: 'Hàng kiểm thử',
+        weightKg: 1.0,
+        dimensionsCm: '20x10x10 cm',
+        serviceType: DeliveryServiceType.express30m,
+        codAmount: 200000,
+        paymentMethod: 'Tiền mặt (COD)',
+        voucherCode: 'PROMO20K',
+      );
+      expect(store.orders.length, initialCount + 1);
+      store.driverAcceptOrder(newOrder.trackingCode);
+      expect(newOrder.status, OrderStatus.accepted);
+    },
+  );
 }

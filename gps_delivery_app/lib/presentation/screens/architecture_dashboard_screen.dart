@@ -4,21 +4,72 @@ import '../../core/config/env_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/service_type.dart';
 import '../../domain/enums/user_role.dart';
+import '../admin/admin_subsystem_views.dart';
 import '../bloc/system_architecture_cubit.dart';
+import '../customer/customer_subsystem_views.dart';
+import '../driver/driver_subsystem_views.dart';
+import '../merchant/merchant_subsystem_views.dart';
+import '../widgets/system_state_screens.dart';
 
-class ArchitectureDashboardScreen extends StatelessWidget {
+class ArchitectureDashboardScreen extends StatefulWidget {
   const ArchitectureDashboardScreen({super.key});
 
   @override
+  State<ArchitectureDashboardScreen> createState() =>
+      _ArchitectureDashboardScreenState();
+}
+
+class _ArchitectureDashboardScreenState
+    extends State<ArchitectureDashboardScreen> {
+  final AppStateStore _store = AppStateStore.instance;
+  bool _showOnboardingPreview = false;
+  bool _showSkeletonPreview = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _store.addListener(_onStoreUpdated);
+  }
+
+  void _onStoreUpdated() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _store.removeListener(_onStoreUpdated);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_showOnboardingPreview) {
+      return OnboardingStateScreen(
+        onGetStarted: () => setState(() => _showOnboardingPreview = false),
+      );
+    }
+
     return BlocBuilder<SystemArchitectureCubit, SystemArchitectureState>(
       builder: (context, state) {
         final cubit = context.read<SystemArchitectureCubit>();
         return Scaffold(
           appBar: AppBar(
             title: const Text('Hệ Thống Giao Hàng Định Vị GPS Đa Nền Tảng'),
+            actions: [
+              TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: AppColors.surface),
+                onPressed: () =>
+                    _store.toggleOfflineSimulation(!_store.isOfflineMode),
+                icon: Icon(
+                  _store.isOfflineMode ? Icons.wifi_off : Icons.wifi,
+                  size: 18,
+                ),
+                label: Text(_store.isOfflineMode ? 'Offline' : 'Online'),
+              ),
+            ],
           ),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(AppSpacing.md),
@@ -26,6 +77,10 @@ class ArchitectureDashboardScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _buildSubsystemSelectorCard(context, state, cubit),
+                const SizedBox(height: AppSpacing.md),
+                _buildActiveSubsystemView(state.selectedRole),
+                const SizedBox(height: AppSpacing.md),
+                _buildSystemStateShowcaseCard(context),
                 const SizedBox(height: AppSpacing.md),
                 _buildPricingCalculatorCard(context, state, cubit),
                 const SizedBox(height: AppSpacing.md),
@@ -36,6 +91,19 @@ class ArchitectureDashboardScreen extends StatelessWidget {
         );
       },
     );
+  }
+
+  Widget _buildActiveSubsystemView(SubsystemRole role) {
+    switch (role) {
+      case SubsystemRole.customer:
+        return const CustomerSubsystemEntry();
+      case SubsystemRole.driver:
+        return const DriverSubsystemEntry();
+      case SubsystemRole.merchant:
+        return const MerchantSubsystemEntry();
+      case SubsystemRole.admin:
+        return const AdminSubsystemEntry();
+    }
   }
 
   Widget _buildSubsystemSelectorCard(
@@ -50,7 +118,7 @@ class ArchitectureDashboardScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Kiến trúc 4 Phân hệ Cốt lõi (46 Use Case & 16 Bảng PostGIS)',
+              'Kiến trúc 4 Phân hệ Cốt lõi (46 Use Case, 51 Màn hình & 16 Bảng PostGIS)',
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -87,6 +155,55 @@ class ArchitectureDashboardScreen extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSystemStateShowcaseCard(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Trạng thái Hệ thống & Bản đồ 3D (Hình 8.47 - Hình 8.51)',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.rocket_launch_outlined, size: 16),
+                  label: const Text('Hình 8.47: Mở Onboarding'),
+                  onPressed: () =>
+                      setState(() => _showOnboardingPreview = true),
+                ),
+                FilterChip(
+                  label: const Text('Hình 8.49: Mô phỏng Mất mạng (SQLite)'),
+                  selected: _store.isOfflineMode,
+                  onSelected: (v) => _store.toggleOfflineSimulation(v),
+                ),
+                FilterChip(
+                  label: const Text('Hình 8.50: Shimmer Skeleton Loading'),
+                  selected: _showSkeletonPreview,
+                  onSelected: (v) => setState(() => _showSkeletonPreview = v),
+                ),
+                FilterChip(
+                  label: const Text('Hình 8.51: Bật/Tắt Bản đồ 3D Pitch 55°'),
+                  selected: _store.isMap3dEnabled,
+                  onSelected: (_) => _store.toggleMap3d(),
+                ),
+              ],
+            ),
+            if (_showSkeletonPreview) ...[
+              const SizedBox(height: AppSpacing.sm),
+              const SkeletonOrderListWidget(),
+            ],
           ],
         ),
       ),
@@ -202,8 +319,9 @@ class ArchitectureDashboardScreen extends StatelessWidget {
               policy.enable3dBuildings
                   ? '3D Perspective (Pitch ${policy.cameraPitch.toStringAsFixed(0)}° • ${policy.targetFps} FPS)'
                   : '2D Tiết kiệm Pin (Pitch 0° • ${policy.targetFps} FPS)',
-              valueColor:
-                  policy.enable3dBuildings ? AppColors.success : AppColors.warning,
+              valueColor: policy.enable3dBuildings
+                  ? AppColors.success
+                  : AppColors.warning,
             ),
             _buildPriceRow(
               'Chu kỳ phát GPS / Độ lệch tối thiểu',
