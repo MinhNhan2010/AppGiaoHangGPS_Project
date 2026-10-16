@@ -213,7 +213,86 @@ void main() {
       expect(route.polylinePoints.length, greaterThanOrEqualTo(2));
     },
   );
+
+  test(
+    'TC-11: Kiểm tra tính nhất quán Logic Nghiệp vụ (Voucher %, Hoa hồng 80%, Chặn hủy FSM, Ký quỹ 200k & Hoàn tiền Rút)',
+    () {
+      final store = AppStateStore.instance;
+      expect(EnvConfig.driverAcceptTimeoutSeconds, equals(28));
+
+      // 1. Kiểm tra Voucher phần trăm (GHN-BACKTOSCHOOL: giảm 10%, tối đa 25.000đ)
+      final pctOrder = store.createNewOrder(
+        pickupAddress: '145 Phố Huế, Hai Bà Trưng, Hà Nội',
+        dropoffAddress: 'Số 15, Ngõ 100, Đường Lê Trọng Tấn, Quận Thanh Xuân, Hà Nội',
+        recipientName: 'Khách Voucher %',
+        recipientPhone: '0912345678',
+        packageDescription: 'Kiện hàng kiểm tra %',
+        weightKg: 1.0,
+        dimensionsCm: '20x10x10 cm',
+        serviceType: DeliveryServiceType.express30m,
+        codAmount: 100000,
+        paymentMethod: 'Tiền mặt (COD)',
+        voucherCode: 'GHN-BACKTOSCHOOL',
+      );
+      // Tổng cước trước giảm là 158.250đ -> 10% là 15.825đ (<= 25.000đ)
+      expect(pctOrder.discountAmount, closeTo(15825, 1.0));
+
+      // 2. Chuyển đơn qua các bước tới IN_TRANSIT -> Không được phép hủy (RULE-ORD-02)
+      store.driverAdvanceOrderStatus(pctOrder.trackingCode); // ACCEPTED
+      store.driverAdvanceOrderStatus(pctOrder.trackingCode); // ARRIVING_PICKUP
+      store.driverAdvanceOrderStatus(pctOrder.trackingCode); // IN_TRANSIT
+      expect(pctOrder.status, equals(OrderStatus.inTransit));
+      final cancelWhileInTransit = store.cancelOrder(
+        pctOrder.trackingCode,
+        'Đổi ý khi xe đang giao',
+      );
+      expect(cancelWhileInTransit, isFalse);
+      expect(pctOrder.status, equals(OrderStatus.inTransit));
+
+      // 3. Hoàn tất giao hàng (DELIVERED) -> Tài xế nhận đúng 80% cước vận chuyển (RULE-FIN-01)
+      final balanceBefore = store.driverWalletBalance;
+      store.driverAdvanceOrderStatus(pctOrder.trackingCode); // DELIVERED
+      final expectedDriverEarning =
+          ((pctOrder.deliveryFee + pctOrder.surchargeFee) * 0.80)
+              .roundToDouble();
+      expect(
+        store.driverWalletBalance,
+        closeTo(balanceBefore + expectedDriverEarning, 1.0),
+      );
+
+      // 4. Rút tiền vượt quá số dư ký quỹ 200.000đ bị từ chối (RULE-FIN-02)
+      final overWithdraw = store.requestWithdrawal(
+        ownerName: 'Nguyễn Văn Nam',
+        ownerRole: 'Tài xế',
+        amount: store.driverWalletBalance - 100000, // Còn lại 100k < 200k
+        bankName: 'Vietcombank',
+        accountMasked: '007100****889',
+      );
+      expect(overWithdraw, isFalse);
+
+      // 5. Rút tiền hợp lệ và được hoàn lại ví khi Admin Từ chối lệnh rút
+      final validWithdrawAmount = 100000.0;
+      final balBeforeWithdraw = store.driverWalletBalance;
+      final okWithdraw = store.requestWithdrawal(
+        ownerName: 'Nguyễn Văn Nam',
+        ownerRole: 'Tài xế',
+        amount: validWithdrawAmount,
+        bankName: 'Vietcombank',
+        accountMasked: '007100****889',
+      );
+      expect(okWithdraw, isTrue);
+      expect(
+        store.driverWalletBalance,
+        closeTo(balBeforeWithdraw - validWithdrawAmount, 1.0),
+      );
+
+      final newestReqId = store.withdrawalRequests.first.id;
+      store.updateWithdrawalStatus(newestReqId, 'Từ chối');
+      expect(store.driverWalletBalance, closeTo(balBeforeWithdraw, 1.0));
+    },
+  );
 }
+
 
 
 

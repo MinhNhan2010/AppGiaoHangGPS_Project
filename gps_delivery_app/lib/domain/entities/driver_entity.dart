@@ -49,8 +49,8 @@ class DriverEntity extends Equatable {
     final ratingScore = (ratingAvg / 5.0).clamp(0.0, 1.0);
     final acceptanceScore = (acceptanceRate / 100.0).clamp(0.0, 1.0);
 
-    return (proximityScore * 0.55) +
-        (ratingScore * 0.25) +
+    return (proximityScore * 0.50) +
+        (ratingScore * 0.30) +
         (acceptanceScore * 0.20);
   }
 

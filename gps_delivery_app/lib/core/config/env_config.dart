@@ -58,7 +58,7 @@ class EnvConfig {
 
   // Ngưỡng định vị GPS thời gian thực & Điều phối thông minh (Chương 4, 10, 14, 15)
   static const double dispatchRadiusMeters = 3000.0;
-  static const int driverAcceptTimeoutSeconds = 20;
+  static const int driverAcceptTimeoutSeconds = 28;
   static const double arrivalGeofenceRadiusMeters = 100.0;
   static const double maxValidVehicleSpeedKmh = 120.0;
   static const int stationaryAnomalyAlertSeconds = 900;

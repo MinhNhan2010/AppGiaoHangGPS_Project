@@ -1033,22 +1033,37 @@ class AppStateStore extends ChangeNotifier {
         ? 2700
         : ((distMeters / 1000.0) * 180).round();
 
-    double discount = 0;
-    if (voucherCode != null && voucherCode.trim().isNotEmpty) {
-      final matched = vouchers
-          .where((v) => v.code.toUpperCase() == voucherCode.trim().toUpperCase())
-          .firstOrNull;
-      if (matched != null) {
-        discount = matched.discountValue;
-      }
-    }
-
     double geofenceFee = 0;
     for (final z in geofenceZones) {
       if (z.isActive &&
           z.surchargeRate > 0 &&
           GeoMath.isPointInPolygon(dropoffPt, z.boundary)) {
         geofenceFee += z.surchargeRate;
+      }
+    }
+
+    final preDiscountEst = PricingEstimate.calculate(
+      serviceType: serviceType,
+      distanceMeters: distMeters,
+      durationSeconds: durationSec,
+      isPeakHour: isPeakSurchargeActive,
+      geofenceSurcharge: geofenceFee,
+      voucherDiscount: 0,
+    );
+
+    double discount = 0;
+    if (voucherCode != null && voucherCode.trim().isNotEmpty) {
+      final matched = vouchers
+          .where((v) => v.code.toUpperCase() == voucherCode.trim().toUpperCase())
+          .firstOrNull;
+      if (matched != null) {
+        if (matched.isPercentage) {
+          final rawPct =
+              preDiscountEst.totalAmount * (matched.discountValue / 100.0);
+          discount = rawPct.clamp(0.0, matched.maxDiscount);
+        } else {
+          discount = matched.discountValue;
+        }
       }
     }
 
@@ -1096,6 +1111,7 @@ class AppStateStore extends ChangeNotifier {
   void driverAcceptOrder(String trackingCode, {String? customDriverName, String? customPlate}) {
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return;
+    if (!ord.status.canTransitionTo(OrderStatus.accepted)) return;
     ord.status = OrderStatus.accepted;
     ord.assignedDriverName = customDriverName ?? 'Nguyễn Văn Nam';
     ord.assignedDriverPlate = customPlate ?? '29-P1 123.45';
@@ -1120,7 +1136,10 @@ class AppStateStore extends ChangeNotifier {
         ord.paymentStatus = 'PAID';
         ord.podImageNote =
             podNote ?? 'Đã chụp ảnh kiện hàng kèm Watermark GPS & OTP 4 số';
-        driverWalletBalance += 55000;
+        // RULE-FIN-01: Tài xế hưởng 80% tổng cước vận chuyển (khấu trừ 20% phí nền tảng)
+        final driverNetEarning =
+            ((ord.deliveryFee + ord.surchargeFee) * 0.80).roundToDouble();
+        driverWalletBalance += driverNetEarning;
         merchantCodBalance += ord.codAmount;
       default:
         break;
@@ -1129,12 +1148,17 @@ class AppStateStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void cancelOrder(String trackingCode, String reason) {
+  bool cancelOrder(String trackingCode, String reason) {
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
-    if (ord == null) return;
+    if (ord == null) return false;
+    // RULE-ORD-02 & Bảng 22: Chỉ cho phép hủy khi trạng thái đơn hợp lệ trong FSM
+    if (!ord.status.canTransitionTo(OrderStatus.cancelled)) {
+      return false;
+    }
     ord.status = OrderStatus.cancelled;
     ord.cancelReason = reason;
     notifyListeners();
+    return true;
   }
 
   void submitDriverRating(String trackingCode, int stars, String comment) {
@@ -1161,17 +1185,20 @@ class AppStateStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  void requestWithdrawal({
+  bool requestWithdrawal({
     required String ownerName,
     required String ownerRole,
     required double amount,
     required String bankName,
     required String accountMasked,
   }) {
-    if (amount <= 0) return;
-    if (ownerRole == 'Tài xế' && driverWalletBalance >= amount) {
+    if (amount <= 0) return false;
+    if (ownerRole == 'Tài xế') {
+      // RULE-FIN-02: Bắt buộc duy trì số dư ký quỹ tối thiểu 200.000 VNĐ trong ví Tài xế
+      if (driverWalletBalance - amount < 200000) return false;
       driverWalletBalance -= amount;
-    } else if (ownerRole != 'Tài xế' && merchantCodBalance >= amount) {
+    } else {
+      if (merchantCodBalance < amount) return false;
       merchantCodBalance -= amount;
     }
     withdrawalRequests.insert(
@@ -1188,12 +1215,22 @@ class AppStateStore extends ChangeNotifier {
       ),
     );
     notifyListeners();
+    return true;
   }
 
   void updateWithdrawalStatus(String id, String status) {
     final req = withdrawalRequests.where((w) => w.id == id).firstOrNull;
     if (req != null) {
+      final previousStatus = req.status;
       req.status = status;
+      // Hoàn trả lại số dư vào ví nếu lệnh rút tiền bị Từ chối từ trạng thái Chờ duyệt
+      if (previousStatus == 'Chờ duyệt' && status == 'Từ chối') {
+        if (req.ownerRole == 'Tài xế') {
+          driverWalletBalance += req.amount;
+        } else {
+          merchantCodBalance += req.amount;
+        }
+      }
       notifyListeners();
     }
   }
