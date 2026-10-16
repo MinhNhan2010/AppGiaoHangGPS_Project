@@ -1,12 +1,12 @@
 # Hệ Thống Ứng Dụng Giao Hàng Định Vị GPS Đa Nền Tảng (`gps_delivery_app`)
 
-Dự án phát triển ứng dụng giao hàng định vị GPS thời gian thực đa nền tảng (Flutter + Supabase PostgreSQL/PostGIS + SQLite Offline Queue), bám sát **100%** tài liệu thiết kế hệ thống [`Design_Document.docx`](../Design_Document.docx) và lược đồ cơ sở dữ liệu [`database_schema.sql`](../database_schema.sql).
+Dự án phát triển ứng dụng giao hàng định vị GPS thời gian thực đa nền tảng (Flutter + Supabase PostgreSQL/PostGIS + SQLite Offline Queue + OpenStreetMap Nominatim & OSRM Routing + Hardware Geolocator), bám sát **100%** tài liệu thiết kế hệ thống [`Design_Document.docx`](../Design_Document.docx) và lược đồ cơ sở dữ liệu [`database_schema.sql`](../database_schema.sql).
 
 ---
 
 ## 1. Tổng Quan Tiến Trình Hoàn Thiện (`100%`)
 
-| Hạng mục theo `Design_Document.docx` | Số lượng đặc tả | Đã hoàn thiện | Tỷ lệ | Tệp mã nguồn chính |
+| Hạng mục theo `Design_Document.docx` & Hạ tầng Thực tế | Số lượng đặc tả | Đã hoàn thiện | Tỷ lệ | Tệp mã nguồn chính |
 | :--- | :---: | :---: | :---: | :--- |
 | **CSDL PostgreSQL/PostGIS & SQLite Offline** | 16 bảng (3NF + GIST) | **16 / 16 bảng** | **100%** | `../database_schema.sql`, `lib/data/datasources/` |
 | **Phân hệ Khách hàng (`UC01`–`UC12`, `UC41`, `UC42`)** | 14 màn hình (`Hình 8.1`–`8.14`) | **14 / 14 màn hình** | **100%** | `lib/presentation/customer/customer_subsystem_views.dart` |
@@ -15,7 +15,8 @@ Dự án phát triển ứng dụng giao hàng định vị GPS thời gian th�
 | **Phân hệ Quản trị viên / Admin (`UC22`–`UC29`, `UC43`–`UC46`)** | 12 màn hình (`Hình 8.24`–`8.35`) | **12 / 12 màn hình** | **100%** | `lib/presentation/admin/admin_subsystem_views.dart` |
 | **Trạng thái Hệ thống & Bản đồ 3D (`Hình 8.47`–`8.51`)** | 5 màn hình | **5 / 5 màn hình** | **100%** | `lib/presentation/widgets/system_state_screens.dart` |
 | **Thuật toán GPS, Điều phối & Bảo mật chuyên sâu** | 6 nhóm tính năng | **6 / 6 nhóm** | **100%** | `lib/core/gps/`, `lib/core/utils/` |
-| **Kiểm thử Tự động (`TC-01`–`TC-09`) & `flutter analyze`** | 9 kịch bản | **9 / 9 Passed (0 lỗi)** | **100%** | `test/widget_test.dart` |
+| **Hạ tầng Thực tế (OSM Nominatim, OSRM, Geolocator, Supabase)** | 3 tầng hạ tầng | **3 / 3 tầng** | **100%** | `smart_dispatch_engine.dart`, `app_state_store.dart`, `env_config.dart` |
+| **Kiểm thử Tự động (`TC-01`–`TC-10`) & `flutter analyze`** | 10 kịch bản | **10 / 10 Passed (0 lỗi)** | **100%** | `test/widget_test.dart` |
 
 ---
 
@@ -34,6 +35,10 @@ Dự án phát triển ứng dụng giao hàng định vị GPS thời gian th�
   - [x] `UC30` Đăng ký đối tác B2B, `UC31` Cấu hình kho GPS & Webhook, `UC32` Tạo đơn lẻ B2B, `UC33` Nhập đơn hàng loạt CSV/Excel, `UC34` In tem vận đơn khổ A6 (`Code-128` Barcode & `21x21` QR Matrix), `UC35`–`UC36` Theo dõi & Xử lý giao lại/hoàn hàng, `UC37`–`UC38` Đối soát & Rút tiền COD, `UC39` Thống kê B2B, `UC40` Khiếu nại đính kèm bằng chứng.
 - [x] **Giai đoạn 5: Phân hệ Quản trị viên / Admin Web Portal – 12 Màn hình (`Hình 8.24` – `Hình 8.35`) (100%)**
   - [x] `UC22` Dashboard tổng quan, `UC23` Quản lý người dùng, `UC24` Duyệt hồ sơ tài xế, `UC25` Bản đồ giám sát GPS toàn đội xe, `UC26` Cấu hình bảng giá & Phụ phí, `UC27` Báo cáo doanh thu, `UC28` Trọng tài xử lý khiếu nại, `UC29` Đối soát tài chính & Duyệt rút tiền, `UC43` Quản lý toàn bộ đơn hàng, `UC44` Vẽ đa giác Geofence trực tiếp trên bản đồ, `UC45` Phát thông báo Broadcast, `UC46` Ma trận phân quyền RBAC.
+- [x] **Giai đoạn 8: Đấu Nối Hạ Tầng Thực Tế (OpenStreetMap Nominatim, OSRM Routing, Chip GPS Phần Cứng `Geolocator` & Cloud Supabase PostGIS) (100%)**
+  - [x] Truy vấn trực tiếp `https://nominatim.openstreetmap.org/search` và `https://router.project-osrm.org/route/v1/driving`
+  - [x] Đọc cảm biến GPS phần cứng qua `Geolocator` kèm chống Fake GPS và lọc nhiễu `KalmanGpsFilter`
+  - [x] Cấu hình nóng `SUPABASE_URL` & `SUPABASE_ANON_KEY` trực tiếp trên màn hình Quản trị viên (`UC46`)
 
 ---
 
@@ -43,7 +48,7 @@ Dự án phát triển ứng dụng giao hàng định vị GPS thời gian th�
 # Kiểm tra phân tích tĩnh (0 errors, 0 warnings)
 flutter analyze
 
-# Chạy bộ kiểm thử tự động (TC-01 -> TC-09)
+# Chạy bộ kiểm thử tự động (TC-01 -> TC-10)
 flutter test
 
 # Chạy ứng dụng trên Windows / Web / Android / iOS

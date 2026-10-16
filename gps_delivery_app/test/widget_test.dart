@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gps_delivery_app/core/config/env_config.dart';
 import 'package:gps_delivery_app/core/gps/gps_integrity_validator.dart';
 import 'package:gps_delivery_app/core/gps/kalman_gps_filter.dart';
 import 'package:gps_delivery_app/core/gps/smart_dispatch_engine.dart';
@@ -183,6 +184,36 @@ void main() {
       );
     },
   );
+
+  test(
+    'TC-10: OpenStreetMap Nominatim, OSRM Street Routing & Runtime Supabase Cloud Config',
+    () async {
+      // 1. Runtime Supabase Configuration
+      EnvConfig.configureSupabaseRuntime(
+        url: 'https://demo-gps-postgis.supabase.co',
+        anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.demo',
+      );
+      expect(EnvConfig.isSupabaseConfigured, isTrue);
+
+      // Reset to default after assertion
+      EnvConfig.configureSupabaseRuntime(url: '', anonKey: '');
+      expect(EnvConfig.isSupabaseConfigured, isFalse);
+
+      // 2. Nominatim Geocoding & OSRM Route (with automatic offline/test fallback)
+      final places = await SmartDispatchEngine.fetchLiveNominatimSuggestions(
+        'Phố Huế',
+      );
+      expect(places, isNotEmpty);
+
+      final route = await SmartDispatchEngine.fetchLiveOsrmRoute(
+        const GeoPoint(latitude: 21.0145, longitude: 105.8512),
+        const GeoPoint(latitude: 20.9951, longitude: 105.8286),
+      );
+      expect(route.distanceMeters, greaterThan(500));
+      expect(route.polylinePoints.length, greaterThanOrEqualTo(2));
+    },
+  );
 }
+
 
 
