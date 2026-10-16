@@ -146,7 +146,7 @@ void main() {
     () {
       final store = AppStateStore.instance;
 
-      // 1. SmartDispatchEngine ranking (3km -> 5km -> 8km + weighted formula)
+      // 1. Xếp hạng ứng viên tài xế SmartDispatchEngine (3km -> 5km -> 8km + công thức trọng số)
       final ranked = SmartDispatchEngine.rankDriversForPickup(
         pickupLocation: const GeoPoint(latitude: 10.7769, longitude: 106.7009),
         drivers: store.drivers,
@@ -154,7 +154,7 @@ void main() {
       expect(ranked, isNotEmpty);
       expect(ranked.first.totalScore, greaterThan(0.5));
 
-      // 2. SecurityAndBarcodeUtils phone masking & payment signature
+      // 2. Che số điện thoại bảo mật & Tạo chữ ký thanh toán chống trùng lặp
       expect(
         SecurityAndBarcodeUtils.maskPhoneNumber(
           '0912345678',
@@ -169,13 +169,13 @@ void main() {
       );
       expect(sig1.length, equals(16));
 
-      // 3. RBAC permission enforcement
+      // 3. Kiểm tra thực thi phân quyền quản trị RBAC
       store.setAdminActiveRole('Hỗ trợ CSKH');
       expect(store.hasAdminPermission('Tài chính: Thanh toán'), isFalse);
       store.setAdminActiveRole('Super Admin');
       expect(store.hasAdminPermission('Tài chính: Thanh toán'), isTrue);
 
-      // 4. Step driver along route & 100m geofence
+      // 4. Di chuyển tài xế dọc theo lộ trình & Kiểm tra hàng rào địa lý 100m
       store.stepDriverAlongRoute(snapToDropoff: true);
       expect(store.routeProgressStep, equals(10));
       expect(
@@ -188,18 +188,18 @@ void main() {
   test(
     'TC-10: OpenStreetMap Nominatim, OSRM Street Routing & Runtime Supabase Cloud Config',
     () async {
-      // 1. Runtime Supabase Configuration
+      // 1. Cấu hình nóng kết nối Cloud Supabase lúc chạy
       EnvConfig.configureSupabaseRuntime(
         url: 'https://demo-gps-postgis.supabase.co',
         anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.demo',
       );
       expect(EnvConfig.isSupabaseConfigured, isTrue);
 
-      // Reset to default after assertion
+      // Đặt lại cấu hình mặc định sau khi kiểm tra
       EnvConfig.configureSupabaseRuntime(url: '', anonKey: '');
       expect(EnvConfig.isSupabaseConfigured, isFalse);
 
-      // 2. Nominatim Geocoding & OSRM Route (with automatic offline/test fallback)
+      // 2. Giải mã địa chỉ Nominatim & Tìm đường OSRM (tự động chuyển sang dự phòng khi offline/test)
       final places = await SmartDispatchEngine.fetchLiveNominatimSuggestions(
         'Phố Huế',
       );

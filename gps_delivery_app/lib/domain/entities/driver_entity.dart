@@ -34,8 +34,8 @@ class DriverEntity extends Equatable {
     this.walletBalance = 0.0,
   });
 
-  /// Multi-criteria Smart Dispatching Score (Section 4.2.2)
-  /// Combines GPS proximity (within 3km radius), rating (1..5), and acceptance rate (0..100%)
+  /// Điểm điều phối thông minh đa tiêu chí (Mục 4.2.2)
+  /// Kết hợp khoảng cách GPS (bán kính 3km), điểm đánh giá (1..5) và tỷ lệ nhận chuyến (0..100%)
   double computeDispatchScore(GeoPoint pickupLocation) {
     if (!isOnline || approvalStatus != 'APPROVED' || currentLocation == null) {
       return -1.0;

@@ -44,7 +44,7 @@ class EnvConfig {
       !supabaseUrl.contains('your-project.supabase.co');
 
 
-  // 3D Map Perspective Parameters (Chapter 8.6 - Table 16)
+  // Tham số phối cảnh Bản đồ 3D (Chương 8.6 - Bảng 16)
   static const double map3dDefaultPitch = 55.0;
   static const double map3dMinPitch = 45.0;
   static const double map3dMaxPitch = 60.0;
@@ -56,7 +56,7 @@ class EnvConfig {
   static const int mapMaxFps = 30;
   static const int lowBattery2dFallbackPercent = 20;
 
-  // Real-time GPS & Smart Dispatch Thresholds (Chapters 4, 10, 14, 15)
+  // Ngưỡng định vị GPS thời gian thực & Điều phối thông minh (Chương 4, 10, 14, 15)
   static const double dispatchRadiusMeters = 3000.0;
   static const int driverAcceptTimeoutSeconds = 20;
   static const double arrivalGeofenceRadiusMeters = 100.0;

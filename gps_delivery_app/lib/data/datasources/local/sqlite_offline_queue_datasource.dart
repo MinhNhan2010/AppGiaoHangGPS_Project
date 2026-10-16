@@ -25,7 +25,7 @@ class OfflineSyncRecord {
     required this.createdAtMs,
   });
 
-  /// Exponential Backoff formula (Chapter 15.1): min(2^n * 1000ms, 30000ms)
+  /// Công thức lùi mũ Exponential Backoff (Chương 15.1): min(2^n * 1000ms, 30000ms)
   int get nextBackoffDelayMs {
     final rawMs = math.pow(2, retryCount).toInt() * 1000;
     return math.min(rawMs, EnvConfig.maxOfflineRetryBackoffMs);

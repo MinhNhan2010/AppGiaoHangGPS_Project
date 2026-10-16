@@ -32,7 +32,7 @@ class GeoMath {
     return (brng + 360.0) % 360.0;
   }
 
-  /// Ray-Casting Point-in-Polygon algorithm (Section 4.2.4 & UC44 Geofencing)
+  /// Thuật toán Ray-Casting kiểm tra điểm nằm trong đa giác (Mục 4.2.4 & UC44 Geofencing)
   static bool isPointInPolygon(GeoPoint point, List<GeoPoint> polygon) {
     if (polygon.length < 3) return false;
     bool inside = false;

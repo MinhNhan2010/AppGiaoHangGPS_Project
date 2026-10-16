@@ -9,7 +9,7 @@ class GeoPoint extends Equatable {
     required this.longitude,
   });
 
-  /// Converts to PostGIS EWKT format: SRID=4326;POINT(lng lat)
+  /// Chuyển đổi sang định dạng PostGIS EWKT: SRID=4326;POINT(lng lat)
   String toPostgisEwkt() => 'SRID=4326;POINT($longitude $latitude)';
 
   Map<String, dynamic> toGeoJson() => {

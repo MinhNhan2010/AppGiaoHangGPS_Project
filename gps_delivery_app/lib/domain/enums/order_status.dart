@@ -21,7 +21,7 @@ enum OrderStatus {
     );
   }
 
-  /// Enforces Finite State Machine transition rules (Chapter 10.3 - Table 22)
+  /// Thực thi quy tắc chuyển trạng thái hữu hạn FSM của đơn hàng (Chương 10.3 - Bảng 22)
   bool canTransitionTo(OrderStatus next) {
     return switch (this) {
       OrderStatus.draft =>

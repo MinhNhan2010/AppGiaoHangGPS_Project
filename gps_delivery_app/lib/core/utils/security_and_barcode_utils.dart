@@ -91,7 +91,7 @@ class _Code128Painter extends CustomPainter {
     final moduleWidth = (size.width / totalModules).clamp(1.2, 4.0);
     var currentX = 4.0;
 
-    // Start guard pattern (Code-128 Start B: 11010010000)
+    // Chuỗi vạch khởi đầu chuẩn Code-128 Start B (11010010000)
     const startPattern = [2, 1, 1, 2, 3, 2];
     for (var i = 0; i < startPattern.length; i++) {
       final w = startPattern[i] * moduleWidth;
@@ -101,7 +101,7 @@ class _Code128Painter extends CustomPainter {
       currentX += w;
     }
 
-    // Data bars
+    // Vẽ các dải vạch mã hóa dữ liệu ký tự ASCII
     for (final b in bytes) {
       for (var bit = 0; bit < 8; bit++) {
         final isBlack = ((b >> bit) & 1) == 1 || bit == 0;

@@ -22,7 +22,7 @@ class PricingEstimate extends Equatable {
     required this.totalAmount,
   });
 
-  /// Calculates exact delivery fee matching UC05 (Hình 8.5) & UC26 (Hình 8.28)
+  /// Tính toán chính xác cước phí giao hàng khớp với UC05 (Hình 8.5) & UC26 (Hình 8.28)
   factory PricingEstimate.calculate({
     required DeliveryServiceType serviceType,
     required int distanceMeters,

@@ -34,9 +34,9 @@ class SystemArchitectureState extends Equatable {
 
   factory SystemArchitectureState.initial() {
     const defaultService = DeliveryServiceType.express30m;
-    const defaultDistMeters = 14500; // 14.5 km from Hình 8.5 (UC05)
-    const defaultDurationSec = 2700; // 45 minutes from Hình 8.5 (UC05)
-    const defaultVoucher = 20000.0; // PROMO20K (-20.000 đ) from Hình 8.5
+    const defaultDistMeters = 14500; // 14.5 km theo Hình 8.5 (UC05)
+    const defaultDurationSec = 2700; // 45 phút theo Hình 8.5 (UC05)
+    const defaultVoucher = 20000.0; // Mã PROMO20K (-20.000 đ) theo Hình 8.5
 
     return SystemArchitectureState(
       selectedRole: SubsystemRole.customer,

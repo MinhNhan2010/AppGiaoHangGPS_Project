@@ -4,14 +4,14 @@ import 'app_colors.dart';
 class AppSpacing {
   const AppSpacing._();
 
-  // 8pt Grid System (Section 8.0.3)
+  // Hệ thống lưới khoảng cách 8pt (Mục 8.0.3)
   static const double xs = 4.0;
   static const double sm = 8.0;
   static const double md = 16.0;
   static const double lg = 24.0;
   static const double xl = 32.0;
 
-  // Component Dimensions (Section 8.0.3)
+  // Kích thước chuẩn thành phần giao diện (Mục 8.0.3)
   static const double buttonMinHeight = 48.0;
   static const double buttonRadius = 12.0;
   static const double fabSize = 56.0;

@@ -353,7 +353,7 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // Turn-by-Turn Navigation Header (Hình 8.18 & Hình 8.51)
+                  // Thanh tiêu đề điều hướng từng chặng Turn-by-Turn (Hình 8.18 & Hình 8.51)
                   Positioned(
                     top: 12,
                     left: 12,
@@ -403,7 +403,7 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // Speedometer Badge (35 km/h - Hình 8.51)
+                  // Huy hiệu đồng hồ tốc độ (35 km/h - Hình 8.51)
                   Positioned(
                     top: 78,
                     right: 14,
@@ -434,7 +434,7 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                       ),
                     ),
                   ),
-                  // 3D Toggle & Compass Buttons (Hình 8.51)
+                  // Cụm nút chuyển đổi 2D/3D & La bàn định hướng (Hình 8.51)
                   Positioned(
                     bottom: 16,
                     right: 14,
@@ -521,7 +521,7 @@ class _Map3dCanvasPainter extends CustomPainter {
     final bgPaint = Paint()..color = const Color(0xFFDCE3EA);
     canvas.drawRect(Offset.zero & size, bgPaint);
 
-    // Draw perspective road polygon
+    // Vẽ mặt đường phối cảnh 3D
     final roadPaint = Paint()..color = const Color(0xFF4A5568);
     final roadPath = Path()
       ..moveTo(size.width * 0.22, size.height)
@@ -531,7 +531,7 @@ class _Map3dCanvasPainter extends CustomPainter {
       ..close();
     canvas.drawPath(roadPath, roadPaint);
 
-    // Draw 3D Extruded Buildings (#D0D7DE with 0.65 opacity - Table 16)
+    // Vẽ khối nhà 3D Extruded Buildings (#D0D7DE với độ mờ 0.65 - Bảng 16)
     if (is3dMode) {
       final bldgPaint = Paint()
         ..color = AppColors.buildingExtrusion.withValues(alpha: 0.85);
@@ -548,7 +548,7 @@ class _Map3dCanvasPainter extends CustomPainter {
       }
     }
 
-    // Draw custom Geofence Polygon if present (UC44 - Hình 8.33)
+    // Vẽ đa giác vùng Geofence tùy chỉnh nếu có (UC44 - Hình 8.33)
     if (drawnPolygonPoints.isNotEmpty) {
       final polyFill = Paint()
         ..color = AppColors.accent.withValues(alpha: 0.28)
@@ -578,7 +578,7 @@ class _Map3dCanvasPainter extends CustomPainter {
       canvas.drawPath(polyPath, polyStroke);
     }
 
-    // Draw 3D Route Ribbon (#00B4D8 with #0077B6 casing - Table 16)
+    // Vẽ dải lộ trình 3D Route Ribbon (#00B4D8 với viền #0077B6 - Bảng 16)
     final casingPaint = Paint()
       ..color = AppColors.routeRibbonCasing
       ..strokeWidth = 12
@@ -603,10 +603,10 @@ class _Map3dCanvasPainter extends CustomPainter {
     canvas.drawPath(routePath, casingPaint);
     canvas.drawPath(routePath, ribbonPaint);
 
-    // Draw Drop-off Pin at end of route
+    // Vẽ ghim điểm giao hàng ở cuối lộ trình
     canvas.drawCircle(p2, 8, Paint()..color = AppColors.accent);
 
-    // Interpolate Driver 3D Marker position along p0 -> p1 -> p2
+    // Nội suy vị trí biểu tượng xe Tài xế 3D dọc theo lộ trình p0 -> p1 -> p2
     final t = progressFraction.clamp(0.0, 1.0);
     final Offset driverCenter;
     if (t <= 0.7) {
