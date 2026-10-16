@@ -696,17 +696,29 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: () {
+                onPressed: () async {
+                  final savedPath =
+                      await SecurityAndBarcodeUtils.exportA6LabelToHtmlFile(
+                    trackingCode: ord.trackingCode,
+                    storeName: _store.merchantStoreName,
+                    warehouseAddress: _store.merchantWarehouses.first.address,
+                    recipientName: ord.recipientName,
+                    recipientPhone: ord.recipientPhone,
+                    dropoffAddress: ord.dropoffAddress,
+                    packageDescription: ord.packageDescription,
+                    codAmount: ord.codAmount,
+                  );
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
-                        'Đã xuất file PDF khổ A6 sẵn sàng cho máy in nhiệt!',
+                        'Đã kết xuất tệp vận đơn khổ A6 thực tế tại: $savedPath',
                       ),
                     ),
                   );
                 },
                 icon: const Icon(Icons.print_outlined),
-                label: const Text('In hàng loạt (Khổ nhiệt A6 / A5)'),
+                label: const Text('Kết xuất & In vận đơn Khổ nhiệt A6 (.HTML)'),
               ),
             ),
           ],

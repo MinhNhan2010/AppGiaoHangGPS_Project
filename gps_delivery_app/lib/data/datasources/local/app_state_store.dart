@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,11 +8,13 @@ import '../../../core/gps/gps_integrity_validator.dart';
 import '../../../core/gps/kalman_gps_filter.dart';
 import '../../../core/gps/smart_dispatch_engine.dart';
 import '../../../core/utils/geo_math.dart';
+import '../../../core/utils/security_and_barcode_utils.dart';
 import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/pricing_estimate.dart';
 import '../../../domain/enums/order_status.dart';
 import '../../../domain/enums/service_type.dart';
 import '../remote/supabase_postgis_datasource.dart';
+import 'sqlite_offline_queue_datasource.dart';
 
 
 class SavedAddressRecord {
@@ -269,6 +273,46 @@ class ActiveOrderRecord {
   });
 }
 
+class CsvBatchRowResult {
+  final int rowNumber;
+  final String recipientName;
+  final String recipientPhone;
+  final String dropoffAddress;
+  final String packageDescription;
+  final double weightKg;
+  final double codAmount;
+  final DeliveryServiceType serviceType;
+  final bool isValid;
+  final String statusNote;
+
+  const CsvBatchRowResult({
+    required this.rowNumber,
+    required this.recipientName,
+    required this.recipientPhone,
+    required this.dropoffAddress,
+    required this.packageDescription,
+    required this.weightKg,
+    required this.codAmount,
+    required this.serviceType,
+    required this.isValid,
+    required this.statusNote,
+  });
+}
+
+class CsvBatchParseResult {
+  final List<CsvBatchRowResult> rows;
+  final int validCount;
+  final int invalidCount;
+  final List<String> createdTrackingCodes;
+
+  const CsvBatchParseResult({
+    required this.rows,
+    required this.validCount,
+    required this.invalidCount,
+    required this.createdTrackingCodes,
+  });
+}
+
 class AppStateStore extends ChangeNotifier {
   static final AppStateStore instance = AppStateStore._internal();
 
@@ -281,22 +325,29 @@ class AppStateStore extends ChangeNotifier {
   int batteryPercent = 85;
   double currentSpeedKmh = 35.0;
 
-  // Live GPS Tracking & Route Progression (UC07, UC16, UC18, UC25)
+  // Theo dõi tọa độ GPS trực tiếp & Lộ trình thực tế (UC07, UC16, UC18, UC25)
   GeoPoint activeDriverLocation =
       const GeoPoint(latitude: 21.0068, longitude: 105.8421);
   double activeDriverBearing = 215.0;
   int routeProgressStep = 4;
+  List<GeoPoint> activeRoutePolyline = const [];
   String currentAdminRoleName = 'Super Admin';
   String lastSyncStatusMessage =
       'Đã đồng bộ 16/16 bảng với PostgreSQL 16 + PostGIS';
 
-  // Customer Profile (UC41 - Hình 8.13)
+  // Lưu trữ băm mật khẩu người dùng, OTP 6 số có thời hạn 120s và chữ ký Idempotency (UC01, UC07, RULE-FIN-04)
+  final Map<String, String> registeredUserPasswordHashes = {};
+  final Map<String, String> activeOtpCodesByPhone = {};
+  final Map<String, int> otpExpiryEpochMsByPhone = {};
+  final Set<String> processedPaymentSignatures = {};
+
+  // Hồ sơ Khách hàng (UC41 - Hình 8.13)
   String customerFullName = 'Nguyễn Thu Hà';
   String customerPhone = '+84 912 345 678';
   String customerEmail = 'thu.ha@gmail.com';
   String customerDefaultAddress = '123 Đường Lê Lợi, Quận 1, TP. HCM';
 
-  // Pricing Formula Config (UC26 - Hình 8.28)
+  // Cấu hình Công thức Tính cước Động (UC26 - Hình 8.28)
   double baseFareConfig = 25000;
   double pricePerKmConfig = 5000;
   double peakHourSurchargeConfig = 10000;
@@ -304,7 +355,7 @@ class AppStateStore extends ChangeNotifier {
   bool isPeakSurchargeActive = true;
   bool isWeatherSurchargeActive = true;
 
-  // Merchant Store Info (UC30, UC31 - Hình 8.36, 8.37)
+  // Thông tin Cửa hàng Merchant (UC30, UC31 - Hình 8.36, 8.37)
   String merchantStoreName = 'Cửa hàng Gốm Sứ Việt';
   String merchantBusinessType = 'Gốm sứ & Nội thất';
   String merchantTaxCode = '0316892451';
@@ -783,7 +834,359 @@ class AppStateStore extends ChangeNotifier {
     ),
   ];
 
-  AppStateStore._internal();
+  AppStateStore._internal() {
+    // Khởi tạo tài khoản mặc định đã băm mật khẩu kèm Salt
+    final defaultPhone = _normalizePhone(customerPhone);
+    registeredUserPasswordHashes[defaultPhone] =
+        SecurityAndBarcodeUtils.hashPasswordWithSalt('12345678', defaultPhone);
+    activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
+      orders.first.pickupLocation,
+      orders.first.dropoffLocation,
+      segments: 10,
+    );
+  }
+
+  /// Đường dẫn tệp cơ sở dữ liệu JSON lưu trữ bền vững trên đĩa hệ thống
+  String get snapshotFilePath =>
+      '${Directory.systemTemp.path}${Platform.pathSeparator}gps_delivery_state_snapshot.json';
+
+  /// Lưu toàn bộ trạng thái hiện tại xuống đĩa thực tế (`gps_delivery_state_snapshot.json`) và đẩy vào SQLite Queue
+  Future<String> saveStateSnapshotToDisk({
+    String actionType = 'STATE_SNAPSHOT',
+    Map<String, dynamic>? actionPayload,
+  }) async {
+    final snapshot = <String, dynamic>{
+      'savedAtIso': DateTime.now().toIso8601String(),
+      'driverWalletBalance': driverWalletBalance,
+      'merchantCodBalance': merchantCodBalance,
+      'customerFullName': customerFullName,
+      'customerPhone': customerPhone,
+      'customerEmail': customerEmail,
+      'baseFareConfig': baseFareConfig,
+      'pricePerKmConfig': pricePerKmConfig,
+      'peakHourSurchargeConfig': peakHourSurchargeConfig,
+      'badWeatherSurchargeConfig': badWeatherSurchargeConfig,
+      'isPeakSurchargeActive': isPeakSurchargeActive,
+      'isWeatherSurchargeActive': isWeatherSurchargeActive,
+      'processedPaymentSignatures': processedPaymentSignatures.toList(),
+      'orders': orders
+          .map(
+            (o) => {
+              'id': o.id,
+              'trackingCode': o.trackingCode,
+              'customerName': o.customerName,
+              'recipientName': o.recipientName,
+              'recipientPhone': o.recipientPhone,
+              'pickupAddress': o.pickupAddress,
+              'dropoffAddress': o.dropoffAddress,
+              'pickupLat': o.pickupLocation.latitude,
+              'pickupLng': o.pickupLocation.longitude,
+              'dropoffLat': o.dropoffLocation.latitude,
+              'dropoffLng': o.dropoffLocation.longitude,
+              'serviceType': o.serviceType.name,
+              'packageDescription': o.packageDescription,
+              'weightKg': o.weightKg,
+              'dimensionsCm': o.dimensionsCm,
+              'distanceMeters': o.distanceMeters,
+              'durationSeconds': o.durationSeconds,
+              'deliveryFee': o.deliveryFee,
+              'surchargeFee': o.surchargeFee,
+              'discountAmount': o.discountAmount,
+              'codAmount': o.codAmount,
+              'totalAmount': o.totalAmount,
+              'paymentMethod': o.paymentMethod,
+              'paymentStatus': o.paymentStatus,
+              'status': o.status.name,
+              'assignedDriverName': o.assignedDriverName,
+              'assignedDriverPlate': o.assignedDriverPlate,
+              'podImageNote': o.podImageNote,
+              'cancelReason': o.cancelReason,
+              'ratingStars': o.ratingStars,
+              'ratingComment': o.ratingComment,
+              'createdDateLabel': o.createdDateLabel,
+            },
+          )
+          .toList(),
+    };
+    try {
+      final file = File(snapshotFilePath);
+      await file.writeAsString(jsonEncode(snapshot), flush: true);
+    } catch (_) {
+      // Bỏ qua nếu môi trường chỉ đọc
+    }
+    try {
+      await SqliteOfflineQueueDatasource().enqueueAction(
+        actionType: actionType,
+        payload: actionPayload ?? {'snapshotSaved': true},
+      );
+    } catch (_) {
+      // Bỏ qua khi chạy trong môi trường kiểm thử không nạp binary sqflite gốc
+    }
+    return snapshotFilePath;
+  }
+
+  /// Khôi phục trạng thái bền vững từ tệp JSON trên đĩa hệ thống
+  Future<bool> loadStateSnapshotFromDisk() async {
+    try {
+      final file = File(snapshotFilePath);
+      if (!await file.exists()) return false;
+      final raw = await file.readAsString();
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      driverWalletBalance =
+          (decoded['driverWalletBalance'] as num?)?.toDouble() ??
+              driverWalletBalance;
+      merchantCodBalance =
+          (decoded['merchantCodBalance'] as num?)?.toDouble() ??
+              merchantCodBalance;
+      customerFullName =
+          decoded['customerFullName']?.toString() ?? customerFullName;
+      customerPhone = decoded['customerPhone']?.toString() ?? customerPhone;
+      customerEmail = decoded['customerEmail']?.toString() ?? customerEmail;
+      final sigs = decoded['processedPaymentSignatures'];
+      if (sigs is List) {
+        processedPaymentSignatures
+          ..clear()
+          ..addAll(sigs.map((e) => e.toString()));
+      }
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _persistMutation(String actionType, Map<String, dynamic> payload) {
+    saveStateSnapshotToDisk(actionType: actionType, actionPayload: payload);
+  }
+
+  String _normalizePhone(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.startsWith('84') && digits.length >= 10) {
+      return '0${digits.substring(2)}';
+    }
+    return digits;
+  }
+
+  /// Đăng ký hoặc xác thực mật khẩu đã băm SHA-256 mở rộng kèm Salt (UC01)
+  bool authenticateOrRegisterAccount({
+    required String phone,
+    required String password,
+    bool isRegister = false,
+    String? fullName,
+  }) {
+    final normPhone = _normalizePhone(phone);
+    if (normPhone.length < 9 || password.trim().length < 6) {
+      return false;
+    }
+    final passwordHash =
+        SecurityAndBarcodeUtils.hashPasswordWithSalt(password.trim(), normPhone);
+    if (isRegister) {
+      registeredUserPasswordHashes[normPhone] = passwordHash;
+      if (fullName != null && fullName.trim().isNotEmpty) {
+        customerFullName = fullName.trim();
+      }
+      customerPhone = phone.trim();
+      _persistMutation('USER_REGISTER', {'phone': normPhone});
+      notifyListeners();
+      return true;
+    }
+    final existingHash = registeredUserPasswordHashes[normPhone];
+    if (existingHash == null) {
+      // Nếu số điện thoại mới đăng nhập lần đầu, ghi nhận băm mật khẩu phiên đầu
+      registeredUserPasswordHashes[normPhone] = passwordHash;
+      customerPhone = phone.trim();
+      _persistMutation('USER_FIRST_LOGIN', {'phone': normPhone});
+      notifyListeners();
+      return true;
+    }
+    final matched = existingHash == passwordHash;
+    if (matched) {
+      customerPhone = phone.trim();
+      notifyListeners();
+    }
+    return matched;
+  }
+
+  /// Sinh mã OTP 6 chữ số thực tế có hiệu lực 120 giây cho số điện thoại (UC01)
+  String generateOtpForPhone(String phone, {bool notify = false}) {
+    final normPhone = _normalizePhone(phone);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final hashHex =
+        SecurityAndBarcodeUtils.hashPasswordWithSalt('$nowMs', normPhone)
+            .replaceAll('BCRYPT-HASH-', '');
+    final numericVal = int.parse(hashHex.substring(0, 8), radix: 16);
+    final otp6 = (100000 + (numericVal % 900000)).toString();
+    activeOtpCodesByPhone[normPhone] = otp6;
+    otpExpiryEpochMsByPhone[normPhone] = nowMs + 120000;
+    if (notify) {
+      notifyListeners();
+    }
+    return otp6;
+  }
+
+  /// Số giây còn lại của mã OTP hiện hành (tối đa 120 giây)
+  int getRemainingOtpSeconds(String phone) {
+    final normPhone = _normalizePhone(phone);
+    final expiry = otpExpiryEpochMsByPhone[normPhone];
+    if (expiry == null) return 0;
+    final remainMs = expiry - DateTime.now().millisecondsSinceEpoch;
+    return remainMs > 0 ? (remainMs / 1000).ceil() : 0;
+  }
+
+  /// Xác thực mã OTP 6 chữ số và kiểm tra hạn sử dụng 120 giây (UC01)
+  bool verifyOtpCode(String phone, String inputOtp) {
+    final normPhone = _normalizePhone(phone);
+    final expected = activeOtpCodesByPhone[normPhone];
+    final expiry = otpExpiryEpochMsByPhone[normPhone];
+    if (expected == null || expiry == null) return false;
+    if (DateTime.now().millisecondsSinceEpoch > expiry) return false;
+    final ok = expected == inputOtp.trim();
+    if (ok) {
+      activeOtpCodesByPhone.remove(normPhone);
+      otpExpiryEpochMsByPhone.remove(normPhone);
+      _persistMutation('OTP_VERIFIED', {'phone': normPhone});
+      notifyListeners();
+    }
+    return ok;
+  }
+
+  /// Xử lý thanh toán đơn hàng kèm khóa chống trùng lặp Idempotency Key (UC07 - RULE-FIN-04)
+  bool processOrderPayment({
+    required String trackingCode,
+    required String gateway,
+    required String transactionId,
+  }) {
+    final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
+    if (ord == null) return false;
+    final signature =
+        SecurityAndBarcodeUtils.generatePaymentIdempotencySignature(
+      orderId: trackingCode,
+      amount: ord.totalAmount,
+      gateway: gateway,
+      transactionId: transactionId,
+    );
+    if (processedPaymentSignatures.contains(signature)) {
+      return false;
+    }
+    processedPaymentSignatures.add(signature);
+    ord.paymentMethod = gateway;
+    ord.paymentStatus = 'PAID';
+    _persistMutation('ORDER_PAYMENT_PAID', {
+      'trackingCode': trackingCode,
+      'gateway': gateway,
+      'signature': signature,
+    });
+    notifyListeners();
+    return true;
+  }
+
+  /// Phân tích cú pháp tệp/chuỗi CSV thực tế và khởi tạo đơn hàng hàng loạt (UC33)
+  CsvBatchParseResult parseAndCreateBulkOrdersFromCsv(
+    String csvContentOrFilePath, {
+    bool commitOrders = false,
+  }) {
+    String rawContent = csvContentOrFilePath.trim();
+    try {
+      if (rawContent.toLowerCase().endsWith('.csv')) {
+        final f = File(rawContent);
+        if (f.existsSync()) {
+          rawContent = f.readAsStringSync();
+        }
+      }
+    } catch (_) {
+      // Giữ nguyên chuỗi đầu vào nếu không phải đường dẫn tệp cục bộ
+    }
+
+    final lines = rawContent
+        .split(RegExp(r'\r?\n'))
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+
+    final parsedRows = <CsvBatchRowResult>[];
+    final createdCodes = <String>[];
+    int validCount = 0;
+    int invalidCount = 0;
+    final phoneRegex = RegExp(r'^(\+84|0)[0-9]{8,10}$');
+
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      // Bỏ qua dòng tiêu đề CSV nếu có
+      if (i == 0 &&
+          (line.toLowerCase().contains('recipient') ||
+              line.toLowerCase().contains('nguoi_nhan') ||
+              line.toLowerCase().contains('ten_nguoi_nhan'))) {
+        continue;
+      }
+      final cols = line.split(',').map((c) => c.trim()).toList();
+      final name = cols.isNotEmpty ? cols[0] : '';
+      final phone = cols.length > 1 ? cols[1].replaceAll(' ', '') : '';
+      final address = cols.length > 2 ? cols[2] : '';
+      final desc = cols.length > 3 && cols[3].isNotEmpty
+          ? cols[3]
+          : 'Kiện hàng thương mại điện tử';
+      final weight =
+          cols.length > 4 ? (double.tryParse(cols[4]) ?? 1.5) : 1.5;
+      final cod = cols.length > 5 ? (double.tryParse(cols[5]) ?? 0.0) : 0.0;
+      final svcStr = cols.length > 6 ? cols[6].toUpperCase() : 'STANDARD';
+      final svc = svcStr.contains('EXPRESS')
+          ? DeliveryServiceType.express30m
+          : svcStr.contains('ECONOMY') || svcStr.contains('SAVING')
+              ? DeliveryServiceType.saving
+              : DeliveryServiceType.standard;
+
+      final errors = <String>[];
+      if (name.isEmpty) errors.add('Thiếu tên người nhận');
+      if (!phoneRegex.hasMatch(phone)) errors.add('SĐT không hợp lệ');
+      if (address.length < 5) errors.add('Thiếu địa chỉ giao');
+      if (weight <= 0 || weight > 500) errors.add('Khối lượng không hợp lệ');
+      if (cod < 0) errors.add('Tiền COD âm');
+
+      final isValid = errors.isEmpty;
+      if (isValid) {
+        validCount++;
+        if (commitOrders) {
+          final created = createNewOrder(
+            pickupAddress: merchantWarehouses.first.address,
+            dropoffAddress: address,
+            recipientName: name,
+            recipientPhone: phone,
+            packageDescription: desc,
+            weightKg: weight,
+            dimensionsCm: '30 x 20 x 15 cm',
+            serviceType: svc,
+            codAmount: cod,
+            paymentMethod: cod > 0 ? 'Tiền mặt (COD)' : 'Ví MoMo',
+          );
+          createdCodes.add(created.trackingCode);
+        }
+      } else {
+        invalidCount++;
+      }
+
+      parsedRows.add(
+        CsvBatchRowResult(
+          rowNumber: parsedRows.length + 1,
+          recipientName: name.isEmpty ? '(Trống)' : name,
+          recipientPhone: phone.isEmpty ? '(Trống)' : phone,
+          dropoffAddress: address.isEmpty ? '(Trống)' : address,
+          packageDescription: desc,
+          weightKg: weight,
+          codAmount: cod,
+          serviceType: svc,
+          isValid: isValid,
+          statusNote: isValid ? 'Hợp lệ' : errors.join(', '),
+        ),
+      );
+    }
+
+    return CsvBatchParseResult(
+      rows: parsedRows,
+      validCount: validCount,
+      invalidCount: invalidCount,
+      createdTrackingCodes: createdCodes,
+    );
+  }
 
   void toggleOfflineSimulation(bool offline) {
     final wasOffline = isOfflineMode;
@@ -800,6 +1203,7 @@ class AppStateStore extends ChangeNotifier {
             'Đã đồng bộ $drained gói tin SQLite lên PostGIS (Exponential Backoff: 1000ms)';
       }
     }
+    _persistMutation('TOGGLE_OFFLINE', {'isOffline': offline});
     notifyListeners();
   }
 
@@ -812,11 +1216,13 @@ class AppStateStore extends ChangeNotifier {
   /// Bước di chuyển GPS thực tế của tài xế dọc theo lộ trình qua bộ lọc Kalman 2D (UC07, UC16, UC18)
   void stepDriverAlongRoute({bool snapToDropoff = false}) {
     final ord = orders.first;
-    final polyline = SmartDispatchEngine.generateRoutePolyline(
-      ord.pickupLocation,
-      ord.dropoffLocation,
-      segments: 10,
-    );
+    final polyline = activeRoutePolyline.length >= 2
+        ? activeRoutePolyline
+        : SmartDispatchEngine.generateRoutePolyline(
+            ord.pickupLocation,
+            ord.dropoffLocation,
+            segments: 10,
+          );
     if (snapToDropoff) {
       routeProgressStep = polyline.length - 1;
     } else {
@@ -888,6 +1294,10 @@ class AppStateStore extends ChangeNotifier {
           GeoMath.bearingDegrees(previous, activeDriverLocation);
       lastSyncStatusMessage =
           'Chip GPS Thiết bị: (${activeDriverLocation.latitude.toStringAsFixed(5)}, ${activeDriverLocation.longitude.toStringAsFixed(5)}) ±${pos.accuracy.toStringAsFixed(1)}m';
+      _persistMutation('HARDWARE_GPS_FIX', {
+        'lat': activeDriverLocation.latitude,
+        'lng': activeDriverLocation.longitude,
+      });
       notifyListeners();
       return lastSyncStatusMessage;
     } catch (e) {
@@ -904,11 +1314,20 @@ class AppStateStore extends ChangeNotifier {
     );
     ord.distanceMeters = res.distanceMeters;
     ord.durationSeconds = res.durationSeconds;
+    if (res.polylinePoints.length >= 2) {
+      activeRoutePolyline = res.polylinePoints;
+      routeProgressStep = 0;
+    }
     final km = (res.distanceMeters / 1000.0).toStringAsFixed(1);
     final mins = (res.durationSeconds / 60).round().clamp(5, 240);
     lastSyncStatusMessage = res.isLiveOsrm
         ? 'OSRM Thực tế: $km km ($mins phút) - ${res.polylinePoints.length} điểm tọa độ'
         : 'Nội suy Haversine Offline: $km km ($mins phút)';
+    _persistMutation('OSRM_ROUTE_SYNC', {
+      'trackingCode': ord.trackingCode,
+      'distanceMeters': ord.distanceMeters,
+      'points': activeRoutePolyline.length,
+    });
     notifyListeners();
     return lastSyncStatusMessage;
   }
@@ -977,6 +1396,7 @@ class AppStateStore extends ChangeNotifier {
         boundary: List<GeoPoint>.from(vertices),
       ),
     );
+    _persistMutation('ADD_GEOFENCE_ZONE', {'zoneName': zoneName});
     notifyListeners();
   }
 
@@ -993,11 +1413,13 @@ class AppStateStore extends ChangeNotifier {
         location: resolved,
       ),
     );
+    _persistMutation('ADD_ADDRESS', {'label': label, 'address': address});
     notifyListeners();
   }
 
   void removeCustomerAddress(String id) {
     savedAddresses.removeWhere((a) => a.id == id);
+    _persistMutation('REMOVE_ADDRESS', {'id': id});
     notifyListeners();
   }
 
@@ -1103,7 +1525,13 @@ class AppStateStore extends ChangeNotifier {
       createdDateLabel: 'Hôm nay',
     );
     orders.insert(0, record);
+    activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
+      pickupPt,
+      dropoffPt,
+      segments: 10,
+    );
     if (isOfflineMode) offlineQueueCount++;
+    _persistMutation('CREATE_ORDER', {'trackingCode': record.trackingCode});
     notifyListeners();
     return record;
   }
@@ -1115,6 +1543,7 @@ class AppStateStore extends ChangeNotifier {
     ord.status = OrderStatus.accepted;
     ord.assignedDriverName = customDriverName ?? 'Nguyễn Văn Nam';
     ord.assignedDriverPlate = customPlate ?? '29-P1 123.45';
+    _persistMutation('DRIVER_ACCEPT_ORDER', {'trackingCode': trackingCode});
     notifyListeners();
   }
 
@@ -1145,6 +1574,10 @@ class AppStateStore extends ChangeNotifier {
         break;
     }
     if (isOfflineMode) offlineQueueCount++;
+    _persistMutation('ADVANCE_ORDER_STATUS', {
+      'trackingCode': trackingCode,
+      'status': ord.status.name,
+    });
     notifyListeners();
   }
 
@@ -1157,6 +1590,10 @@ class AppStateStore extends ChangeNotifier {
     }
     ord.status = OrderStatus.cancelled;
     ord.cancelReason = reason;
+    _persistMutation('CANCEL_ORDER', {
+      'trackingCode': trackingCode,
+      'reason': reason,
+    });
     notifyListeners();
     return true;
   }
@@ -1166,6 +1603,10 @@ class AppStateStore extends ChangeNotifier {
     if (ord != null) {
       ord.ratingStars = stars;
       ord.ratingComment = comment;
+      _persistMutation('SUBMIT_RATING', {
+        'trackingCode': trackingCode,
+        'stars': stars,
+      });
     }
     notifyListeners();
   }
@@ -1182,6 +1623,7 @@ class AppStateStore extends ChangeNotifier {
         timeLabel: 'Vừa xong',
       ),
     );
+    _persistMutation('SEND_CHAT', {'orderId': orderId, 'text': text.trim()});
     notifyListeners();
   }
 
@@ -1214,6 +1656,10 @@ class AppStateStore extends ChangeNotifier {
         status: 'Chờ duyệt',
       ),
     );
+    _persistMutation('REQUEST_WITHDRAWAL', {
+      'ownerRole': ownerRole,
+      'amount': amount,
+    });
     notifyListeners();
     return true;
   }
@@ -1231,6 +1677,7 @@ class AppStateStore extends ChangeNotifier {
           merchantCodBalance += req.amount;
         }
       }
+      _persistMutation('UPDATE_WITHDRAWAL', {'id': id, 'status': status});
       notifyListeners();
     }
   }
@@ -1239,6 +1686,7 @@ class AppStateStore extends ChangeNotifier {
     final drv = drivers.where((d) => d.id == id).firstOrNull;
     if (drv != null) {
       drv.approvalStatus = status;
+      _persistMutation('UPDATE_DRIVER_APPROVAL', {'id': id, 'status': status});
       notifyListeners();
     }
   }
@@ -1262,6 +1710,7 @@ class AppStateStore extends ChangeNotifier {
         replies: ['$reporterName: $description'],
       ),
     );
+    _persistMutation('ADD_COMPLAINT', {'orderId': orderId});
     notifyListeners();
   }
 
@@ -1273,6 +1722,7 @@ class AppStateStore extends ChangeNotifier {
       if (replyText.trim().isNotEmpty) {
         item.replies.add('Admin: ${replyText.trim()}');
       }
+      _persistMutation('REPLY_COMPLAINT', {'ticketCode': ticketCode});
       notifyListeners();
     }
   }
@@ -1291,6 +1741,7 @@ class AppStateStore extends ChangeNotifier {
         timeAgo: 'Vừa xong',
       ),
     );
+    _persistMutation('BROADCAST_NOTIFICATION', {'title': title});
     notifyListeners();
   }
 
@@ -1298,6 +1749,7 @@ class AppStateStore extends ChangeNotifier {
     final role = rbacRoles.where((r) => r.roleName == roleName).firstOrNull;
     if (role != null) {
       role.permissions[permKey] = value;
+      _persistMutation('TOGGLE_RBAC', {'roleName': roleName, 'permKey': permKey});
       notifyListeners();
     }
   }
@@ -1306,7 +1758,9 @@ class AppStateStore extends ChangeNotifier {
     final z = geofenceZones.where((g) => g.id == id).firstOrNull;
     if (z != null) {
       z.isActive = active;
+      _persistMutation('TOGGLE_GEOFENCE', {'id': id, 'active': active});
       notifyListeners();
     }
   }
 }
+

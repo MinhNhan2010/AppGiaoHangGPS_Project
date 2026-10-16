@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
@@ -27,7 +28,12 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   int _authTabIndex = 0; // 0: Đăng nhập, 1: Đăng ký, 2: OTP, 3: Quên mật khẩu
   final TextEditingController _phoneAuthCtrl =
       TextEditingController(text: '0912345678');
-  final TextEditingController _otpCtrl = TextEditingController(text: '589210');
+  final TextEditingController _passwordAuthCtrl =
+      TextEditingController(text: '12345678');
+  final TextEditingController _registerNameCtrl =
+      TextEditingController(text: 'Nguyễn Thu Hà');
+  final TextEditingController _otpCtrl = TextEditingController();
+  Timer? _otpCountdownTimer;
 
   // State cho UC03 & UC05 & UC06 (Tạo đơn hàng, Gói dịch vụ, Thanh toán & Voucher)
   final TextEditingController _pickupCtrl = TextEditingController(
@@ -112,7 +118,24 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     _profileEmailCtrl = TextEditingController(text: _store.customerEmail);
     _profileAddressCtrl =
         TextEditingController(text: _store.customerDefaultAddress);
+    final initialOtp = _store.generateOtpForPhone(_phoneAuthCtrl.text);
+    _otpCtrl.text = initialOtp;
     _store.addListener(_onStoreChanged);
+  }
+
+  void _startOtpCountdownTimer() {
+    _otpCountdownTimer?.cancel();
+    _otpCountdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final rem = _store.getRemainingOtpSeconds(_phoneAuthCtrl.text);
+      setState(() {});
+      if (rem <= 0) {
+        timer.cancel();
+      }
+    });
   }
 
   void _onStoreChanged() {
@@ -121,8 +144,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   @override
   void dispose() {
+    _otpCountdownTimer?.cancel();
     _store.removeListener(_onStoreChanged);
     _phoneAuthCtrl.dispose();
+    _passwordAuthCtrl.dispose();
+    _registerNameCtrl.dispose();
     _otpCtrl.dispose();
     _pickupCtrl.dispose();
     _dropoffCtrl.dispose();
@@ -218,6 +244,12 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   /// Hình 8.1 & Hình 8.2: UC01 (Đăng ký & OTP 6 số) + UC02 (Đăng nhập & Quên mật khẩu)
   Widget _buildAuthAndOtpView() {
+    final remainSec = _store.getRemainingOtpSeconds(_phoneAuthCtrl.text);
+    final passwordHashPreview = SecurityAndBarcodeUtils.hashPasswordWithSalt(
+      _passwordAuthCtrl.text,
+      _phoneAuthCtrl.text,
+    );
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -253,7 +285,10 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 ChoiceChip(
                   label: const Text('Xác thực OTP (6 số)'),
                   selected: _authTabIndex == 2,
-                  onSelected: (_) => setState(() => _authTabIndex = 2),
+                  onSelected: (_) {
+                    _startOtpCountdownTimer();
+                    setState(() => _authTabIndex = 2);
+                  },
                 ),
                 ChoiceChip(
                   label: const Text('Quên mật khẩu'),
@@ -265,6 +300,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
             const SizedBox(height: AppSpacing.md),
             TextField(
               controller: _phoneAuthCtrl,
+              onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Số điện thoại (+84)',
                 prefixIcon: Icon(Icons.phone_android),
@@ -272,17 +308,29 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
             ),
             const SizedBox(height: AppSpacing.sm),
             if (_authTabIndex == 0 || _authTabIndex == 1) ...[
-              const TextField(
+              TextField(
+                controller: _passwordAuthCtrl,
                 obscureText: true,
-                decoration: InputDecoration(
-                  labelText: 'Mật khẩu bảo mật (Bcrypt)',
+                onChanged: (_) => setState(() {}),
+                decoration: const InputDecoration(
+                  labelText: 'Mật khẩu bảo mật (Tối thiểu 6 ký tự)',
                   prefixIcon: Icon(Icons.lock_outline),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Băm mật khẩu Salt SHA-256: ${passwordHashPreview.substring(0, 24)}...',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
                 ),
               ),
               if (_authTabIndex == 1) ...[
                 const SizedBox(height: AppSpacing.sm),
-                const TextField(
-                  decoration: InputDecoration(
+                TextField(
+                  controller: _registerNameCtrl,
+                  decoration: const InputDecoration(
                     labelText: 'Họ và tên khách hàng',
                     prefixIcon: Icon(Icons.person_outline),
                   ),
@@ -298,13 +346,38 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   prefixIcon: Icon(Icons.pin_outlined),
                 ),
               ),
-              const Text(
-                'Đếm ngược gửi lại mã: 00:54s',
-                style: TextStyle(color: AppColors.accent, fontSize: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Hiệu lực OTP còn lại: ${remainSec}s',
+                    style: const TextStyle(
+                      color: AppColors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      final newOtp =
+                          _store.generateOtpForPhone(_phoneAuthCtrl.text);
+                      _otpCtrl.text = newOtp;
+                      _startOtpCountdownTimer();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Đã phát hành mã OTP 6 số mới: $newOtp (Hiệu lực 120s)',
+                          ),
+                        ),
+                      );
+                    },
+                    child: const Text('Phát hành lại mã OTP'),
+                  ),
+                ],
               ),
             ] else ...[
               const Text(
-                'Nhập số điện thoại đã đăng ký để nhận mã OTP đặt lại mật khẩu mới.',
+                'Nhập số điện thoại đã đăng ký để phát hành mã OTP 6 số đặt lại mật khẩu mới.',
                 style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
               ),
             ],
@@ -316,14 +389,83 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   backgroundColor: AppColors.accent,
                 ),
                 onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Xác thực JWT Token thành công! Đã chuyển sang Trang chủ.',
+                  if (_authTabIndex == 0) {
+                    final ok = _store.authenticateOrRegisterAccount(
+                      phone: _phoneAuthCtrl.text,
+                      password: _passwordAuthCtrl.text,
+                      isRegister: false,
+                    );
+                    if (!ok) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Xác thực thất bại: Mật khẩu không khớp với bản băm hoặc SĐT không hợp lệ!',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Xác thực băm mật khẩu & JWT Token thành công! Đã chuyển sang Trang chủ.',
+                        ),
                       ),
-                    ),
-                  );
-                  setState(() => _selectedScreenIndex = 2);
+                    );
+                    setState(() => _selectedScreenIndex = 2);
+                  } else if (_authTabIndex == 1 || _authTabIndex == 3) {
+                    final registered = _store.authenticateOrRegisterAccount(
+                      phone: _phoneAuthCtrl.text,
+                      password: _passwordAuthCtrl.text,
+                      isRegister: true,
+                      fullName: _registerNameCtrl.text,
+                    );
+                    if (!registered) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Vui lòng nhập SĐT hợp lệ và mật khẩu từ 6 ký tự trở lên.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    final otp = _store.generateOtpForPhone(_phoneAuthCtrl.text);
+                    _otpCtrl.text = otp;
+                    _startOtpCountdownTimer();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Đã sinh mã OTP thực tế: $otp (Hiệu lực 120 giây).',
+                        ),
+                      ),
+                    );
+                    setState(() => _authTabIndex = 2);
+                  } else if (_authTabIndex == 2) {
+                    final verified = _store.verifyOtpCode(
+                      _phoneAuthCtrl.text,
+                      _otpCtrl.text,
+                    );
+                    if (!verified) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Mã OTP không chính xác hoặc đã hết hạn 120 giây!',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    _otpCountdownTimer?.cancel();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Xác thực OTP 6 chữ số thành công! Đã kích hoạt phiên làm việc.',
+                        ),
+                      ),
+                    );
+                    setState(() => _selectedScreenIndex = 2);
+                  }
                 },
                 child: Text(
                   _authTabIndex == 0
@@ -341,6 +483,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
       ),
     );
   }
+
 
   /// Hình 8.3: UC04 Quản lý sổ địa chỉ đã lưu (Nhà, Cơ quan, Khác)
   Widget _buildSavedAddressesView() {
@@ -628,12 +771,27 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   /// Hình 8.5: UC05 & UC06 Xác nhận giá cước minh bạch, áp Voucher & chọn phương thức thanh toán
   Widget _buildPricingAndVoucherView() {
+    final preEst = PricingEstimate.calculate(
+      serviceType: _selectedService,
+      distanceMeters: 14500,
+      durationSeconds: 2700,
+      isPeakHour: _store.isPeakSurchargeActive,
+      geofenceSurcharge: 10000,
+      voucherDiscount: 0,
+    );
+
     double discountVal = 0;
     final code = _voucherCtrl.text.trim().toUpperCase();
     final matchedVoucher =
         _store.vouchers.where((v) => v.code == code).firstOrNull;
     if (matchedVoucher != null) {
-      discountVal = matchedVoucher.discountValue;
+      if (matchedVoucher.isPercentage) {
+        discountVal =
+            (preEst.totalAmount * (matchedVoucher.discountValue / 100.0))
+                .clamp(0.0, matchedVoucher.maxDiscount);
+      } else {
+        discountVal = matchedVoucher.discountValue;
+      }
     }
 
     final estimate = PricingEstimate.calculate(
@@ -645,10 +803,15 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
       voucherDiscount: discountVal,
     );
 
+    final nextOrderCode = '#DH${100000 + _store.orders.length * 1423}';
     final paymentSig = SecurityAndBarcodeUtils.generatePaymentSignature(
-      orderCode: '#DH${100000 + _store.orders.length * 1423}',
+      orderCode: nextOrderCode,
       amount: estimate.totalAmount,
       method: _selectedPaymentMethod,
+    );
+    final emvVietQr = SecurityAndBarcodeUtils.generateEmvVietQrPayload(
+      orderCode: nextOrderCode,
+      amountVnd: estimate.totalAmount,
     );
 
     return Card(
@@ -755,7 +918,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 child: Row(
                   children: [
                     QrMatrixPainterWidget(
-                      payload: '$_selectedPaymentMethod|$paymentSig',
+                      payload: emvVietQr,
                       size: 72,
                     ),
                     const SizedBox(width: AppSpacing.sm),
@@ -764,7 +927,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Mã QR Thanh toán $_selectedPaymentMethod (RULE-FIN-04)',
+                            'Mã QR EMVCo Napas247 $_selectedPaymentMethod (RULE-FIN-04)',
                             style: const TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 12,
@@ -778,11 +941,40 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                               color: AppColors.primary,
                             ),
                           ),
-                          const Text(
-                            'Trạng thái Webhook IPN: Sẵn sàng xác thực tự động',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: AppColors.success,
+                          Text(
+                            'EMVCo CRC-16: ${emvVietQr.substring(emvVietQr.length - 8)}',
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: () {
+                                final activeCode =
+                                    _store.orders.first.trackingCode;
+                                final ok = _store.processOrderPayment(
+                                  trackingCode: activeCode,
+                                  gateway: _selectedPaymentMethod,
+                                  transactionId: 'TXN-$activeCode',
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      ok
+                                          ? 'Đã xác nhận thanh toán đơn $activeCode qua $_selectedPaymentMethod (Đã lưu khóa Idempotency)!'
+                                          : 'Từ chối giao dịch trùng lặp cho đơn $activeCode theo quy tắc RULE-FIN-04!',
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(Icons.verified_outlined, size: 15),
+                              label: const Text(
+                                'Xác thực Webhook IPN (Kiểm tra chống thu trùng RULE-FIN-04)',
+                                style: TextStyle(fontSize: 11),
+                              ),
                             ),
                           ),
                         ],

@@ -841,19 +841,39 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                   backgroundColor:
                       isWithin100m ? AppColors.success : AppColors.textSecondary,
                 ),
-                onPressed: () {
+                onPressed: () async {
+                  final otpInput = _podOtpCtrl.text.trim();
+                  if (!RegExp(r'^[0-9]{4}$').hasMatch(otpInput)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Vui lòng nhập đúng mã OTP nhận hàng gồm 4 chữ số!',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
                   if (!isWithin100m) {
                     _store.stepDriverAlongRoute(snapToDropoff: true);
                   }
+                  final svgFilePath = await SecurityAndBarcodeUtils
+                      .exportPodWatermarkToSvgFile(
+                    orderCode: ord.trackingCode,
+                    recipientName: _podRecipientCtrl.text.trim(),
+                    otpCode: otpInput,
+                    driverLocation: _store.activeDriverLocation,
+                    distanceMeters: _store.distanceFromDriverToDropoffMeters(),
+                  );
                   _store.driverAdvanceOrderStatus(
                     ord.trackingCode,
                     podNote:
-                        'POD: ${_podRecipientCtrl.text} • OTP ${_podOtpCtrl.text} • GPS (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})',
+                        'POD: ${_podRecipientCtrl.text.trim()} • OTP $otpInput • GPS (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)}) • Tệp: $svgFilePath',
                   );
+                  if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Hoàn tất giao đơn ${ord.trackingCode}! SĐT người nhận đã được tự động ẩn (Phone Masking).',
+                        'Hoàn tất đơn ${ord.trackingCode}! Đã lưu tệp bằng chứng POD tại: $svgFilePath',
                       ),
                     ),
                   );
@@ -862,8 +882,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 icon: const Icon(Icons.task_alt),
                 label: Text(
                   isWithin100m
-                      ? 'HOÀN TẤT GIAO HÀNG (POD)'
-                      : 'DI CHUYỂN TỚI ĐIỂM GIAO (< 100M) & HOÀN TẤT POD',
+                      ? 'HOÀN TẤT GIAO HÀNG & XUẤT TỆP BẰNG CHỨNG POD'
+                      : 'DI CHUYỂN TỚI ĐIỂM GIAO (< 100M) & XUẤT BẰNG CHỨNG POD',
                 ),
               ),
             ),

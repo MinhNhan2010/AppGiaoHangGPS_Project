@@ -1,7 +1,9 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/datasources/local/app_state_store.dart';
+import '../../domain/entities/geo_point.dart';
 
 /// Hình 8.47: Onboarding Screen ("Giao hàng siêu tốc 30 phút")
 class OnboardingStateScreen extends StatelessWidget {
@@ -296,7 +298,7 @@ class SkeletonOrderListWidget extends StatelessWidget {
   }
 }
 
-/// Hình 8.51 & Mục 8.6: Bản đồ 3D Perspective Navigation Widget
+/// Hình 8.51 & Mục 8.6: Bản đồ 3D Perspective Navigation Widget chiếu tọa độ thực tế
 class Map3dPerspectiveWidget extends StatelessWidget {
   final String nextTurnInstruction;
   final String roadName;
@@ -307,6 +309,7 @@ class Map3dPerspectiveWidget extends StatelessWidget {
   final double progressFraction;
   final ValueChanged<Offset>? onTapRelativePoint;
   final List<Offset> drawnPolygonPoints;
+  final List<GeoPoint> routePoints;
 
   const Map3dPerspectiveWidget({
     super.key,
@@ -319,10 +322,14 @@ class Map3dPerspectiveWidget extends StatelessWidget {
     this.progressFraction = 0.35,
     this.onTapRelativePoint,
     this.drawnPolygonPoints = const [],
+    this.routePoints = const [],
   });
 
   @override
   Widget build(BuildContext context) {
+    final effectiveRoute = routePoints.length >= 2
+        ? routePoints
+        : AppStateStore.instance.activeRoutePolyline;
     return ClipRRect(
       borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
       child: SizedBox(
@@ -350,6 +357,7 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                         is3dMode: is3dMode,
                         progressFraction: progressFraction,
                         drawnPolygonPoints: drawnPolygonPoints,
+                        routePoints: effectiveRoute,
                       ),
                     ),
                   ),
@@ -389,8 +397,8 @@ class Map3dPerspectiveWidget extends StatelessWidget {
                                 ),
                                 Text(
                                   is3dMode
-                                      ? 'Góc nhìn 3D Pitch 55° • Zoom 17.0 • $roadName'
-                                      : 'Chế độ 2D Overview • Zoom 14.5 • $roadName',
+                                      ? 'Góc nhìn 3D Pitch 55° • ${effectiveRoute.length} điểm GPS • $roadName'
+                                      : 'Chế độ 2D Overview • ${effectiveRoute.length} điểm GPS • $roadName',
                                   style: const TextStyle(
                                     color: Colors.white70,
                                     fontSize: 11,
@@ -509,12 +517,55 @@ class _Map3dCanvasPainter extends CustomPainter {
   final bool is3dMode;
   final double progressFraction;
   final List<Offset> drawnPolygonPoints;
+  final List<GeoPoint> routePoints;
 
   const _Map3dCanvasPainter({
     required this.is3dMode,
     required this.progressFraction,
     required this.drawnPolygonPoints,
+    required this.routePoints,
   });
+
+  /// Chiếu danh sách tọa độ địa lý (vĩ độ, kinh độ) thực tế lên không gian khung vẽ 2D/3D
+  List<Offset> _projectGeoPointsToCanvas(Size size) {
+    if (routePoints.length < 2) {
+      return [
+        Offset(size.width * 0.35, size.height * 0.90),
+        Offset(size.width * 0.52, size.height * 0.52),
+        Offset(size.width * 0.68, size.height * 0.24),
+      ];
+    }
+    double minLat = routePoints.first.latitude;
+    double maxLat = routePoints.first.latitude;
+    double minLng = routePoints.first.longitude;
+    double maxLng = routePoints.first.longitude;
+
+    for (final pt in routePoints) {
+      minLat = math.min(minLat, pt.latitude);
+      maxLat = math.max(maxLat, pt.latitude);
+      minLng = math.min(minLng, pt.longitude);
+      maxLng = math.max(maxLng, pt.longitude);
+    }
+
+    final latSpan = (maxLat - minLat).abs() < 1e-6 ? 0.01 : (maxLat - minLat);
+    final lngSpan = (maxLng - minLng).abs() < 1e-6 ? 0.01 : (maxLng - minLng);
+
+    final projected = <Offset>[];
+    for (final pt in routePoints) {
+      final normX = ((pt.longitude - minLng) / lngSpan).clamp(0.0, 1.0);
+      final normY = (1.0 - ((pt.latitude - minLat) / latSpan)).clamp(0.0, 1.0);
+
+      // Biến đổi phối cảnh hình thang khi bật góc nhìn 3D Pitch 55 độ
+      final double canvasY = size.height * (0.22 + normY * 0.68);
+      final double depthFactor =
+          is3dMode ? (0.55 + 0.45 * normY) : 1.0;
+      final double centeredX = (normX - 0.5) * depthFactor + 0.5;
+      final double canvasX = size.width * (0.24 + centeredX * 0.52);
+
+      projected.add(Offset(canvasX, canvasY));
+    }
+    return projected;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -524,10 +575,10 @@ class _Map3dCanvasPainter extends CustomPainter {
     // Vẽ mặt đường phối cảnh 3D
     final roadPaint = Paint()..color = const Color(0xFF4A5568);
     final roadPath = Path()
-      ..moveTo(size.width * 0.22, size.height)
-      ..lineTo(size.width * (is3dMode ? 0.45 : 0.38), size.height * 0.18)
-      ..lineTo(size.width * (is3dMode ? 0.62 : 0.65), size.height * 0.18)
-      ..lineTo(size.width * 0.58, size.height)
+      ..moveTo(size.width * 0.20, size.height)
+      ..lineTo(size.width * (is3dMode ? 0.42 : 0.34), size.height * 0.18)
+      ..lineTo(size.width * (is3dMode ? 0.66 : 0.72), size.height * 0.18)
+      ..lineTo(size.width * 0.78, size.height)
       ..close();
     canvas.drawPath(roadPath, roadPaint);
 
@@ -539,8 +590,8 @@ class _Map3dCanvasPainter extends CustomPainter {
       final blocks = [
         Rect.fromLTWH(size.width * 0.05, size.height * 0.42, 75, 95),
         Rect.fromLTWH(size.width * 0.14, size.height * 0.25, 65, 80),
-        Rect.fromLTWH(size.width * 0.68, size.height * 0.35, 85, 110),
-        Rect.fromLTWH(size.width * 0.64, size.height * 0.18, 60, 70),
+        Rect.fromLTWH(size.width * 0.72, size.height * 0.35, 85, 110),
+        Rect.fromLTWH(size.width * 0.68, size.height * 0.18, 60, 70),
       ];
       for (final rect in blocks) {
         canvas.drawRect(rect, bldgPaint);
@@ -578,44 +629,42 @@ class _Map3dCanvasPainter extends CustomPainter {
       canvas.drawPath(polyPath, polyStroke);
     }
 
-    // Vẽ dải lộ trình 3D Route Ribbon (#00B4D8 với viền #0077B6 - Bảng 16)
+    // Chiếu lộ trình tọa độ GPS thực tế lên dải 3D Route Ribbon (#00B4D8 với viền #0077B6 - Bảng 16)
     final casingPaint = Paint()
       ..color = AppColors.routeRibbonCasing
       ..strokeWidth = 12
       ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
 
     final ribbonPaint = Paint()
       ..color = AppColors.routeRibbonFill
       ..strokeWidth = 8
       ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
 
-    final p0 = Offset(size.width * 0.40, size.height * 0.92);
-    final p1 = Offset(size.width * 0.53, size.height * 0.26);
-    final p2 = Offset(size.width * 0.72, size.height * 0.26);
-
-    final routePath = Path()
-      ..moveTo(p0.dx, p0.dy)
-      ..lineTo(p1.dx, p1.dy)
-      ..lineTo(p2.dx, p2.dy);
+    final screenPts = _projectGeoPointsToCanvas(size);
+    final routePath = Path()..moveTo(screenPts.first.dx, screenPts.first.dy);
+    for (var i = 1; i < screenPts.length; i++) {
+      routePath.lineTo(screenPts[i].dx, screenPts[i].dy);
+    }
 
     canvas.drawPath(routePath, casingPaint);
     canvas.drawPath(routePath, ribbonPaint);
 
-    // Vẽ ghim điểm giao hàng ở cuối lộ trình
-    canvas.drawCircle(p2, 8, Paint()..color = AppColors.accent);
+    // Vẽ ghim điểm lấy hàng (đầu lộ trình) và điểm giao hàng (cuối lộ trình)
+    canvas.drawCircle(screenPts.first, 6, Paint()..color = AppColors.primary);
+    canvas.drawCircle(screenPts.last, 8, Paint()..color = AppColors.accent);
 
-    // Nội suy vị trí biểu tượng xe Tài xế 3D dọc theo lộ trình p0 -> p1 -> p2
+    // Nội suy vị trí biểu tượng xe Tài xế 3D dọc theo từng phân đoạn lộ trình chiếu thực tế
     final t = progressFraction.clamp(0.0, 1.0);
-    final Offset driverCenter;
-    if (t <= 0.7) {
-      final segT = t / 0.7;
-      driverCenter = Offset.lerp(p0, p1, segT)!;
-    } else {
-      final segT = (t - 0.7) / 0.3;
-      driverCenter = Offset.lerp(p1, p2, segT)!;
-    }
+    final totalSegments = screenPts.length - 1;
+    final exactIdx = t * totalSegments;
+    final segIdx = exactIdx.floor().clamp(0, totalSegments - 1);
+    final segT = (exactIdx - segIdx).clamp(0.0, 1.0);
+    final driverCenter =
+        Offset.lerp(screenPts[segIdx], screenPts[segIdx + 1], segT)!;
 
     canvas.drawCircle(
       driverCenter,
@@ -633,5 +682,7 @@ class _Map3dCanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant _Map3dCanvasPainter oldDelegate) =>
       oldDelegate.is3dMode != is3dMode ||
       oldDelegate.progressFraction != progressFraction ||
-      oldDelegate.drawnPolygonPoints.length != drawnPolygonPoints.length;
+      oldDelegate.drawnPolygonPoints.length != drawnPolygonPoints.length ||
+      oldDelegate.routePoints.length != routePoints.length;
 }
+

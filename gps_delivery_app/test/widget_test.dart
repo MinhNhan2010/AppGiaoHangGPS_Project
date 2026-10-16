@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gps_delivery_app/core/config/env_config.dart';
 import 'package:gps_delivery_app/core/gps/gps_integrity_validator.dart';
@@ -14,7 +15,7 @@ import 'package:gps_delivery_app/main.dart';
 
 void main() {
   testWidgets(
-    'TC-05..TC-08: GpsDeliveryApp renders all 4 subsystems (Customer, Driver, Merchant, Admin) and System States',
+    'TC-05..TC-08: GpsDeliveryApp hiển thị đầy đủ 4 phân hệ (Khách hàng, Tài xế, Cửa hàng, Quản trị) và các trạng thái hệ thống',
     (WidgetTester tester) async {
       await tester.pumpWidget(const GpsDeliveryApp());
 
@@ -55,7 +56,7 @@ void main() {
   );
 
   test(
-    'TC-01: UC05 Express 14.5km + Peak + PROMO20K equals 138,250 VND (Hình 8.5)',
+    'TC-01: UC05 Hỏa tốc 14.5km + Giờ cao điểm + PROMO20K ra chính xác 138.250 VNĐ (Hình 8.5)',
     () {
       final estimate = PricingEstimate.calculate(
         serviceType: DeliveryServiceType.express30m,
@@ -74,7 +75,7 @@ void main() {
   );
 
   test(
-    'TC-02: OrderStatus FSM enforces valid and invalid transitions (Table 22)',
+    'TC-02: Máy trạng thái hữu hạn OrderStatus FSM kiểm soát chặt chẽ chuyển đổi hợp lệ và bất hợp lệ (Bảng 22)',
     () {
       expect(OrderStatus.draft.canTransitionTo(OrderStatus.searching), isTrue);
       expect(OrderStatus.draft.canTransitionTo(OrderStatus.delivered), isFalse);
@@ -90,7 +91,7 @@ void main() {
   );
 
   test(
-    'TC-03 & TC-04: Ray-Casting Point-in-Polygon, Kalman Filter & Adaptive Battery Policy (Table 36)',
+    'TC-03 & TC-04: Thuật toán Ray-Casting Point-in-Polygon, Bộ lọc Kalman 2D & Chính sách Pin thích ứng (Bảng 36)',
     () {
       const polygon = [
         GeoPoint(latitude: 10.76, longitude: 106.68),
@@ -142,7 +143,7 @@ void main() {
   );
 
   test(
-    'TC-09: SmartDispatchEngine, SecurityAndBarcodeUtils, RBAC & Live Route Progression',
+    'TC-09: SmartDispatchEngine, SecurityAndBarcodeUtils, RBAC & Di chuyển Lộ trình Trực tiếp',
     () {
       final store = AppStateStore.instance;
 
@@ -186,7 +187,7 @@ void main() {
   );
 
   test(
-    'TC-10: OpenStreetMap Nominatim, OSRM Street Routing & Runtime Supabase Cloud Config',
+    'TC-10: OpenStreetMap Nominatim, Định tuyến OSRM & Cấu hình Cloud Supabase lúc chạy',
     () async {
       // 1. Cấu hình nóng kết nối Cloud Supabase lúc chạy
       EnvConfig.configureSupabaseRuntime(
@@ -291,7 +292,106 @@ void main() {
       expect(store.driverWalletBalance, closeTo(balBeforeWithdraw, 1.0));
     },
   );
+
+  test(
+    'TC-12: Thực thi thật 100% (Lưu đĩa JSON, Băm mật khẩu + OTP 6 số, EMVCo VietQR + Idempotency, Batch CSV, Xuất tệp A6 & POD SVG)',
+    () async {
+      final store = AppStateStore.instance;
+
+      // 1. Lưu và nạp lại trạng thái bền vững trên đĩa hệ thống
+      final snapshotPath = await store.saveStateSnapshotToDisk();
+      expect(File(snapshotPath).existsSync(), isTrue);
+      final loaded = await store.loadStateSnapshotFromDisk();
+      expect(loaded, isTrue);
+
+      // 2. Đăng ký mật khẩu băm SHA-256 + Salt và xác thực OTP 6 chữ số có thời hạn 120s (UC01)
+      final regOk = store.authenticateOrRegisterAccount(
+        phone: '0988776655',
+        password: 'MatKhauAnToan99',
+        isRegister: true,
+        fullName: 'Lê Minh Tuấn',
+      );
+      expect(regOk, isTrue);
+      expect(
+        store.authenticateOrRegisterAccount(
+          phone: '0988776655',
+          password: 'SaiMatKhau',
+          isRegister: false,
+        ),
+        isFalse,
+      );
+      expect(
+        store.authenticateOrRegisterAccount(
+          phone: '0988776655',
+          password: 'MatKhauAnToan99',
+          isRegister: false,
+        ),
+        isTrue,
+      );
+
+      final otp6 = store.generateOtpForPhone('0988776655');
+      expect(otp6.length, equals(6));
+      expect(store.getRemainingOtpSeconds('0988776655'), greaterThan(100));
+      expect(store.verifyOtpCode('0988776655', '000000'), isFalse);
+      expect(store.verifyOtpCode('0988776655', otp6), isTrue);
+
+      // 3. Chuỗi EMVCo Napas247 VietQR kèm CRC-16/CCITT-FALSE và khóa chống thu trùng Idempotency (RULE-FIN-04)
+      final emvQr = SecurityAndBarcodeUtils.generateEmvVietQrPayload(
+        orderCode: '#DH123456',
+        amountVnd: 138250,
+      );
+      expect(emvQr.startsWith('00020101021238540010A000000727'), isTrue);
+      expect(emvQr.contains('6304'), isTrue);
+
+      final payFirst = store.processOrderPayment(
+        trackingCode: '#DH123456',
+        gateway: 'VNPay / VietQR',
+        transactionId: 'TXN-998877',
+      );
+      expect(payFirst, isTrue);
+      final payDuplicate = store.processOrderPayment(
+        trackingCode: '#DH123456',
+        gateway: 'VNPay / VietQR',
+        transactionId: 'TXN-998877',
+      );
+      expect(payDuplicate, isFalse);
+
+      // 4. Phân tích cú pháp CSV hàng loạt và khởi tạo đơn thực tế (UC33)
+      final ordersBeforeCsv = store.orders.length;
+      final csvRes = store.parseAndCreateBulkOrdersFromCsv(
+        'Nguyễn Văn H,0912345678,123 Đường Lê Lợi Quận 1 TP.HCM,Gốm sứ,2.0,300000,EXPRESS\n'
+        'Lỗi SĐT,123,Địa chỉ ngắn,Hàng lỗi,1.0,100000,STANDARD',
+        commitOrders: true,
+      );
+      expect(csvRes.validCount, equals(1));
+      expect(csvRes.invalidCount, equals(1));
+      expect(store.orders.length, equals(ordersBeforeCsv + 1));
+
+      // 5. Kết xuất tệp vận đơn khổ A6 (.html) và ảnh bằng chứng POD (.svg) ra đĩa hệ thống (UC18 & UC34)
+      final a6Path = await SecurityAndBarcodeUtils.exportA6LabelToHtmlFile(
+        trackingCode: '#DH123456',
+        storeName: store.merchantStoreName,
+        warehouseAddress: store.merchantWarehouses.first.address,
+        recipientName: 'Nguyễn Thị Minh An',
+        recipientPhone: '0912345678',
+        dropoffAddress: '15 Lê Trọng Tấn, Thanh Xuân, Hà Nội',
+        packageDescription: '2x Áo thun Polo',
+        codAmount: 1500000,
+      );
+      expect(File(a6Path).existsSync(), isTrue);
+
+      final podSvgPath = await SecurityAndBarcodeUtils.exportPodWatermarkToSvgFile(
+        orderCode: '#DH123456',
+        recipientName: 'Nguyễn Thị Minh An',
+        otpCode: '4829',
+        driverLocation: const GeoPoint(latitude: 20.9951, longitude: 105.8286),
+        distanceMeters: 12.4,
+      );
+      expect(File(podSvgPath).existsSync(), isTrue);
+    },
+  );
 }
+
 
 
 
