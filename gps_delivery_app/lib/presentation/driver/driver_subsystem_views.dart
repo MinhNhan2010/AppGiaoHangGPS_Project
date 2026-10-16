@@ -635,6 +635,41 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 ),
               ],
             ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final msg = await _store.acquireRealHardwareGps();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(msg)),
+                    );
+                  },
+                  icon: const Icon(Icons.satellite_alt, size: 16),
+                  label: const Text(
+                    'Đọc Chip GPS Phần Cứng (Geolocator)',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final msg = await _store.syncLiveOsrmRouteForActiveOrder();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(msg)),
+                    );
+                  },
+                  icon: const Icon(Icons.alt_route, size: 16),
+                  label: const Text(
+                    'Đồng bộ Lộ trình OSRM Thực tế',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),

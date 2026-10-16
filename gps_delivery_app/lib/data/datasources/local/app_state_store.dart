@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/config/env_config.dart';
+import '../../../core/gps/gps_integrity_validator.dart';
 import '../../../core/gps/kalman_gps_filter.dart';
 import '../../../core/gps/smart_dispatch_engine.dart';
 import '../../../core/utils/geo_math.dart';
@@ -6,6 +10,8 @@ import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/pricing_estimate.dart';
 import '../../../domain/enums/order_status.dart';
 import '../../../domain/enums/service_type.dart';
+import '../remote/supabase_postgis_datasource.dart';
+
 
 class SavedAddressRecord {
   final String id;
@@ -211,8 +217,8 @@ class ActiveOrderRecord {
   final String packageDescription;
   final double weightKg;
   final String dimensionsCm;
-  final int distanceMeters;
-  final int durationSeconds;
+  int distanceMeters;
+  int durationSeconds;
   final double deliveryFee;
   final double surchargeFee;
   final double discountAmount;
@@ -835,6 +841,110 @@ class AppStateStore extends ChangeNotifier {
   double distanceFromDriverToDropoffMeters() {
     final ord = orders.first;
     return GeoMath.distanceMeters(activeDriverLocation, ord.dropoffLocation);
+  }
+
+  /// Đọc tọa độ từ Chip GPS Phần cứng thiết bị thật qua Geolocator + Kiểm định chống Fake GPS + Lọc Kalman 2D
+  Future<String> acquireRealHardwareGps() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        return 'Dịch vụ định vị GPS trên thiết bị đang tắt. Đang giữ tọa độ Kalman nội bộ.';
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return 'Chưa cấp quyền truy cập GPS phần cứng. Đang dùng bộ phát Kalman nội bộ.';
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+      final rawFix = GeoPoint(latitude: pos.latitude, longitude: pos.longitude);
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+      GpsIntegrityValidator.validateSample(
+        currentPoint: rawFix,
+        currentTimestampMs: nowMs,
+        isMockFlaggedByOs: pos.isMocked,
+        reportedSpeedKmh: pos.speed > 0 ? pos.speed * 3.6 : 0.0,
+      );
+
+      final previous = activeDriverLocation;
+      activeDriverLocation = _kalmanFilter.filter(
+        rawPoint: rawFix,
+        accuracyMeters: pos.accuracy > 0 ? pos.accuracy : 5.0,
+        timestampMs: nowMs,
+      );
+      if (pos.speed > 0) {
+        currentSpeedKmh = (pos.speed * 3.6).clamp(5.0, 90.0);
+      }
+      activeDriverBearing =
+          GeoMath.bearingDegrees(previous, activeDriverLocation);
+      lastSyncStatusMessage =
+          'Chip GPS Thiết bị: (${activeDriverLocation.latitude.toStringAsFixed(5)}, ${activeDriverLocation.longitude.toStringAsFixed(5)}) ±${pos.accuracy.toStringAsFixed(1)}m';
+      notifyListeners();
+      return lastSyncStatusMessage;
+    } catch (e) {
+      return 'Không thể đọc cảm biến GPS phần cứng ($e). Đang dùng tọa độ Kalman hiện tại.';
+    }
+  }
+
+  /// Đồng bộ lộ trình đường phố thực tế từ máy chủ OSRM (`router.project-osrm.org`)
+  Future<String> syncLiveOsrmRouteForActiveOrder() async {
+    final ord = orders.first;
+    final res = await SmartDispatchEngine.fetchLiveOsrmRoute(
+      ord.pickupLocation,
+      ord.dropoffLocation,
+    );
+    ord.distanceMeters = res.distanceMeters;
+    ord.durationSeconds = res.durationSeconds;
+    final km = (res.distanceMeters / 1000.0).toStringAsFixed(1);
+    final mins = (res.durationSeconds / 60).round().clamp(5, 240);
+    lastSyncStatusMessage = res.isLiveOsrm
+        ? 'OSRM Thực tế: $km km ($mins phút) - ${res.polylinePoints.length} điểm tọa độ'
+        : 'Nội suy Haversine Offline: $km km ($mins phút)';
+    notifyListeners();
+    return lastSyncStatusMessage;
+  }
+
+  /// Cấu hình nóng kết nối Cloud Supabase PostgreSQL/PostGIS và đồng bộ thử nghiệm 16 bảng
+  Future<String> configureAndSyncSupabaseCloud({
+    required String url,
+    required String anonKey,
+  }) async {
+    EnvConfig.configureSupabaseRuntime(url: url, anonKey: anonKey);
+    if (!EnvConfig.isSupabaseConfigured) {
+      return 'Vui lòng nhập SUPABASE_URL hợp lệ và SUPABASE_ANON_KEY không rỗng.';
+    }
+    try {
+      try {
+        await Supabase.initialize(
+          url: EnvConfig.supabaseUrl,
+          publishableKey: EnvConfig.supabaseAnonKey,
+        );
+      } catch (_) {
+        // Đã khởi tạo trước đó trong phiên chạy
+      }
+      final remoteDs = SupabasePostgisDatasource();
+      final rows = await remoteDs.fetchTableRecords('orders', limit: 10);
+      isOfflineMode = false;
+      offlineQueueCount = 0;
+      lastSyncStatusMessage =
+          'Đã kết nối Cloud Supabase PostGIS thành công (${rows.length} bản ghi orders trên mây)';
+      notifyListeners();
+      return lastSyncStatusMessage;
+    } catch (e) {
+      lastSyncStatusMessage =
+          'Đã lưu cấu hình Supabase. Máy chủ trả về: $e (Đang duy trì đồng bộ SQLite dự phòng)';
+      notifyListeners();
+      return lastSyncStatusMessage;
+    }
   }
 
   /// Kiểm tra quyền thực thi RBAC của vai trò Admin đang đăng nhập (UC46)

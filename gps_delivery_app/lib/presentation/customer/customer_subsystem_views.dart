@@ -496,6 +496,47 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final results = await SmartDispatchEngine
+                        .fetchLiveNominatimSuggestions(_dropoffCtrl.text);
+                    if (!mounted) return;
+                    setState(() {});
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'OpenStreetMap Nominatim: Đã tải ${results.length} địa điểm thực tế cho "${_dropoffCtrl.text}"',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.public, size: 15),
+                  label: const Text(
+                    'Tra cứu OpenStreetMap Toàn Quốc',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final msg = await _store.syncLiveOsrmRouteForActiveOrder();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(msg)),
+                    );
+                  },
+                  icon: const Icon(Icons.alt_route, size: 15),
+                  label: const Text(
+                    'Tính lộ trình OSRM Thực tế',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
             const SizedBox(height: AppSpacing.sm),
             Row(
               children: [

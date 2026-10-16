@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'dart:io';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
 import '../config/env_config.dart';
@@ -29,12 +31,29 @@ class GeocodedPlaceSuggestion {
   });
 }
 
+class OsrmRouteResult {
+  final int distanceMeters;
+  final int durationSeconds;
+  final List<GeoPoint> polylinePoints;
+  final bool isLiveOsrm;
+
+  const OsrmRouteResult({
+    required this.distanceMeters,
+    required this.durationSeconds,
+    required this.polylinePoints,
+    required this.isLiveOsrm,
+  });
+}
+
 /// Động cơ Điều phối Tài xế Thông minh (Chương 4.3 & Chương 14.2 - RULE-DSP-01..04)
-/// & Bộ giải mã Địa chỉ / Nội suy Lộ trình GPS Thực tế
+/// & Bộ giải mã Địa chỉ OpenStreetMap Nominatim / Dẫn đường OSRM Thực tế
 class SmartDispatchEngine {
   const SmartDispatchEngine._();
 
   static const List<int> radiusTiersMeters = [3000, 5000, 8000];
+
+  static final List<GeocodedPlaceSuggestion> _liveCachedPlaces = [];
+  static List<GeoPoint>? _lastLiveOsrmPolyline;
 
   static const List<GeocodedPlaceSuggestion> knownPlaces = [
     GeocodedPlaceSuggestion(
@@ -75,18 +94,155 @@ class SmartDispatchEngine {
     ),
   ];
 
-  /// Tìm kiếm gợi ý địa chỉ (Geocoding Autocomplete - UC03, UC04)
+  static List<GeocodedPlaceSuggestion> get _allPlaces => [
+    ..._liveCachedPlaces,
+    ...knownPlaces,
+  ];
+
+  /// Tìm kiếm gợi ý địa chỉ cục bộ + bộ nhớ đệm Nominatim (UC03, UC04)
   static List<GeocodedPlaceSuggestion> searchAddressSuggestions(String query) {
     final normalized = query.trim().toLowerCase();
-    if (normalized.isEmpty) return knownPlaces.take(4).toList();
-    final matches = knownPlaces
+    if (normalized.isEmpty) return _allPlaces.take(4).toList();
+    final matches = _allPlaces
         .where(
           (p) =>
               p.fullAddress.toLowerCase().contains(normalized) ||
               p.title.toLowerCase().contains(normalized),
         )
         .toList();
-    return matches.isEmpty ? knownPlaces.take(3).toList() : matches;
+    return matches.isEmpty ? _allPlaces.take(3).toList() : matches;
+  }
+
+  /// Truy vấn trực tiếp API OpenStreetMap Nominatim toàn quốc (`countrycodes=vn`)
+  static Future<List<GeocodedPlaceSuggestion>> fetchLiveNominatimSuggestions(
+    String query,
+  ) async {
+    final trimmed = query.trim();
+    if (trimmed.isEmpty) return searchAddressSuggestions(trimmed);
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4);
+    try {
+      final uri = Uri.parse(EnvConfig.nominatimSearchEndpoint).replace(
+        queryParameters: {
+          'format': 'json',
+          'countrycodes': 'vn',
+          'limit': '5',
+          'q': trimmed,
+        },
+      );
+      final req = await client.getUrl(uri);
+      req.headers.set(
+        HttpHeaders.userAgentHeader,
+        'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
+      );
+      final resp = await req.close().timeout(const Duration(seconds: 4));
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        final decoded = jsonDecode(body);
+        if (decoded is List && decoded.isNotEmpty) {
+          final results = <GeocodedPlaceSuggestion>[];
+          for (final item in decoded) {
+            if (item is Map<String, dynamic>) {
+              final lat = double.tryParse('${item['lat']}');
+              final lon = double.tryParse('${item['lon']}');
+              final displayName = '${item['display_name'] ?? ''}'.trim();
+              if (lat != null && lon != null && displayName.isNotEmpty) {
+                final parts = displayName.split(',');
+                final shortTitle = parts.take(2).join(',').trim();
+                final suggestion = GeocodedPlaceSuggestion(
+                  title: shortTitle.isEmpty ? displayName : shortTitle,
+                  fullAddress: displayName,
+                  location: GeoPoint(latitude: lat, longitude: lon),
+                );
+                results.add(suggestion);
+                final exists = _liveCachedPlaces.any(
+                  (p) => p.fullAddress == suggestion.fullAddress,
+                );
+                if (!exists) {
+                  _liveCachedPlaces.insert(0, suggestion);
+                }
+              }
+            }
+          }
+          if (results.isNotEmpty) return results;
+        }
+      }
+    } catch (_) {
+      // Tự động fallback về danh mục nội bộ khi không có kết nối mạng hoặc trong môi trường test
+    } finally {
+      client.close(force: true);
+    }
+    return searchAddressSuggestions(trimmed);
+  }
+
+  /// Truy vấn trực tiếp API dẫn đường thực tế OSRM (`router.project-osrm.org`)
+  static Future<OsrmRouteResult> fetchLiveOsrmRoute(
+    GeoPoint start,
+    GeoPoint end,
+  ) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4);
+    try {
+      final url =
+          '${EnvConfig.osrmRouteEndpoint}/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+      final req = await client.getUrl(Uri.parse(url));
+      req.headers.set(
+        HttpHeaders.userAgentHeader,
+        'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
+      );
+      final resp = await req.close().timeout(const Duration(seconds: 4));
+      if (resp.statusCode == 200) {
+        final body = await resp.transform(utf8.decoder).join();
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic>) {
+          final routes = decoded['routes'];
+          if (routes is List && routes.isNotEmpty) {
+            final route = routes.first as Map<String, dynamic>;
+            final dist = ((route['distance'] as num?)?.round() ?? 1200)
+                .clamp(300, 100000);
+            final dur = ((route['duration'] as num?)?.round() ?? 300)
+                .clamp(60, 36000);
+            final geom = route['geometry'] as Map<String, dynamic>?;
+            final coords = geom?['coordinates'];
+            final pts = <GeoPoint>[];
+            if (coords is List) {
+              for (final c in coords) {
+                if (c is List && c.length >= 2) {
+                  final lon = (c[0] as num).toDouble();
+                  final lat = (c[1] as num).toDouble();
+                  pts.add(GeoPoint(latitude: lat, longitude: lon));
+                }
+              }
+            }
+            if (pts.length >= 2) {
+              _lastLiveOsrmPolyline = pts;
+              return OsrmRouteResult(
+                distanceMeters: dist,
+                durationSeconds: dur,
+                polylinePoints: pts,
+                isLiveOsrm: true,
+              );
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Fallback sang nội suy Haversine khi offline
+    } finally {
+      client.close(force: true);
+    }
+
+    final fallbackDist =
+        (GeoMath.distanceMeters(start, end) * 1.28).round().clamp(800, 50000);
+    final fallbackDur = ((fallbackDist / 1000.0) * 185).round();
+    final fallbackPts = generateRoutePolyline(start, end);
+    return OsrmRouteResult(
+      distanceMeters: fallbackDist,
+      durationSeconds: fallbackDur,
+      polylinePoints: fallbackPts,
+      isLiveOsrm: false,
+    );
   }
 
   /// Giải mã địa chỉ sang tọa độ GPS thực tế
@@ -95,7 +251,7 @@ class SmartDispatchEngine {
     required GeoPoint fallback,
   }) {
     final normalized = address.trim().toLowerCase();
-    for (final p in knownPlaces) {
+    for (final p in _allPlaces) {
       if (normalized.contains(p.title.toLowerCase()) ||
           p.fullAddress.toLowerCase() == normalized) {
         return p.location;
@@ -163,6 +319,8 @@ class SmartDispatchEngine {
     return allRanked;
   }
 
+  static List<GeoPoint>? get lastLiveOsrmPolyline => _lastLiveOsrmPolyline;
+
   /// Nội suy danh sách điểm tọa độ Polyline giữa điểm lấy và điểm giao
   static List<GeoPoint> generateRoutePolyline(
     GeoPoint start,
@@ -194,3 +352,4 @@ class SmartDispatchEngine {
     return dist <= EnvConfig.arrivalGeofenceRadiusMeters;
   }
 }
+

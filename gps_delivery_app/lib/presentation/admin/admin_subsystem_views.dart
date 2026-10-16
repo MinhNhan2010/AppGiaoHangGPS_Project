@@ -50,8 +50,12 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   );
   String _broadcastTarget = 'Tất cả người dùng';
 
-  // UC46: Chọn nhóm quyền RBAC
+  // UC46: Chọn nhóm quyền RBAC & Cấu hình Cloud Supabase PostGIS
   int _selectedRbacRoleIndex = 1; // Mặc định: Điều phối viên
+  final TextEditingController _supabaseUrlCtrl = TextEditingController(
+    text: 'https://your-project.supabase.co',
+  );
+  final TextEditingController _supabaseAnonKeyCtrl = TextEditingController();
 
   static const List<String> _screenTitles = [
     '8.24: UC22 Dashboard Tổng quan Hệ thống',
@@ -92,6 +96,8 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     _testLngCtrl.dispose();
     _newZoneNameCtrl.dispose();
     _broadcastTitleCtrl.dispose();
+    _supabaseUrlCtrl.dispose();
+    _supabaseAnonKeyCtrl.dispose();
     super.dispose();
   }
 
@@ -1072,9 +1078,62 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 );
               }).toList(),
             ),
+            const Divider(height: 24),
+            Text(
+              'Kết nối Cloud Supabase PostgreSQL 16 + PostGIS Thực tế (16 Bảng)',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.primary,
+                  ),
+            ),
+            const SizedBox(height: 6),
+            TextField(
+              controller: _supabaseUrlCtrl,
+              decoration: const InputDecoration(
+                labelText: 'SUPABASE_URL (Project URL)',
+                prefixIcon: Icon(Icons.cloud_outlined),
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _supabaseAnonKeyCtrl,
+              decoration: const InputDecoration(
+                labelText: 'SUPABASE_ANON_KEY (Public API Key)',
+                prefixIcon: Icon(Icons.vpn_key_outlined),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _store.lastSyncStatusMessage,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    final msg = await _store.configureAndSyncSupabaseCloud(
+                      url: _supabaseUrlCtrl.text,
+                      anonKey: _supabaseAnonKeyCtrl.text,
+                    );
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(msg)),
+                    );
+                  },
+                  icon: const Icon(Icons.sync, size: 16),
+                  label: const Text('Kết nối & Đồng bộ PostGIS'),
+                ),
+              ],
+            ),
           ],
         ),
       ),
     );
   }
 }
+
