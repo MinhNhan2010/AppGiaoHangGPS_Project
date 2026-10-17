@@ -12,6 +12,7 @@ import 'package:gps_delivery_app/domain/entities/pricing_estimate.dart';
 import 'package:gps_delivery_app/domain/enums/order_status.dart';
 import 'package:gps_delivery_app/domain/enums/service_type.dart';
 import 'package:gps_delivery_app/main.dart';
+import 'package:gps_delivery_app/presentation/widgets/animated_3d_ui_icons.dart';
 
 void main() {
   testWidgets(
@@ -28,6 +29,7 @@ void main() {
         find.text('Hình 8.4: Tạo đơn hàng & Chọn gói dịch vụ (UC03)'),
         findsOneWidget,
       );
+      expect(find.byType(Animated3dIconBadge), findsWidgets);
 
       // Chuyển sang Phân hệ Tài xế (Hình 8.16: UC14)
       await tester.tap(find.text('Phân hệ Tài xế'));
@@ -388,6 +390,13 @@ void main() {
         distanceMeters: 12.4,
       );
       expect(File(podSvgPath).existsSync(), isTrue);
+
+      // 6. Xác minh tồn tại thực tế của 4 tệp biểu tượng 3D Isometric khởi tạo bằng AI
+      for (final style in Icon3dStyle.values) {
+        final iconFile = File(style.assetPath);
+        expect(iconFile.existsSync(), isTrue);
+        expect(iconFile.lengthSync(), greaterThan(100000));
+      }
     },
   );
 }

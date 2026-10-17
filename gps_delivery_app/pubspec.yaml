@@ -32,3 +32,7 @@ dev_dependencies:
 flutter:
   # Bật bộ biểu tượng Material Design
   uses-material-design: true
+
+  # Tài nguyên biểu tượng 3D Isometric sinh bởi AI
+  assets:
+    - assets/icons_3d/

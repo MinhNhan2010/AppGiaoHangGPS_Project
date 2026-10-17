@@ -9,6 +9,7 @@ import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/pricing_estimate.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
+import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
 /// Phân hệ Khách hàng (Customer App) - 14 màn hình (Hình 8.1 - Hình 8.14)
@@ -728,28 +729,48 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
             ),
             const SizedBox(height: AppSpacing.md),
             const Text(
-              'Chọn gói dịch vụ vận chuyển:',
+              'Chọn gói dịch vụ vận chuyển (Tương tác nghiêng Icon 3D AI):',
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: AppSpacing.xs),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: DeliveryServiceType.values.map((svc) {
-                final selected = _selectedService == svc;
-                return ChoiceChip(
-                  label: Text(
-                    '${svc.displayName} (${CurrencyFormatter.formatVnd(svc.defaultBaseFare)})',
+            Row(
+              children: [
+                Animated3dIconBadge(
+                  style: _selectedService == DeliveryServiceType.express30m
+                      ? Icon3dStyle.scooterExpress
+                      : _selectedService == DeliveryServiceType.standard
+                          ? Icon3dStyle.parcelBox
+                          : Icon3dStyle.gpsPinRadar,
+                  size: 64,
+                  showRadarPulse: true,
+                  isSelected: true,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: DeliveryServiceType.values.map((svc) {
+                      final selected = _selectedService == svc;
+                      return ChoiceChip(
+                        label: Text(
+                          '${svc.displayName} (${CurrencyFormatter.formatVnd(svc.defaultBaseFare)})',
+                        ),
+                        selected: selected,
+                        selectedColor: AppColors.accent,
+                        labelStyle: TextStyle(
+                          color: selected
+                              ? AppColors.surface
+                              : AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        onSelected: (_) =>
+                            setState(() => _selectedService = svc),
+                      );
+                    }).toList(),
                   ),
-                  selected: selected,
-                  selectedColor: AppColors.accent,
-                  labelStyle: TextStyle(
-                    color: selected ? AppColors.surface : AppColors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  onSelected: (_) => setState(() => _selectedService = svc),
-                );
-              }).toList(),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.md),
             SizedBox(

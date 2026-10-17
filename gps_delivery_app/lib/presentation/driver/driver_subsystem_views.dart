@@ -8,6 +8,7 @@ import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/order_status.dart';
+import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
 /// Phân hệ Tài xế (Driver App) - 9 màn hình (Hình 8.15 - Hình 8.23)
@@ -461,8 +462,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.radar, size: 18, color: AppColors.primary),
-                    const SizedBox(width: 6),
+                    const Animated3dIconBadge(
+                      style: Icon3dStyle.gpsPinRadar,
+                      size: 48,
+                      showRadarPulse: true,
+                    ),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
                         'Ứng viên #1 (Bán kính ${topCandidate.searchRadiusTierMeters ~/ 1000}km): ${topCandidate.driver.fullName} (${topCandidate.driver.licensePlate}) • Điểm Trọng số: ${topCandidate.totalScore.toStringAsFixed(3)}',
@@ -913,20 +918,35 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 color: AppColors.primary,
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  const Text(
-                    'Số dư khả dụng (Ví Tài xế)',
-                    style: TextStyle(color: Colors.white70, fontSize: 12),
+                  const Animated3dIconBadge(
+                    style: Icon3dStyle.walletVault,
+                    size: 62,
+                    showRadarPulse: true,
+                    isSelected: true,
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    CurrencyFormatter.formatVnd(_store.driverWalletBalance),
-                    style: const TextStyle(
-                      color: AppColors.surface,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Số dư khả dụng (Ví Tài xế • Ký quỹ tối thiểu 200.000đ)',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          CurrencyFormatter.formatVnd(
+                            _store.driverWalletBalance,
+                          ),
+                          style: const TextStyle(
+                            color: AppColors.surface,
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],

@@ -4,6 +4,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
+import 'animated_3d_ui_icons.dart';
 
 /// Hình 8.47: Onboarding Screen ("Giao hàng siêu tốc 30 phút")
 class OnboardingStateScreen extends StatelessWidget {
@@ -32,38 +33,33 @@ class OnboardingStateScreen extends StatelessWidget {
                     ),
                     borderRadius: BorderRadius.circular(AppSpacing.lg),
                   ),
-                  child: Column(
+                  child: const Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Container(
-                        width: 120,
-                        height: 120,
-                        decoration: const BoxDecoration(
-                          color: AppColors.accent,
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.delivery_dining,
-                          size: 72,
-                          color: AppColors.surface,
-                        ),
+                      Animated3dIconBadge(
+                        style: Icon3dStyle.scooterExpress,
+                        size: 124,
+                        showRadarPulse: true,
+                        isSelected: true,
                       ),
-                      const SizedBox(height: AppSpacing.md),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
-                        ),
+                      SizedBox(height: AppSpacing.md),
+                      DecoratedBox(
                         decoration: BoxDecoration(
                           color: AppColors.primary,
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.all(Radius.circular(20)),
                         ),
-                        child: const Text(
-                          'FLASH DELIVERY 3D GPS',
-                          style: TextStyle(
-                            color: AppColors.surface,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12,
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 6,
+                          ),
+                          child: Text(
+                            'FLASH DELIVERY 3D GPS',
+                            style: TextStyle(
+                              color: AppColors.surface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
                       ),
@@ -142,18 +138,10 @@ class EmptyOrdersStateWidget extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 110,
-              height: 110,
-              decoration: BoxDecoration(
-                color: AppColors.accent.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.inventory_2_outlined,
-                size: 56,
-                color: AppColors.accent,
-              ),
+            const Animated3dIconBadge(
+              style: Icon3dStyle.parcelBox,
+              size: 108,
+              showRadarPulse: true,
             ),
             const SizedBox(height: AppSpacing.md),
             Text(
