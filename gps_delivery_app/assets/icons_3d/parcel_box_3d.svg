@@ -1,50 +1,63 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
   <defs>
-    <radialGradient id="parcelBg" cx="35%" cy="30%" r="70%">
-      <stop offset="0%" stop-color="#F8FCFF"/>
-      <stop offset="55%" stop-color="#E6F2FF"/>
-      <stop offset="100%" stop-color="#1F4E79"/>
+    <radialGradient id="sphereBg2" cx="35%" cy="28%" r="72%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="60%" stop-color="#E3F2FD"/>
+      <stop offset="100%" stop-color="#BBDDFB"/>
     </radialGradient>
+    <linearGradient id="kraftTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E6BA8E"/>
+      <stop offset="100%" stop-color="#C89666"/>
+    </linearGradient>
+    <linearGradient id="kraftLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#C69264"/>
+      <stop offset="100%" stop-color="#9C6B43"/>
+    </linearGradient>
+    <linearGradient id="kraftRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A8764C"/>
+      <stop offset="100%" stop-color="#7D5230"/>
+    </linearGradient>
+    <radialGradient id="greenBadge" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#69F0AE"/>
+      <stop offset="55%" stop-color="#28A745"/>
+      <stop offset="100%" stop-color="#146C2E"/>
+    </radialGradient>
+    <filter id="boxShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="7" flood-color="#0B2239" flood-opacity="0.30"/>
+    </filter>
+    <filter id="laserBlur" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
   </defs>
 
-  <circle cx="120" cy="120" r="96" fill="url(#parcelBg)" stroke="#FFFFFF" stroke-width="4"/>
+  <circle cx="120" cy="120" r="102" fill="url(#sphereBg2)"/>
 
-  <!-- Bóng đổ 3D co giãn bên dưới kiện hàng -->
-  <ellipse cx="116" cy="190" rx="52" ry="12" fill="#0A192F" opacity="0.35">
-    <animate attributeName="rx" values="54;42;54" dur="1.8s" repeatCount="indefinite"/>
-    <animate attributeName="opacity" values="0.38;0.20;0.38" dur="1.8s" repeatCount="indefinite"/>
-  </ellipse>
-
-  <!-- Kiện hàng Isometric 3D bay lơ lửng -->
-  <g>
-    <animateTransform attributeName="transform" type="translate" values="0 4; 0 -10; 0 4" dur="1.8s" repeatCount="indefinite"/>
-    <!-- Mặt đỉnh -->
-    <polygon points="116,54 178,86 116,118 54,86" fill="#F6AD55"/>
-    <!-- Mặt trái -->
-    <polygon points="54,86 116,118 116,180 54,148" fill="#DD6B20"/>
-    <!-- Mặt phải -->
-    <polygon points="116,118 178,86 178,148 116,180" fill="#C05621"/>
-    <!-- Băng keo niêm phong Cam (#FF6B00) -->
-    <line x1="85" y1="70" x2="147" y2="102" stroke="#FF6B00" stroke-width="10" stroke-linecap="round"/>
-    <!-- Mã vạch Barcode -->
-    <g stroke="#FFFFFF" stroke-width="4">
-      <line x1="70" y1="114" x2="70" y2="142"/>
-      <line x1="80" y1="119" x2="80" y2="147"/>
-      <line x1="90" y1="124" x2="90" y2="152"/>
-      <line x1="100" y1="129" x2="100" y2="157"/>
-    </g>
+  <!-- Kiện hàng Carton 3D bo mép mềm mại -->
+  <g filter="url(#boxShadow)">
+    <animateTransform attributeName="transform" type="translate" values="0,3; 0,-8; 0,3" dur="1.8s" repeatCount="indefinite"/>
+    <path d="M116,56 L180,88 L116,122 L52,88 Z" fill="url(#kraftTop)" stroke="#EED0B3" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M52,88 L116,122 L116,184 L52,148 Z" fill="url(#kraftLeft)" stroke="#B58357" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M116,122 L180,88 L180,148 L116,184 Z" fill="url(#kraftRight)" stroke="#8A5D38" stroke-width="1.5" stroke-linejoin="round"/>
+    <!-- Dải băng keo Cam 3D (#FF6B00) -->
+    <path d="M148,72 L82,106 L82,134 L94,140 L94,112 L160,78 Z" fill="#FF6B00"/>
+    <!-- Nhãn Barcode bo góc -->
+    <rect x="128" y="128" width="32" height="20" rx="3" transform="skewY(-26)" fill="#FFFFFF"/>
   </g>
 
-  <!-- Chùm tia Laser Đỏ/Cam quét dọc lên xuống qua kiện hàng -->
-  <line x1="44" y1="70" x2="188" y2="70" stroke="#FF2D55" stroke-width="6" stroke-linecap="round">
-    <animate attributeName="y1" values="64;174;64" dur="1.5s" repeatCount="indefinite"/>
-    <animate attributeName="y2" values="64;174;64" dur="1.5s" repeatCount="indefinite"/>
+  <!-- Tia Laser Volumetric quét mượt qua kiện hàng -->
+  <line x1="48" y1="74" x2="184" y2="74" stroke="#FF2D55" stroke-width="5" stroke-linecap="round" filter="url(#laserBlur)">
+    <animate attributeName="y1" values="70;172;70" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="y2" values="70;172;70" dur="1.6s" repeatCount="indefinite"/>
   </line>
 
-  <!-- Khiên Bảo Hiểm Xanh Lá (#28A745) lơ lửng lệch pha -->
-  <g>
-    <animateTransform attributeName="transform" type="translate" values="0 -4; 0 6; 0 -4" dur="1.4s" repeatCount="indefinite"/>
-    <circle cx="168" cy="154" r="30" fill="#28A745" stroke="#FFFFFF" stroke-width="4"/>
-    <polyline points="154,154 164,164 182,144" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Khối cầu Dấu tích Xanh 3D bóng gương -->
+  <g filter="url(#boxShadow)">
+    <animateTransform attributeName="transform" type="translate" values="0,-4; 0,5; 0,-4" dur="1.5s" repeatCount="indefinite"/>
+    <circle cx="164" cy="70" r="34" fill="url(#greenBadge)"/>
+    <path d="M148,70 L160,82 L182,58" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>
