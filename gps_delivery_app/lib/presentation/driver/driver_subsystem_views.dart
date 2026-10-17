@@ -320,6 +320,13 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
           children: [
             Row(
               children: [
+                Animated3dIconBadge(
+                  style: Icon3dStyle.scooterExpress,
+                  size: 50,
+                  showRadarPulse: _store.isDriverOnline,
+                  isSelected: _store.isDriverOnline,
+                ),
+                const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
                     'Hình 8.16: Trang chủ Tài xế & Trạng thái Hoạt động (UC14)',
@@ -604,9 +611,21 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Hình 8.18: Điều hướng 3D GPS Turn-by-Turn (UC16)',
-              style: Theme.of(context).textTheme.headlineMedium,
+            Row(
+              children: [
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.gpsPinRadar,
+                  size: 48,
+                  showRadarPulse: true,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Hình 8.18: Điều hướng 3D GPS Turn-by-Turn (UC16)',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
             Map3dPerspectiveWidget(
@@ -1114,6 +1133,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              const Animated3dIconBadge(
+                style: Icon3dStyle.walletVault,
+                size: 46,
+                showRadarPulse: false,
+              ),
+              const SizedBox(width: 8),
               const Expanded(
                 child: Text(
                   'Hình 8.23: Thống kê Hiệu suất & Thu nhập (UC21 - Dark Mode)',

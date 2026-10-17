@@ -5,6 +5,7 @@ import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/geo_math.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
+import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
 /// Phân hệ Quản trị viên (Admin Web Portal) - 12 màn hình (Hình 8.24 - 8.35)
@@ -101,6 +102,24 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     super.dispose();
   }
 
+  Icon3dStyle _adminScreen3dStyle(int index) {
+    switch (index) {
+      case 2:
+      case 8:
+        return Icon3dStyle.scooterExpress;
+      case 3:
+      case 9:
+        return Icon3dStyle.gpsPinRadar;
+      case 4:
+      case 5:
+      case 7:
+      case 11:
+        return Icon3dStyle.walletVault;
+      default:
+        return Icon3dStyle.parcelBox;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -121,13 +140,25 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                   children: [
                     Padding(
                       padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: Text(
-                        'ADMIN PORTAL CMS\nVai trò: ${_store.currentAdminRoleName}',
-                        style: const TextStyle(
-                          color: AppColors.surface,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13,
-                        ),
+                      child: Row(
+                        children: [
+                          Animated3dIconBadge(
+                            style: _adminScreen3dStyle(_selectedScreenIndex),
+                            size: 46,
+                            showRadarPulse: false,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'ADMIN PORTAL CMS\nVai trò: ${_store.currentAdminRoleName}',
+                              style: const TextStyle(
+                                color: AppColors.surface,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const Divider(color: Colors.white24),
@@ -190,17 +221,18 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(color: AppColors.divider),
       ),
       child: Row(
         children: [
-          const Icon(
-            Icons.admin_panel_settings_outlined,
-            size: 18,
-            color: AppColors.primary,
+          Animated3dIconBadge(
+            style: _adminScreen3dStyle(_selectedScreenIndex),
+            size: 46,
+            showRadarPulse: true,
+            isSelected: true,
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           const Text(
             'Phiên quyền RBAC:',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
@@ -308,10 +340,30 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                _adminKpi('Đơn hàng hôm nay', '1,248 (+12.5%)', AppColors.primary),
-                _adminKpi('Tài xế trực tuyến', '312 (+5.2%)', AppColors.success),
-                _adminKpi('Doanh thu ngày', '45.6M VNĐ (+8.4%)', AppColors.accent),
-                _adminKpi('Tỷ lệ thành công', '98.2%', AppColors.success),
+                _adminKpi(
+                  'Đơn hàng hôm nay',
+                  '1,248 (+12.5%)',
+                  AppColors.primary,
+                  Icon3dStyle.parcelBox,
+                ),
+                _adminKpi(
+                  'Tài xế trực tuyến',
+                  '312 (+5.2%)',
+                  AppColors.success,
+                  Icon3dStyle.scooterExpress,
+                ),
+                _adminKpi(
+                  'Doanh thu ngày',
+                  '45.6M VNĐ (+8.4%)',
+                  AppColors.accent,
+                  Icon3dStyle.walletVault,
+                ),
+                _adminKpi(
+                  'Tỷ lệ thành công',
+                  '98.2%',
+                  AppColors.success,
+                  Icon3dStyle.gpsPinRadar,
+                ),
               ],
             ),
             const Divider(),
@@ -353,28 +405,47 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     );
   }
 
-  Widget _adminKpi(String label, String val, Color color) {
+  Widget _adminKpi(
+    String label,
+    String val,
+    Color color,
+    Icon3dStyle iconStyle,
+  ) {
     return Container(
       padding: const EdgeInsets.all(AppSpacing.sm),
       decoration: BoxDecoration(
         color: AppColors.background,
         borderRadius: BorderRadius.circular(10),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            label,
-            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+          Animated3dIconBadge(
+            style: iconStyle,
+            size: 42,
+            showRadarPulse: false,
           ),
-          const SizedBox(height: 2),
-          Text(
-            val,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 15,
-              color: color,
-            ),
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                val,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  color: color,
+                ),
+              ),
+            ],
           ),
         ],
       ),

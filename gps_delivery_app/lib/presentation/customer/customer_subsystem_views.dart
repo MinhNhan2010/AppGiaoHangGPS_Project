@@ -259,7 +259,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
           children: [
             Row(
               children: [
-                const Icon(Icons.verified_user, color: AppColors.primary),
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.walletVault,
+                  size: 50,
+                  showRadarPulse: true,
+                ),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(
                   child: Text(
@@ -841,9 +845,21 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Hình 8.5: Xác nhận giá cước & Áp dụng Voucher (UC05 & UC06)',
-              style: Theme.of(context).textTheme.headlineMedium,
+            Row(
+              children: [
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.walletVault,
+                  size: 48,
+                  showRadarPulse: false,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Hình 8.5: Xác nhận giá cước & Áp dụng Voucher (UC05 & UC06)',
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
             Container(
@@ -1107,10 +1123,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
             const SizedBox(height: AppSpacing.md),
             Row(
               children: [
-                const CircleAvatar(
-                  radius: 22,
-                  backgroundColor: AppColors.primary,
-                  child: Icon(Icons.two_wheeler, color: AppColors.surface),
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.scooterExpress,
+                  size: 56,
+                  showRadarPulse: true,
+                  isSelected: true,
                 ),
                 const SizedBox(width: AppSpacing.sm),
                 Expanded(

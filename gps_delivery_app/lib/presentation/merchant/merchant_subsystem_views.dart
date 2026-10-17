@@ -6,6 +6,7 @@ import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
+import '../widgets/animated_3d_ui_icons.dart';
 
 class _BatchCsvRow {
   final int rowNumber;
@@ -155,6 +156,70 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     super.dispose();
   }
 
+  Icon3dStyle _merchantScreen3dStyle(int index) {
+    switch (index) {
+      case 2:
+      case 6:
+        return Icon3dStyle.scooterExpress;
+      case 5:
+        return Icon3dStyle.gpsPinRadar;
+      case 7:
+      case 8:
+        return Icon3dStyle.walletVault;
+      default:
+        return Icon3dStyle.parcelBox;
+    }
+  }
+
+  Widget _buildMerchant3dBanner() {
+    final style = _merchantScreen3dStyle(_selectedScreenIndex);
+    return Container(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Row(
+        children: [
+          Animated3dIconBadge(
+            style: style,
+            size: 52,
+            showRadarPulse: true,
+            isSelected: true,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Cổng Đối tác B2B • ${_store.merchantStoreName}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.primary,
+                    fontSize: 13,
+                  ),
+                ),
+                Text(
+                  'Đang mở: ${_screenTitles[_selectedScreenIndex]} • Số dư COD: ${CurrencyFormatter.formatVnd(_store.merchantCodBalance)}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -175,13 +240,25 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                   children: [
                     Padding(
                       padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: Text(
-                        'MERCHANT PORTAL B2B\n${_store.merchantStoreName}',
-                        style: const TextStyle(
-                          color: AppColors.surface,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 13,
-                        ),
+                      child: Row(
+                        children: [
+                          Animated3dIconBadge(
+                            style: _merchantScreen3dStyle(_selectedScreenIndex),
+                            size: 46,
+                            showRadarPulse: false,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'MERCHANT PORTAL B2B\n${_store.merchantStoreName}',
+                              style: const TextStyle(
+                                color: AppColors.surface,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const Divider(color: Colors.white24),
@@ -212,13 +289,22 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                 ),
               ),
               const SizedBox(width: AppSpacing.md),
-              Expanded(child: _buildActiveMerchantScreen(context)),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildMerchant3dBanner(),
+                    _buildActiveMerchantScreen(context),
+                  ],
+                ),
+              ),
             ],
           );
         }
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildMerchant3dBanner(),
             _buildScreenSelectorBar(),
             const SizedBox(height: AppSpacing.md),
             _buildActiveMerchantScreen(context),

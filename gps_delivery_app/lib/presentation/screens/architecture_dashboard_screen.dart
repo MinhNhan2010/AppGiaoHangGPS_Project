@@ -215,9 +215,21 @@ class _ArchitectureDashboardScreenState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Trạng thái Hệ thống & Bản đồ 3D (Hình 8.47 - Hình 8.51)',
-              style: Theme.of(context).textTheme.titleLarge,
+            Row(
+              children: [
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.parcelBox,
+                  size: 46,
+                  showRadarPulse: false,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Trạng thái Hệ thống & Bản đồ 3D (Hình 8.47 - Hình 8.51)',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
             Wrap(
@@ -269,9 +281,21 @@ class _ArchitectureDashboardScreenState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Bộ tính Cước phí GPS & Khuyến mãi (UC04, UC05, UC26)',
-              style: Theme.of(context).textTheme.titleLarge,
+            Row(
+              children: [
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.walletVault,
+                  size: 48,
+                  showRadarPulse: false,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Bộ tính Cước phí GPS & Khuyến mãi (UC04, UC05, UC26)',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
             Wrap(
@@ -340,9 +364,21 @@ class _ArchitectureDashboardScreenState
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Engine Bản đồ 3D, Kalman Filter & Điều tiết Pin (Chương 4, 8.6, 15)',
-              style: Theme.of(context).textTheme.titleLarge,
+            Row(
+              children: [
+                const Animated3dIconBadge(
+                  style: Icon3dStyle.gpsPinRadar,
+                  size: 48,
+                  showRadarPulse: true,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Engine Bản đồ 3D, Kalman Filter & Điều tiết Pin (Chương 4, 8.6, 15)',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: AppSpacing.sm),
             Text(
