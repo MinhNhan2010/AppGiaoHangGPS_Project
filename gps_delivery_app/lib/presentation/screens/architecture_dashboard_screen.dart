@@ -12,6 +12,7 @@ import '../bloc/system_architecture_cubit.dart';
 import '../customer/customer_subsystem_views.dart';
 import '../driver/driver_subsystem_views.dart';
 import '../merchant/merchant_subsystem_views.dart';
+import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
 class ArchitectureDashboardScreen extends StatefulWidget {
@@ -106,6 +107,19 @@ class _ArchitectureDashboardScreenState
     }
   }
 
+  Icon3dStyle _iconStyleForRole(SubsystemRole role) {
+    switch (role) {
+      case SubsystemRole.customer:
+        return Icon3dStyle.scooterExpress;
+      case SubsystemRole.driver:
+        return Icon3dStyle.gpsPinRadar;
+      case SubsystemRole.merchant:
+        return Icon3dStyle.parcelBox;
+      case SubsystemRole.admin:
+        return Icon3dStyle.walletVault;
+    }
+  }
+
   Widget _buildSubsystemSelectorCard(
     BuildContext context,
     SystemArchitectureState state,
@@ -132,6 +146,39 @@ class _ArchitectureDashboardScreenState
                   selected: isSelected,
                   selectedColor: AppColors.accent.withValues(alpha: 0.2),
                   onSelected: (_) => cubit.selectRole(role),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            // Dải 4 Hoạt ảnh Biểu tượng 3D chuyển động 60 FPS đại diện cho 4 Phân hệ
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: SubsystemRole.values.map((role) {
+                final isSelected = state.selectedRole == role;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Animated3dIconBadge(
+                      style: _iconStyleForRole(role),
+                      size: 62,
+                      showRadarPulse: isSelected,
+                      isSelected: isSelected,
+                      onTap: () => cubit.selectRole(role),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _iconStyleForRole(role).label,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: isSelected
+                            ? FontWeight.w700
+                            : FontWeight.w500,
+                        color: isSelected
+                            ? AppColors.accent
+                            : AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 );
               }).toList(),
             ),

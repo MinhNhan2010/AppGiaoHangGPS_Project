@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <radialGradient id="walletBg" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#F8FCFF"/>
+      <stop offset="55%" stop-color="#E6F8EE"/>
+      <stop offset="100%" stop-color="#1F4E79"/>
+    </radialGradient>
+    <linearGradient id="coinGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE57F"/>
+      <stop offset="50%" stop-color="#FFB703"/>
+      <stop offset="100%" stop-color="#FB8500"/>
+    </linearGradient>
+  </defs>
+
+  <circle cx="120" cy="120" r="96" fill="url(#walletBg)" stroke="#FFFFFF" stroke-width="4"/>
+
+  <!-- 3 Đồng xu vàng 3D bay lên xuống và xoay quanh trục đứng -->
+  <ellipse cx="78" cy="74" rx="20" ry="20" fill="url(#coinGold)" stroke="#D97706" stroke-width="3">
+    <animate attributeName="cy" values="82;58;82" dur="1.3s" repeatCount="indefinite"/>
+    <animate attributeName="rx" values="20;5;20" dur="1.3s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="118" cy="64" rx="22" ry="22" fill="url(#coinGold)" stroke="#D97706" stroke-width="3">
+    <animate attributeName="cy" values="56;80;56" dur="1.5s" repeatCount="indefinite"/>
+    <animate attributeName="rx" values="6;22;6" dur="1.5s" repeatCount="indefinite"/>
+  </ellipse>
+  <ellipse cx="158" cy="76" rx="19" ry="19" fill="url(#coinGold)" stroke="#D97706" stroke-width="3">
+    <animate attributeName="cy" values="84;60;84" dur="1.1s" repeatCount="indefinite"/>
+    <animate attributeName="rx" values="19;4;19" dur="1.1s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- Thân Ví Da Ký Quỹ 3D (#1F4E79) -->
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0 0; 0 -5; 0 0" dur="1.6s" repeatCount="indefinite"/>
+    <rect x="46" y="96" width="136" height="88" rx="18" fill="#1F4E79" stroke="#FFFFFF" stroke-width="3"/>
+    <rect x="54" y="104" width="120" height="72" rx="12" fill="none" stroke="#FFD166" stroke-width="2" stroke-dasharray="6,4"/>
+    <rect x="134" y="124" width="52" height="30" rx="10" fill="#153E75"/>
+    <circle cx="150" cy="139" r="7" fill="#FFB703"/>
+  </g>
+
+  <!-- Khiên Bảo Mật Ký Quỹ (#28A745) phát sáng -->
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0 3; 0 -6; 0 3" dur="1.4s" repeatCount="indefinite"/>
+    <path d="M172,132 L198,144 Q196,178 172,196 Q148,178 146,144 Z" fill="#28A745" stroke="#FFFFFF" stroke-width="4"/>
+    <polyline points="161,164 169,172 185,154" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <radialGradient id="bgSphere" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#F8FCFF"/>
+      <stop offset="55%" stop-color="#DCEEFF"/>
+      <stop offset="100%" stop-color="#1F4E79"/>
+    </radialGradient>
+    <linearGradient id="cargoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF9E44"/>
+      <stop offset="50%" stop-color="#FF6B00"/>
+      <stop offset="100%" stop-color="#C84B00"/>
+    </linearGradient>
+    <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2B6CB0"/>
+      <stop offset="60%" stop-color="#1F4E79"/>
+      <stop offset="100%" stop-color="#0D253F"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Vòng sóng Radar 3D lan tỏa liên tục -->
+  <circle cx="120" cy="120" r="95" fill="none" stroke="#00B4D8" stroke-width="3">
+    <animate attributeName="r" values="88;116" dur="1.6s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.7;0.0" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Nền khối cầu 3D -->
+  <circle cx="120" cy="120" r="96" fill="url(#bgSphere)" stroke="#FFFFFF" stroke-width="4"/>
+
+  <!-- Mặt đường 3D và vạch phân làn trôi ngược -->
+  <rect x="34" y="168" width="172" height="26" rx="13" fill="#0F2942" opacity="0.82"/>
+  <g stroke="#00B4D8" stroke-width="5" stroke-linecap="round">
+    <line x1="55" y1="181" x2="82" y2="181">
+      <animateTransform attributeName="transform" type="translate" from="40 0" to="-40 0" dur="0.6s" repeatCount="indefinite"/>
+    </line>
+    <line x1="115" y1="181" x2="142" y2="181">
+      <animateTransform attributeName="transform" type="translate" from="40 0" to="-40 0" dur="0.6s" repeatCount="indefinite"/>
+    </line>
+    <line x1="175" y1="181" x2="202" y2="181">
+      <animateTransform attributeName="transform" type="translate" from="40 0" to="-40 0" dur="0.6s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- Vệt gió phản lực Hỏa tốc -->
+  <g stroke-linecap="round" stroke-width="5">
+    <line x1="26" y1="92" x2="62" y2="92" stroke="#00B4D8">
+      <animate attributeName="x1" values="52;18;52" dur="0.7s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.9;0.2;0.9" dur="0.7s" repeatCount="indefinite"/>
+    </line>
+    <line x1="20" y1="114" x2="56" y2="114" stroke="#FF6B00">
+      <animate attributeName="x1" values="46;14;46" dur="0.55s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="0.3;0.95;0.3" dur="0.55s" repeatCount="indefinite"/>
+    </line>
+  </g>
+
+  <!-- Khối thân xe & thùng hàng nhấp nhô giảm xóc -->
+  <g>
+    <animateTransform attributeName="transform" type="translate" values="0 0; 0 -5; 0 0" dur="0.65s" repeatCount="indefinite"/>
+    <!-- Thùng hàng Hỏa tốc 3D (#FF6B00) -->
+    <rect x="52" y="64" width="54" height="48" rx="10" fill="url(#cargoGrad)" stroke="#FFFFFF" stroke-width="2"/>
+    <rect x="58" y="84" width="42" height="8" rx="3" fill="#FFFFFF" opacity="0.9"/>
+    <!-- Khung xe máy 3D (#1F4E79) -->
+    <path d="M58 156 L72 112 L124 112 L134 138 L154 90 L170 94 L176 156 Z" fill="url(#bodyGrad)"/>
+    <rect x="92" y="102" width="38" height="14" rx="6" fill="#1A202C"/>
+    <!-- Chùm đèn pha LED -->
+    <polygon points="170,104 214,86 214,126" fill="#FFE066" opacity="0.55">
+      <animate attributeName="opacity" values="0.35;0.75;0.35" dur="0.8s" repeatCount="indefinite"/>
+    </polygon>
+  </g>
+
+  <!-- Bánh xe sau quay tròn 360 độ -->
+  <g transform="translate(80, 158)">
+    <circle r="24" fill="#1A202C"/>
+    <circle r="16" fill="none" stroke="#00B4D8" stroke-width="4"/>
+    <g stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round">
+      <line x1="-13" y1="0" x2="13" y2="0"/>
+      <line x1="0" y1="-13" x2="0" y2="13"/>
+      <line x1="-9" y1="-9" x2="9" y2="9"/>
+      <line x1="-9" y1="9" x2="9" y2="-9"/>
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="0.65s" repeatCount="indefinite"/>
+    </g>
+    <circle r="6" fill="#FF6B00"/>
+  </g>
+
+  <!-- Bánh xe trước quay tròn 360 độ -->
+  <g transform="translate(160, 158)">
+    <circle r="24" fill="#1A202C"/>
+    <circle r="16" fill="none" stroke="#00B4D8" stroke-width="4"/>
+    <g stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round">
+      <line x1="-13" y1="0" x2="13" y2="0"/>
+      <line x1="0" y1="-13" x2="0" y2="13"/>
+      <line x1="-9" y1="-9" x2="9" y2="9"/>
+      <line x1="-9" y1="9" x2="9" y2="-9"/>
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="0.65s" repeatCount="indefinite"/>
+    </g>
+    <circle r="6" fill="#FF6B00"/>
+  </g>
+</svg>

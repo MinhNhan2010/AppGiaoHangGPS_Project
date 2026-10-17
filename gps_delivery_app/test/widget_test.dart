@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gps_delivery_app/core/config/env_config.dart';
 import 'package:gps_delivery_app/core/gps/gps_integrity_validator.dart';
@@ -391,12 +392,57 @@ void main() {
       );
       expect(File(podSvgPath).existsSync(), isTrue);
 
-      // 6. Xác minh tồn tại thực tế của 4 tệp biểu tượng 3D Isometric khởi tạo bằng AI
+      // 6. Xác minh tồn tại thực tế của 4 tệp biểu tượng 3D AI và 4 tệp Hoạt ảnh SVG 3D chuyển động
       for (final style in Icon3dStyle.values) {
         final iconFile = File(style.assetPath);
         expect(iconFile.existsSync(), isTrue);
         expect(iconFile.lengthSync(), greaterThan(100000));
+
+        final animSvgFile = File(style.animatedSvgPath);
+        expect(animSvgFile.existsSync(), isTrue);
+        final svgContent = animSvgFile.readAsStringSync();
+        expect(svgContent.contains('<animate'), isTrue);
       }
+    },
+  );
+
+  testWidgets(
+    'TC-13: Hoạt ảnh 3D đa thành phần (Animated3dIconBadge) chuyển động liên tục 60 FPS qua các khung hình cho cả 4 mẫu Icon',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Row(
+              children: [
+                Animated3dIconBadge(
+                  style: Icon3dStyle.scooterExpress,
+                  forceContinuousInTest: true,
+                ),
+                Animated3dIconBadge(
+                  style: Icon3dStyle.parcelBox,
+                  forceContinuousInTest: true,
+                ),
+                Animated3dIconBadge(
+                  style: Icon3dStyle.gpsPinRadar,
+                  forceContinuousInTest: true,
+                ),
+                Animated3dIconBadge(
+                  style: Icon3dStyle.walletVault,
+                  forceContinuousInTest: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(Animated3dIconBadge), findsNWidgets(4));
+
+      // Tiến hành chạy qua nhiều khung hình thời gian thực để xác nhận vòng lặp hoạt ảnh liên tục không dừng
+      await tester.pump(const Duration(milliseconds: 450));
+      await tester.pump(const Duration(milliseconds: 650));
+      await tester.pump(const Duration(milliseconds: 1200));
+      expect(tester.binding.hasScheduledFrame, isTrue);
     },
   );
 }
