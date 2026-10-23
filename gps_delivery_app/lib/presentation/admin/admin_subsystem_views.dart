@@ -1,17 +1,32 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../core/config/env_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/geo_math.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
+import '../../domain/enums/order_status.dart';
+import '../../domain/enums/service_type.dart';
+import '../../domain/enums/user_role.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
-/// Phân hệ Quản trị viên (Admin Web Portal) - 12 màn hình (Hình 8.24 - 8.35)
-/// Bao phủ đầy đủ UC22 - UC29, UC43 - UC46 theo Thiết kế Giao diện Chương 8.3
+part 'admin_overview_and_fleet_views.dart';
+part 'admin_config_and_governance_views.dart';
+
+/// Phân hệ Quản trị viên (GO-MAU Admin Web Portal) - 12 màn hình
+/// Giao diện phân hệ nghiệp vụ chuẩn thiết kế gốc (uc22..uc29, uc43..uc46).
 class AdminSubsystemEntry extends StatefulWidget {
-  const AdminSubsystemEntry({super.key});
+  final int? forcedScreenIndex;
+  final VoidCallback? onLogout;
+
+  const AdminSubsystemEntry({
+    super.key,
+    this.forcedScreenIndex,
+    this.onLogout,
+  });
 
   @override
   State<AdminSubsystemEntry> createState() => _AdminSubsystemEntryState();
@@ -19,16 +34,19 @@ class AdminSubsystemEntry extends StatefulWidget {
 
 class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   final AppStateStore _store = AppStateStore.instance;
-  int _selectedScreenIndex = 0; // Mặc định: UC22 Dashboard Tổng quan
+  int _selectedScreenIndex = 0; // Mặc định: Dashboard Tổng quan (UC22)
 
-  // UC26: Cấu hình giá cước
+  // Cấu hình giá cước
   late final TextEditingController _baseFareCtrl;
   late final TextEditingController _perKmCtrl;
 
-  // UC28: Trả lời khiếu nại
+  // Trả lời khiếu nại
   final TextEditingController _replyTicketCtrl = TextEditingController();
+  String _userRoleFilter = 'ALL';
+  int _selectedComplaintIndex = 0;
+  int _selectedKycDriverIndex = 0;
 
-  // UC44: Kiểm tra điểm Geofence & Vẽ Polygon trực tiếp trên bản đồ
+  // Kiểm tra điểm Geofence & Vẽ Polygon trực tiếp trên bản đồ
   final TextEditingController _testLatCtrl =
       TextEditingController(text: '10.7520');
   final TextEditingController _testLngCtrl =
@@ -45,46 +63,75 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   String _geofenceCheckResult =
       'Nhấn Kiểm tra để xác định vùng Geofence bằng thuật toán Ray-Casting';
 
-  // UC45: Gửi thông báo Broadcast
+  // Gửi thông báo Broadcast
   final TextEditingController _broadcastTitleCtrl = TextEditingController(
     text: 'Bảo trì nâng cấp cụm máy chủ định vị PostGIS lúc 02:00 sáng mai',
   );
   String _broadcastTarget = 'Tất cả người dùng';
 
-  // UC46: Chọn nhóm quyền RBAC & Cấu hình Cloud Supabase PostGIS
-  int _selectedRbacRoleIndex = 1; // Mặc định: Điều phối viên
+  // Chọn nhóm quyền RBAC & Cấu hình Cloud Supabase PostGIS
+  int _selectedRbacRoleIndex = 0;
   final TextEditingController _supabaseUrlCtrl = TextEditingController(
     text: 'https://your-project.supabase.co',
   );
   final TextEditingController _supabaseAnonKeyCtrl = TextEditingController();
 
   static const List<String> _screenTitles = [
-    '8.24: UC22 Dashboard Tổng quan Hệ thống',
-    '8.25: UC23 Quản lý Người dùng & Cửa hàng',
-    '8.26: UC24 Duyệt Hồ sơ Tài xế (KYC)',
-    '8.27: UC25 Bản đồ Giám sát Đội xe GPS',
-    '8.28: UC26 Cấu hình Bảng giá & Phụ phí',
-    '8.29: UC27 Quản lý Chiến dịch Voucher',
-    '8.30: UC28 Giải quyết Khiếu nại (Ticket)',
-    '8.31: UC29 Đối soát & Duyệt Rút tiền',
-    '8.32: UC43 Điều phối Đơn hàng Thủ công',
-    '8.33: UC44 Bản đồ Vùng Geofencing Polygon',
-    '8.34: UC45 Gửi Thông báo Hàng loạt (Push)',
-    '8.35: UC46 Phân quyền Quản trị viên (RBAC)',
+    'Bảng điều khiển',
+    'Quản lý Người dùng',
+    'Duyệt hồ sơ Đối tác',
+    'Giám sát Đội xe GPS',
+    'Giá cước & Khuyến mãi',
+    'Báo cáo thống kê',
+    'Khiếu nại & Hỗ trợ',
+    'Tài chính & Rút tiền',
+    'Điều phối Đơn hàng',
+    'Vùng Geofence',
+    'Thông báo Push',
+    'Phân quyền RBAC',
   ];
 
   @override
   void initState() {
     super.initState();
+    if (widget.forcedScreenIndex != null) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
     _baseFareCtrl =
         TextEditingController(text: _store.baseFareConfig.toStringAsFixed(0));
     _perKmCtrl =
         TextEditingController(text: _store.pricePerKmConfig.toStringAsFixed(0));
+    if (EnvConfig.supabaseUrl.isNotEmpty) {
+      _supabaseUrlCtrl.text = EnvConfig.supabaseUrl;
+    }
+    if (EnvConfig.supabaseAnonKey.isNotEmpty) {
+      _supabaseAnonKeyCtrl.text = EnvConfig.supabaseAnonKey;
+    }
     _store.addListener(_onStoreChanged);
   }
 
+  @override
+  void didUpdateWidget(covariant AdminSubsystemEntry oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.forcedScreenIndex != null &&
+        widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
+  }
+
+  String? _lastSyncedAdminPricingKey;
+
   void _onStoreChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final storeBase = _store.baseFareConfig.toStringAsFixed(0);
+    final storePerKm = _store.pricePerKmConfig.toStringAsFixed(0);
+    final pricingKey = '$storeBase|$storePerKm';
+    if (_lastSyncedAdminPricingKey != pricingKey) {
+      _lastSyncedAdminPricingKey = pricingKey;
+      _baseFareCtrl.text = storeBase;
+      _perKmCtrl.text = storePerKm;
+    }
+    setState(() {});
   }
 
   @override
@@ -124,143 +171,420 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 900) {
+        final isWide = constraints.maxWidth >= 860;
+        if (isWide) {
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 290.0);
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 265,
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.darkSidebar,
-                  borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: Row(
-                        children: [
-                          Animated3dIconBadge(
-                            style: _adminScreen3dStyle(_selectedScreenIndex),
-                            size: 46,
-                            showRadarPulse: false,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'ADMIN PORTAL CMS\nVai trò: ${_store.currentAdminRoleName}',
-                              style: const TextStyle(
-                                color: AppColors.surface,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(color: Colors.white24),
-                    ...List.generate(_screenTitles.length, (index) {
-                      final selected = _selectedScreenIndex == index;
-                      return ListTile(
-                        dense: true,
-                        selected: selected,
-                        selectedTileColor: AppColors.primary,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        title: Text(
-                          _screenTitles[index],
-                          style: TextStyle(
-                            color:
-                                selected ? AppColors.surface : Colors.white70,
-                            fontSize: 12,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w500,
-                          ),
-                        ),
-                        onTap: () =>
-                            setState(() => _selectedScreenIndex = index),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
+              _buildGoMauAdminSidebar(sidebarWidth),
               Expanded(
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildActiveAdminRoleHeader(),
-                    const SizedBox(height: AppSpacing.sm),
-                    _buildActiveAdminScreen(context),
+                    _buildAdminWhiteTopBar(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.all(contentPadding),
+                        child: _buildActiveAdminScreen(context),
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           );
         }
+        final mobilePadding = (constraints.maxWidth * 0.035).clamp(10.0, 18.0);
         return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildActiveAdminRoleHeader(),
-            const SizedBox(height: AppSpacing.xs),
-            _buildScreenSelectorBar(),
-            const SizedBox(height: AppSpacing.md),
-            _buildActiveAdminScreen(context),
+            _buildAdminWhiteTopBar(),
+            Padding(
+              padding: EdgeInsets.fromLTRB(mobilePadding, 10, mobilePadding, 0),
+              child: _buildScreenSelectorBar(),
+            ),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(mobilePadding),
+                child: _buildActiveAdminScreen(context),
+              ),
+            ),
           ],
         );
       },
     );
   }
 
-  Widget _buildActiveAdminRoleHeader() {
+  Widget _buildGoMauAdminSidebar(double sidebarWidth) {
+    // Thứ tự hiển thị trên Sidebar giống uc22_dashboard.jpg:
+    // Nhóm 1: Dashboard (0), Người dùng (1), Tài xế (2), Đơn hàng (8), Giám sát GPS (3)
+    // Nhóm 2: Giá cước (4), Khuyến mãi (5), Khu vực Geofence (9), Khiếu nại (6), Tài chính (7), Thông báo Push (10), Cài đặt (11)
+    const topGroupIndices = [0, 1, 2, 8, 3];
+    const bottomGroupIndices = [4, 5, 9, 6, 7, 10, 11];
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.divider),
+      width: sidebarWidth,
+      decoration: const BoxDecoration(
+        color: AppColors.techBg,
+        border: Border(
+          right: BorderSide(color: AppColors.ink, width: 1.6),
+        ),
       ),
-      child: Row(
-        children: [
-          Animated3dIconBadge(
-            style: _adminScreen3dStyle(_selectedScreenIndex),
-            size: 46,
-            showRadarPulse: true,
-            isSelected: true,
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            'Phiên quyền RBAC:',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
+      child: Material(
+        type: MaterialType.transparency,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 16, 20),
               child: Row(
-                children: _store.rbacRoles.map((r) {
-                  final active = _store.currentAdminRoleName == r.roleName;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      label: Text(
-                        r.roleName,
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                      selected: active,
-                      onSelected: (_) => _store.setAdminActiveRole(r.roleName),
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.acid,
+                      border: Border.all(color: AppColors.techBg),
                     ),
-                  );
-                }).toList(),
+                    child: const Icon(
+                      Icons.hexagon_outlined,
+                      color: AppColors.techBg,
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'GO-MAU',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 16.5,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        Text(
+                          'ADMIN STUDIO',
+                          style: TextStyle(
+                            color: AppColors.acid,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-        ],
+            ...topGroupIndices.map(_buildSidebarItem),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+              child: Divider(color: AppColors.techLine, height: 1),
+            ),
+            ...bottomGroupIndices.map(_buildSidebarItem),
+            const SizedBox(height: 16),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18),
+              child: Divider(color: AppColors.techLine, height: 1),
+            ),
+            ListTile(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+              leading: const Icon(
+                Icons.logout_rounded,
+                color: AppColors.pink,
+                size: 19,
+              ),
+              title: const Text(
+                'Đăng xuất',
+                style: TextStyle(
+                  color: AppColors.pink,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              onTap: widget.onLogout,
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
+      ),
+    );
+  }
+
+  Widget _buildSidebarItem(int index) {
+    final selected = _selectedScreenIndex == index;
+    const icons = [
+      Icons.grid_view_rounded, // 0: Dashboard
+      Icons.people_outline_rounded, // 1: Người dùng
+      Icons.person_pin_circle_outlined, // 2: Tài xế
+      Icons.location_on_outlined, // 3: Giám sát GPS
+      Icons.paid_outlined, // 4: Giá cước
+      Icons.percent_rounded, // 5: Khuyến mãi
+      Icons.chat_bubble_outline_rounded, // 6: Khiếu nại
+      Icons.credit_card_rounded, // 7: Tài chính
+      Icons.shopping_cart_outlined, // 8: Đơn hàng
+      Icons.layers_outlined, // 9: Vùng Geofence
+      Icons.notifications_active_outlined, // 10: Thông báo Push
+      Icons.settings_outlined, // 11: Cài đặt
+    ];
+    final safeIcon = icons[index];
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+      child: InkWell(
+        onTap: () => setState(() => _selectedScreenIndex = index),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.violet.withValues(alpha: 0.25)
+                : Colors.transparent,
+            border: selected
+                ? const Border(
+                    left: BorderSide(color: AppColors.acid, width: 4.0),
+                  )
+                : null,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                safeIcon,
+                size: 19,
+                color: selected ? AppColors.acid : AppColors.techMuted,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _screenTitles[index],
+                  style: TextStyle(
+                    color: selected ? Colors.white : AppColors.techMuted,
+                    fontSize: 13,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAdminWhiteTopBar() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showSearch = constraints.maxWidth >= 900;
+        final showProfileText = constraints.maxWidth >= 640;
+        final compact = constraints.maxWidth < 520;
+        return Container(
+          height: 64,
+          padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 24),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              bottom: BorderSide(color: AppColors.ink, width: 1.5),
+            ),
+          ),
+          child: Row(
+            children: [
+              Animated3dIconBadge(
+                style: _adminScreen3dStyle(_selectedScreenIndex),
+                size: compact ? 32 : 38,
+                showRadarPulse: false,
+                isSelected: true,
+              ),
+              SizedBox(width: compact ? 8 : 12),
+              Expanded(
+                child: Text(
+                  _selectedScreenIndex == 0
+                      ? 'Tổng quan'
+                      : _screenTitles[_selectedScreenIndex],
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 15.5 : 20,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.ink,
+                    letterSpacing: -0.6,
+                  ),
+                ),
+              ),
+              if (showSearch) ...[
+                const SizedBox(width: 12),
+                PopupMenuButton<int>(
+                  tooltip: 'Chuyển nhanh đến màn hình Quản trị',
+                  onSelected: (idx) => setState(() => _selectedScreenIndex = idx),
+                  itemBuilder: (context) => List.generate(
+                    _screenTitles.length,
+                    (idx) => PopupMenuItem<int>(
+                      value: idx,
+                      child: Row(
+                        children: [
+                          Icon(
+                            idx == _selectedScreenIndex
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.arrow_right_rounded,
+                            size: 16,
+                            color: idx == _selectedScreenIndex
+                                ? AppColors.violet
+                                : AppColors.ink,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _screenTitles[idx],
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: idx == _selectedScreenIndex
+                                    ? FontWeight.w800
+                                    : FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  child: Container(
+                    width: 210,
+                    height: 38,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: AppColors.paper,
+                      border: Border.all(color: AppColors.ink, width: 1.2),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(
+                          Icons.search_rounded,
+                          size: 18,
+                          color: AppColors.ink,
+                        ),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Tìm nhanh màn hình...',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 11.5,
+                              fontFamily: 'Consolas',
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Icon(
+                          Icons.unfold_more_rounded,
+                          size: 16,
+                          color: AppColors.ink,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(width: 6),
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => _selectedScreenIndex = 10),
+                    icon: const Icon(
+                      Icons.notifications_none_rounded,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  if (_store.notifications.any((n) => !n.isRead))
+                    Positioned(
+                      right: 8,
+                      top: 8,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        color: AppColors.pink,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 6),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.acid,
+                  border: Border.all(color: AppColors.ink, width: 1.2),
+                ),
+                child: const Icon(Icons.person, color: AppColors.ink, size: 18),
+              ),
+              if (showProfileText) ...[
+                const SizedBox(width: 10),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 190),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Admin',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 13,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      Text(
+                        '${_store.users.where((u) => u.role == SubsystemRole.admin).firstOrNull?.fullName ?? 'Quản trị viên'} (${_store.currentAdminRoleName})',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                          fontFamily: 'Consolas',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (widget.onLogout != null) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.ink,
+                    backgroundColor: AppColors.acid,
+                    side: const BorderSide(color: AppColors.ink, width: 1.2),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.zero,
+                    ),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compact ? 8 : 10,
+                      vertical: 6,
+                    ),
+                  ),
+                  onPressed: widget.onLogout,
+                  icon: const Icon(Icons.logout_rounded, size: 15),
+                  label: Text(
+                    compact ? 'Thoát' : 'Đăng xuất',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -274,17 +598,21 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
         itemBuilder: (context, index) {
           final isSelected = _selectedScreenIndex == index;
           return ChoiceChip(
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.zero,
+              side: BorderSide(color: AppColors.ink, width: 1.2),
+            ),
             label: Text(
               _screenTitles[index],
               style: TextStyle(
                 fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected ? AppColors.surface : AppColors.textPrimary,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: isSelected ? AppColors.acid : AppColors.ink,
               ),
             ),
             selected: isSelected,
-            selectedColor: AppColors.primary,
-            backgroundColor: AppColors.surface,
+            selectedColor: AppColors.ink,
+            backgroundColor: Colors.white,
             onSelected: (_) => setState(() => _selectedScreenIndex = index),
           );
         },
@@ -323,888 +651,176 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     }
   }
 
-  /// Hình 8.24: UC22 Dashboard Tổng quan Hệ thống
-  Widget _buildSystemOverviewDashboard() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.24: Dashboard Tổng quan Hệ thống (UC22)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _adminKpi(
-                  'Đơn hàng hôm nay',
-                  '1,248 (+12.5%)',
-                  AppColors.primary,
-                  Icon3dStyle.parcelBox,
-                ),
-                _adminKpi(
-                  'Tài xế trực tuyến',
-                  '312 (+5.2%)',
-                  AppColors.success,
-                  Icon3dStyle.scooterExpress,
-                ),
-                _adminKpi(
-                  'Doanh thu ngày',
-                  '45.6M VNĐ (+8.4%)',
-                  AppColors.accent,
-                  Icon3dStyle.walletVault,
-                ),
-                _adminKpi(
-                  'Tỷ lệ thành công',
-                  '98.2%',
-                  AppColors.success,
-                  Icon3dStyle.gpsPinRadar,
-                ),
-              ],
-            ),
-            const Divider(),
-            Text(
-              'Trạng thái Đồng bộ CSDL: ${_store.lastSyncStatusMessage}',
-              style: const TextStyle(
-                fontSize: 12,
-                color: AppColors.primary,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Danh sách vận đơn thời gian thực trên toàn hệ thống:',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            ..._store.orders.map(
-              (o) => ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${o.trackingCode} • Khách: ${o.customerName} -> ${o.recipientName}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Tài xế: ${o.assignedDriverName ?? "Chưa gán"} • Phí: ${CurrencyFormatter.formatVnd(o.totalAmount)}',
-                ),
-                trailing: Chip(
-                  label: Text(
-                    o.status.displayName,
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _adminKpi(
-    String label,
-    String val,
-    Color color,
-    Icon3dStyle iconStyle,
-  ) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Animated3dIconBadge(
-            style: iconStyle,
-            size: 42,
-            showRadarPulse: false,
-          ),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                val,
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 15,
-                  color: color,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Hình 8.25: UC23 Quản lý Người dùng & Cửa hàng
-  Widget _buildUserAndMerchantManagementView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.25: Quản lý Tài khoản Người dùng & Đối tác (UC23)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(child: Text('KH')),
-              title: Text(
-                '${_store.customerFullName} (${_store.customerPhone})',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle:
-                  Text('Vai trò: CUSTOMER • Email: ${_store.customerEmail}'),
-              trailing: const Chip(label: Text('Hoạt động')),
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(child: Text('B2B')),
-              title: Text(
-                '${_store.merchantStoreName} (MST: ${_store.merchantTaxCode})',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                'Vai trò: MERCHANT • Đại diện: ${_store.merchantRepresentative}',
-              ),
-              trailing: const Chip(label: Text('Đã xác thực')),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.26: UC24 Xét duyệt Hồ sơ Tài xế (KYC + Kiểm tra quyền RBAC 'Tài xế: Phê duyệt')
-  Widget _buildDriverKycApprovalView() {
-    final canApproveDriver = _store.hasAdminPermission('Tài xế: Phê duyệt');
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.26: Xét duyệt Hồ sơ Đăng ký Tài xế KYC (UC24)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            if (!canApproveDriver)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  '🔒 Vai trò hiện tại không có quyền "Tài xế: Phê duyệt" (Cấu hình tại UC46).',
-                  style: TextStyle(color: AppColors.danger, fontSize: 12),
-                ),
-              ),
-            const SizedBox(height: AppSpacing.sm),
-            ..._store.drivers.map(
-              (drv) => Container(
-                margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.background,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '${drv.id} • ${drv.fullName} (${drv.phone})',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            'CCCD: ${drv.citizenId} • Xe: ${drv.vehicleType} (${drv.licensePlate}) • Trạng thái: ${drv.approvalStatus}',
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: canApproveDriver
-                          ? () =>
-                              _store.updateDriverApproval(drv.id, 'Đã duyệt')
-                          : null,
-                      child: const Text('Duyệt hồ sơ'),
-                    ),
-                    TextButton(
-                      onPressed: canApproveDriver
-                          ? () => _store.updateDriverApproval(drv.id, 'Từ chối')
-                          : null,
-                      child: const Text(
-                        'Từ chối',
-                        style: TextStyle(color: AppColors.danger),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.27: UC25 Bản đồ Giám sát Đội xe GPS Toàn Thành phố
-  Widget _buildFleetLiveGpsMonitorView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.27: Bản đồ Giám sát Đội xe GPS Thời gian thực (UC25)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 8,
-              children: const [
-                Chip(label: Text('Đang rảnh: 340 xe (Xanh lá)')),
-                Chip(label: Text('Đang giao hàng: 180 xe (Cam)')),
-                Chip(label: Text('Ngoại tuyến: 45 xe (Xám)')),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Map3dPerspectiveWidget(
-              height: 250,
-              is3dMode: _store.isMap3dEnabled,
-              speedKmh: _store.currentSpeedKmh,
-              onToggle3d: _store.toggleMap3d,
-              progressFraction: _store.routeProgressStep / 10.0,
-              nextTurnInstruction:
-                  'Trung tâm Điều hành PostGIS • 520 Tài xế đang phát tọa độ',
-              roadName:
-                  'Tọa độ xe #1: (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})',
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.28: UC26 Cấu hình Công thức Tính cước & Phụ phí
-  Widget _buildDynamicPricingConfigView() {
-    final canEditSystem = _store.hasAdminPermission('Hệ thống: Cài đặt');
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.28: Cấu hình Bảng giá & Phụ phí Động (UC26 - RULE-PRC-01)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _baseFareCtrl,
-                    enabled: canEditSystem,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Giá mở cửa 2km đầu (VNĐ)',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _perKmCtrl,
-                    enabled: canEditSystem,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Đơn giá mỗi km tiếp theo (VNĐ/km)',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Phụ phí giờ cao điểm (+10.000đ)'),
-              subtitle: const Text('Áp dụng từ 17:00 - 19:00'),
-              value: _store.isPeakSurchargeActive,
-              onChanged: canEditSystem
-                  ? (v) => setState(() => _store.isPeakSurchargeActive = v)
-                  : null,
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Phụ phí thời tiết xấu / Mưa ngập (+15.000đ)'),
-              value: _store.isWeatherSurchargeActive,
-              onChanged: canEditSystem
-                  ? (v) => setState(() => _store.isWeatherSurchargeActive = v)
-                  : null,
-            ),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: canEditSystem
-                    ? () {
-                        setState(() {
-                          _store.baseFareConfig =
-                              double.tryParse(_baseFareCtrl.text) ?? 25000;
-                          _store.pricePerKmConfig =
-                              double.tryParse(_perKmCtrl.text) ?? 5000;
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content:
-                                Text('Đã cập nhật cấu hình giá cước hệ thống!'),
-                          ),
-                        );
-                      }
-                    : null,
-                child: const Text('Lưu cấu hình Bảng giá'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.29: UC27 Quản lý Chiến dịch Khuyến mãi & Mã giảm giá
-  Widget _buildVoucherCampaignsView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.29: Quản lý Chiến dịch Khuyến mãi & Voucher (UC27)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ..._store.vouchers.map(
-              (v) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(
-                  Icons.local_offer_outlined,
-                  color: AppColors.accent,
-                ),
-                title: Text(
-                  '${v.code} • ${v.title}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Mức giảm: ${v.discountLabel} • Đơn tối thiểu: ${CurrencyFormatter.formatVnd(v.minOrderValue)} • HSD: ${v.expiryDate}',
-                ),
-                trailing: Chip(label: Text(v.status)),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.30: UC28 Giải quyết Khiếu nại & Sự cố
-  Widget _buildComplaintResolutionView() {
-    final activeTicket = _store.complaints.first;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.30: Trung tâm Giải quyết Khiếu nại & Sự cố (UC28)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Ticket đang chọn: ${activeTicket.ticketCode} (${activeTicket.orderId}) • Loại: ${activeTicket.issueType} • Trạng thái: ${activeTicket.status}',
-              style: const TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            ...activeTicket.replies.map(
-              (r) => Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Text('• $r', style: const TextStyle(fontSize: 12)),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _replyTicketCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Phản hồi của Quản trị viên / Phương án đền bù',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                    ),
-                    onPressed: () {
-                      _store.replyComplaint(
-                        activeTicket.ticketCode,
-                        _replyTicketCtrl.text,
-                        'Đã giải quyết',
-                      );
-                      _replyTicketCtrl.clear();
-                    },
-                    child: const Text('Phản hồi & Đóng khiếu nại'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.31: UC29 Đối soát Tài chính & Phê duyệt Rút tiền (Kiểm tra quyền RBAC 'Tài chính: Thanh toán')
-  Widget _buildFinancialWithdrawalApprovalView() {
-    final canApprovePayout = _store.hasAdminPermission('Tài chính: Thanh toán');
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.31: Đối soát Tài chính & Duyệt Lệnh Rút tiền (UC29)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            if (!canApprovePayout)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text(
-                  '🔒 Vai trò hiện tại không có quyền "Tài chính: Thanh toán" (Cấu hình tại UC46).',
-                  style: TextStyle(color: AppColors.danger, fontSize: 12),
-                ),
-              ),
-            const SizedBox(height: AppSpacing.sm),
-            ..._store.withdrawalRequests.map(
-              (req) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${req.ownerName} (${req.ownerRole}) • ${CurrencyFormatter.formatVnd(req.amount)}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  '${req.bankName} (${req.accountMasked}) • Ngày: ${req.requestDate} • Trạng thái: ${req.status}',
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextButton(
-                      onPressed: canApprovePayout
-                          ? () =>
-                              _store.updateWithdrawalStatus(req.id, 'Đã duyệt')
-                          : null,
-                      child: const Text('Duyệt lệnh'),
-                    ),
-                    TextButton(
-                      onPressed: canApprovePayout
-                          ? () =>
-                              _store.updateWithdrawalStatus(req.id, 'Từ chối')
-                          : null,
-                      child: const Text(
-                        'Từ chối',
-                        style: TextStyle(color: AppColors.danger),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.32: UC43 Quản lý & Điều phối Đơn hàng Thủ công
-  Widget _buildManualOrderDispatchView() {
-    final canEditOrder = _store.hasAdminPermission('Đơn: Sửa');
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.32: Quản lý & Điều phối Đơn hàng Thủ công (UC43)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ..._store.orders.map(
-              (ord) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${ord.trackingCode} • ${ord.pickupAddress} -> ${ord.dropoffAddress}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Trạng thái: ${ord.status.displayName} • Tài xế: ${ord.assignedDriverName ?? "Chưa có tài xế"}',
-                ),
-                trailing: ElevatedButton(
-                  onPressed: canEditOrder
-                      ? () => _store.driverAcceptOrder(ord.trackingCode)
-                      : null,
-                  child: const Text('Gán tài xế ngay'),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.33: UC44 Quản lý Vùng hoạt động Geofencing Polygon (Tương tác chấm đỉnh trên bản đồ)
-  Widget _buildGeofencePolygonZonesView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.33: Quản lý Vùng Hoạt động Geofencing Polygon (UC44)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Chạm trực tiếp lên bản đồ bên dưới để thêm đỉnh đa giác (Polygon Vertex) mới:',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Map3dPerspectiveWidget(
-              height: 220,
-              is3dMode: false,
-              drawnPolygonPoints: _draftPolygonOffsets,
-              nextTurnInstruction:
-                  'Công cụ Vẽ Đa giác PostGIS • Đã chấm ${_draftPolygonOffsets.length} đỉnh',
-              roadName: 'Chạm lên bản đồ để thêm đỉnh Polygon',
-              onTapRelativePoint: (relOffset) {
-                setState(() {
-                  _draftPolygonOffsets.add(relOffset);
-                });
-              },
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _newZoneNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Tên vùng Geofence mới',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: () => setState(() => _draftPolygonOffsets.clear()),
-                  child: const Text('Xóa đỉnh'),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _draftPolygonOffsets.length >= 3
-                      ? () {
-                          final vertices = _draftPolygonOffsets
-                              .map(
-                                (o) => GeoPoint(
-                                  latitude: 10.740 + o.dy * 0.05,
-                                  longitude: 106.660 + o.dx * 0.06,
-                                ),
-                              )
-                              .toList();
-                          _store.addCustomGeofenceZone(
-                            zoneName: _newZoneNameCtrl.text,
-                            zoneType: 'SURCHARGE_ZONE',
-                            surchargeRate: 20000,
-                            vertices: vertices,
-                          );
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                'Đã lưu vùng Polygon mới vào bảng geofence_zones!',
-                              ),
-                            ),
-                          );
-                        }
-                      : null,
-                  child: const Text('Lưu Polygon mới'),
-                ),
-              ],
-            ),
-            const Divider(),
-            ..._store.geofenceZones.map(
-              (z) => SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${z.zoneName} (${z.zoneType})',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Phụ phí vùng: ${CurrencyFormatter.formatVnd(z.surchargeRate)} • Số đỉnh Polygon: ${z.boundary.length}',
-                ),
-                value: z.isActive,
-                onChanged: (v) => _store.toggleGeofenceZone(z.id, v),
-              ),
-            ),
-            const Divider(),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _testLatCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Vĩ độ kiểm tra (Lat)'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _testLngCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Kinh độ kiểm tra (Lng)',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                ElevatedButton(
-                  onPressed: () {
-                    final pt = GeoPoint(
-                      latitude: double.tryParse(_testLatCtrl.text) ?? 10.752,
-                      longitude: double.tryParse(_testLngCtrl.text) ?? 106.672,
-                    );
-                    final matched = _store.geofenceZones
-                        .where(
-                          (z) =>
-                              z.isActive &&
-                              GeoMath.isPointInPolygon(pt, z.boundary),
-                        )
-                        .firstOrNull;
-                    setState(() {
-                      _geofenceCheckResult = matched != null
-                          ? 'Thuộc vùng: ${matched.zoneName} (Phụ phí: ${CurrencyFormatter.formatVnd(matched.surchargeRate)})'
-                          : 'Tọa độ nằm ngoài các vùng phụ phí đặc biệt.';
-                    });
-                  },
-                  child: const Text('Kiểm tra Polygon'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              _geofenceCheckResult,
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: AppColors.primary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.34: UC45 Gửi Thông báo Hệ thống Hàng loạt (Broadcast Push)
-  Widget _buildBroadcastNotificationView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.34: Phát Thông báo Hệ thống Hàng loạt (UC45)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 8,
-              children: [
-                'Tất cả người dùng',
-                'Khách hàng',
-                'Tài xế',
-                'Cửa hàng B2B',
-              ].map((g) {
-                return ChoiceChip(
-                  label: Text(g),
-                  selected: _broadcastTarget == g,
-                  onSelected: (_) => setState(() => _broadcastTarget = g),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _broadcastTitleCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Tiêu đề & Nội dung thông báo Push Notification',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  _store.broadcastSystemNotification(
-                    title: _broadcastTitleCtrl.text,
-                    targetGroup: _broadcastTarget,
-                  );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã phát thông báo tới nhóm: $_broadcastTarget!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.campaign_outlined),
-                label: const Text('Gửi thông báo ngay (FCM Push)'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.35: UC46 Phân quyền Quản trị viên (RBAC Permission Matrix)
-  Widget _buildRbacPermissionMatrixView() {
-    final activeRole = _store.rbacRoles[_selectedRbacRoleIndex];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.35: Ma trận Phân quyền Quản trị viên RBAC (UC46)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 8,
-              children: List.generate(_store.rbacRoles.length, (index) {
-                final r = _store.rbacRoles[index];
-                return ChoiceChip(
-                  label: Text(r.roleName),
-                  selected: _selectedRbacRoleIndex == index,
-                  onSelected: (_) =>
-                      setState(() => _selectedRbacRoleIndex = index),
-                );
-              }),
-            ),
-            const Divider(),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: activeRole.permissions.entries.map((entry) {
-                return FilterChip(
-                  label: Text(entry.key),
-                  selected: entry.value,
-                  onSelected: (v) => _store.toggleRbacPermission(
-                    activeRole.roleName,
-                    entry.key,
-                    v,
-                  ),
-                );
-              }).toList(),
-            ),
-            const Divider(height: 24),
-            Text(
-              'Kết nối Cloud Supabase PostgreSQL 16 + PostGIS Thực tế (16 Bảng)',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.primary,
-                  ),
-            ),
-            const SizedBox(height: 6),
-            TextField(
-              controller: _supabaseUrlCtrl,
-              decoration: const InputDecoration(
-                labelText: 'SUPABASE_URL (Project URL)',
-                prefixIcon: Icon(Icons.cloud_outlined),
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _supabaseAnonKeyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'SUPABASE_ANON_KEY (Public API Key)',
-                prefixIcon: Icon(Icons.vpn_key_outlined),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _store.lastSyncStatusMessage,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ),
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    final msg = await _store.configureAndSyncSupabaseCloud(
-                      url: _supabaseUrlCtrl.text,
-                      anonKey: _supabaseAnonKeyCtrl.text,
-                    );
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(msg)),
-                    );
-                  },
-                  icon: const Icon(Icons.sync, size: 16),
-                  label: const Text('Kết nối & Đồng bộ PostGIS'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
+  void _rebuildAdminUi(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 }
+
+class _MiniSparklinePainter extends CustomPainter {
+  final Color color;
+
+  const _MiniSparklinePainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final pts = <Offset>[
+      Offset(0, size.height * 0.85),
+      Offset(size.width * 0.22, size.height * 0.65),
+      Offset(size.width * 0.42, size.height * 0.35),
+      Offset(size.width * 0.60, size.height * 0.58),
+      Offset(size.width * 0.82, size.height * 0.12),
+      Offset(size.width, size.height * 0.25),
+    ];
+
+    final path = Path()..moveTo(pts.first.dx, pts.first.dy);
+    for (var i = 1; i < pts.length; i++) {
+      final prev = pts[i - 1];
+      final curr = pts[i];
+      final midX = (prev.dx + curr.dx) / 2;
+      path.cubicTo(midX, prev.dy, midX, curr.dy, curr.dx, curr.dy);
+    }
+
+    final fillPath = Path.from(path)
+      ..lineTo(size.width, size.height)
+      ..lineTo(0, size.height)
+      ..close();
+
+    canvas.drawPath(
+      fillPath,
+      Paint()
+        ..shader = LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.26),
+            color.withValues(alpha: 0.02),
+          ],
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+        ).createShader(Offset.zero & size),
+    );
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.4
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _GoMauRevenueLineChartPainter extends CustomPainter {
+  final List<double> blueNorm;
+  final List<double> orangeNorm;
+
+  const _GoMauRevenueLineChartPainter({
+    this.blueNorm = const [0.85, 0.34, 0.52, 0.10, 0.35, 0.48, 0.06],
+    this.orangeNorm = const [0.80, 0.52, 0.60, 0.28, 0.62, 0.66, 0.30],
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final gridPaint = Paint()
+      ..color = const Color(0xFF15131E)
+      ..strokeWidth = 1;
+    for (var i = 0; i <= 4; i++) {
+      final y = size.height * (i / 4.0);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    _drawSmoothSeries(canvas, size, blueNorm, const Color(0xFF5B33E6));
+    _drawSmoothSeries(canvas, size, orangeNorm, const Color(0xFFFF5E83));
+  }
+
+  void _drawSmoothSeries(
+    Canvas canvas,
+    Size size,
+    List<double> yFactors,
+    Color color,
+  ) {
+    final path = Path();
+    for (var i = 0; i < yFactors.length; i++) {
+      final x = size.width * (i / (yFactors.length - 1));
+      final y = size.height * yFactors[i];
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        final prevX = size.width * ((i - 1) / (yFactors.length - 1));
+        final prevY = size.height * yFactors[i - 1];
+        final midX = (prevX + x) / 2;
+        path.cubicTo(midX, prevY, midX, y, x, y);
+      }
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.8
+        ..strokeCap = StrokeCap.round,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GoMauRevenueLineChartPainter oldDelegate) =>
+      oldDelegate.blueNorm != blueNorm || oldDelegate.orangeNorm != orangeNorm;
+}
+
+class _GoMauOrderDonutPainter extends CustomPainter {
+  final double deliveredRatio;
+  final double inTransitRatio;
+  final double cancelledRatio;
+  final double otherRatio;
+
+  const _GoMauOrderDonutPainter({
+    this.deliveredRatio = 0.25,
+    this.inTransitRatio = 0.25,
+    this.cancelledRatio = 0.25,
+    this.otherRatio = 0.25,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final strokeWidth = 24.0;
+    final insetRect = rect.deflate(strokeWidth / 2);
+
+    final segments = [
+      (deliveredRatio, const Color(0xFF5B33E6)),
+      (inTransitRatio, const Color(0xFFFF5E83)),
+      (cancelledRatio, const Color(0xFFDC2626)),
+      (otherRatio, const Color(0xFF94A3B8)),
+    ];
+
+    var startAngle = -math.pi / 2;
+    for (final seg in segments) {
+      if (seg.$1 <= 0.0) continue;
+      final sweep = seg.$1 * 2 * math.pi;
+      final drawSweep = sweep > 0.04 ? sweep - 0.03 : sweep;
+      canvas.drawArc(
+        insetRect,
+        startAngle,
+        drawSweep,
+        false,
+        Paint()
+          ..color = seg.$2
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth,
+      );
+      startAngle += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _GoMauOrderDonutPainter oldDelegate) =>
+      oldDelegate.deliveredRatio != deliveredRatio ||
+      oldDelegate.inTransitRatio != inTransitRatio ||
+      oldDelegate.cancelledRatio != cancelledRatio ||
+      oldDelegate.otherRatio != otherRatio;
+}
+
 

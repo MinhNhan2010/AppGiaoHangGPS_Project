@@ -7,7 +7,7 @@ import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/order_entity.dart';
 import '../../../domain/enums/order_status.dart';
 
-/// Datasource kết nối trực tiếp tới 16 bảng PostgreSQL 16 + PostGIS trên Supabase (Chương 11 & 12)
+/// Datasource kết nối trực tiếp tới cơ sở dữ liệu PostgreSQL + PostGIS trên Supabase
 class SupabasePostgisDatasource {
   SupabaseClient _requireClient() {
     if (!EnvConfig.isSupabaseConfigured) {
@@ -19,7 +19,7 @@ class SupabasePostgisDatasource {
     return Supabase.instance.client;
   }
 
-  /// Truy vấn tổng quát cho bất kỳ bảng nào trong 16 bảng CSDL (Bảng 11.1 - 11.16)
+  /// Truy vấn tổng quát cho bất kỳ bảng nào trong cơ sở dữ liệu
   Future<List<Map<String, dynamic>>> fetchTableRecords(
     String tableName, {
     int limit = 100,

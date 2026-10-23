@@ -8,7 +8,7 @@ import '../theme/app_theme.dart';
 class SecurityAndBarcodeUtils {
   const SecurityAndBarcodeUtils._();
 
-  /// Che số điện thoại bảo vệ quyền riêng tư (Chương 15.3): 0912345678 -> 0912***678
+  /// Che số điện thoại bảo vệ quyền riêng tư: 0912345678 -> 0912***678
   static String maskPhoneNumber(String phone, {required bool shouldMask}) {
     final cleaned = phone.trim();
     if (!shouldMask || cleaned.length < 7) return cleaned;
@@ -17,7 +17,7 @@ class SecurityAndBarcodeUtils {
     return '$prefix***$suffix';
   }
 
-  /// Băm mật khẩu có muối (Salt) bảo mật xác thực tài khoản (UC01)
+  /// Băm mật khẩu có muối (Salt) bảo mật xác thực tài khoản
   static String hashPasswordWithSalt(String password, String phoneSalt) {
     final bytes = utf8.encode('SALT:$phoneSalt|PWD:$password|PEPPER:GPS2026');
     var h1 = 0x811c9dc5;
@@ -31,7 +31,7 @@ class SecurityAndBarcodeUtils {
         .toUpperCase();
   }
 
-  /// Tạo chữ ký giao dịch chống trùng lặp (RULE-FIN-04: Idempotency Signature)
+  /// Tạo chữ ký giao dịch chống trùng lặp
   static String generatePaymentSignature({
     required String orderCode,
     required double amount,
@@ -51,7 +51,7 @@ class SecurityAndBarcodeUtils {
         .toUpperCase();
   }
 
-  /// Tạo chữ ký giao dịch kèm mã giao dịch chống thu trùng (RULE-FIN-04)
+  /// Tạo chữ ký giao dịch kèm mã giao dịch chống thu trùng
   static String generatePaymentIdempotencySignature({
     required String orderId,
     required double amount,
@@ -65,7 +65,7 @@ class SecurityAndBarcodeUtils {
     );
   }
 
-  /// Tạo chuỗi chuẩn EMVCo VietQR Napas247 kèm mã kiểm tra CRC-16/CCITT-FALSE thực tế (UC07)
+  /// Tạo chuỗi chuẩn EMVCo VietQR Napas247 kèm mã kiểm tra CRC-16/CCITT-FALSE thực tế
   static String generateEmvVietQrPayload({
     required String orderCode,
     required double amountVnd,
@@ -94,7 +94,7 @@ class SecurityAndBarcodeUtils {
     return '$bodyWithoutCrc$crcHex';
   }
 
-  /// Xuất phiếu giao hàng chuẩn khổ A6 (105x148mm) ra file HTML+SVG thực tế trên ổ cứng (UC34)
+  /// Xuất phiếu giao hàng chuẩn khổ A6 (105x148mm) ra file HTML+SVG thực tế trên ổ cứng
   static Future<String> exportA6LabelToHtmlFile({
     required String trackingCode,
     required String storeName,
@@ -137,7 +137,7 @@ class SecurityAndBarcodeUtils {
     return file.path;
   }
 
-  /// Xuất chứng từ ảnh bằng chứng giao hàng POD đóng dấu Watermark GPS thực tế ra file SVG trên ổ cứng (UC17)
+  /// Xuất chứng từ ảnh bằng chứng giao hàng POD đóng dấu Watermark GPS thực tế ra file SVG trên ổ cứng
   static Future<String> exportPodWatermarkToSvgFile({
     required String orderCode,
     required GeoPoint driverLocation,
@@ -157,7 +157,7 @@ class SecurityAndBarcodeUtils {
     );
     final svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="600" height="260">
   <rect width="100%" height="100%" fill="#0F172A" rx="12"/>
-  <text x="20" y="40" fill="#28A745" font-size="18" font-family="monospace" font-weight="bold">CHỨNG TỪ ẢNH POD ĐÓNG DẤU WATERMARK GPS (RULE-ORD-03)</text>
+  <text x="20" y="40" fill="#28A745" font-size="18" font-family="monospace" font-weight="bold">CHỨNG TỪ ẢNH XÁC NHẬN GIAO HÀNG ĐÓNG DẤU GPS</text>
   <text x="20" y="80" fill="#FFFFFF" font-size="14" font-family="monospace">Mã vận đơn : $orderCode | Người nhận: $recipientName</text>
   <text x="20" y="115" fill="#00B4D8" font-size="14" font-family="monospace">Tọa độ GPS : (${driverLocation.latitude.toStringAsFixed(6)}, ${driverLocation.longitude.toStringAsFixed(6)}) SRID=4326</text>
   <text x="20" y="150" fill="#FFC107" font-size="14" font-family="monospace">Khoảng cách: ${distanceMeters.toStringAsFixed(1)}m (&lt;= 100m Geofence) | Mã OTP: $otpCode</text>
@@ -169,7 +169,7 @@ class SecurityAndBarcodeUtils {
   }
 }
 
-/// Widget vẽ Mã vạch Code-128 thực tế từ chuỗi mã vận đơn (UC34 - Hình 8.41)
+/// Widget vẽ Mã vạch Code-128 thực tế từ chuỗi mã vận đơn
 class Code128BarcodeWidget extends StatelessWidget {
   final String data;
   final double height;
@@ -252,7 +252,7 @@ class _Code128Painter extends CustomPainter {
       oldDelegate.data != data;
 }
 
-/// Widget vẽ Ma trận QR Code 21x21 chuẩn (UC06 VietQR & UC34 Phiếu gửi hàng A6)
+/// Widget vẽ Ma trận QR Code 21x21 chuẩn cho thanh toán VietQR và phiếu gửi hàng A6
 class QrMatrixPainterWidget extends StatelessWidget {
   final String payload;
   final double size;
@@ -337,7 +337,7 @@ class _QrMatrixPainter extends CustomPainter {
       oldDelegate.payload != payload;
 }
 
-/// Khung ảnh bằng chứng giao hàng POD có đóng dấu Watermark GPS & Timestamp (UC18 - RULE-ORD-03)
+/// Khung ảnh bằng chứng giao hàng POD có đóng dấu Watermark GPS & Timestamp
 class PodGpsWatermarkPhotoCard extends StatelessWidget {
   final GeoPoint driverLocation;
   final String recipientName;
@@ -383,7 +383,7 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'ẢNH POD ĐÓNG DẤU WATERMARK GPS (RULE-ORD-03)',
+                  'ẢNH XÁC NHẬN GIAO HÀNG ĐÓNG DẤU GPS (POD)',
                   style: TextStyle(
                     color: isWithinGeofence
                         ? AppColors.success
@@ -402,7 +402,9 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  'Cách điểm giao: ${distanceToDropoffMeters.toStringAsFixed(0)}m',
+                  distanceToDropoffMeters >= 1000
+                      ? 'Cách điểm giao: ${(distanceToDropoffMeters / 1000.0).toStringAsFixed(1)}km'
+                      : 'Cách điểm giao: ${distanceToDropoffMeters.toStringAsFixed(0)}m',
                   style: TextStyle(
                     color: isWithinGeofence ? AppColors.success : Colors.amber,
                     fontSize: 11,

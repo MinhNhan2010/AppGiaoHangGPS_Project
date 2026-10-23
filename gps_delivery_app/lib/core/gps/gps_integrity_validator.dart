@@ -22,7 +22,7 @@ class BatteryTrackingPolicy {
 class GpsIntegrityValidator {
   const GpsIntegrityValidator._();
 
-  /// Kiểm định tính toàn vẹn mẫu tọa độ GPS theo quy tắc RULE-GEO-01 đến RULE-GEO-05 (Chương 14.1 - Bảng 33)
+  /// Kiểm định tính toàn vẹn mẫu tọa độ GPS trên thiết bị
   static void validateSample({
     required GeoPoint currentPoint,
     required int currentTimestampMs,
@@ -32,7 +32,7 @@ class GpsIntegrityValidator {
     double? reportedSpeedKmh,
     bool isAccelerometerActive = true,
   }) {
-    // RULE-GEO-01: Kiểm tra cờ giả lập vị trí (Mock Location) từ hệ điều hành
+    // Kiểm tra cờ giả lập vị trí (Mock Location) từ hệ điều hành
     if (isMockFlaggedByOs) {
       throw const GpsIntegrityException(
         ruleId: 'RULE-GEO-01',
@@ -40,7 +40,7 @@ class GpsIntegrityValidator {
       );
     }
 
-    // RULE-GEO-03: Đối chiếu độ khớp giữa cảm biến gia tốc IMU và vận tốc GPS
+    // Đối chiếu độ khớp giữa cảm biến gia tốc IMU và vận tốc GPS
     if ((reportedSpeedKmh ?? 0.0) > 30.0 && !isAccelerometerActive) {
       throw const GpsIntegrityException(
         ruleId: 'RULE-GEO-03',
@@ -54,7 +54,7 @@ class GpsIntegrityValidator {
         final distMeters = GeoMath.distanceMeters(previousPoint, currentPoint);
         final computedSpeedKmh = (distMeters / deltaSec) * 3.6;
 
-        // RULE-GEO-02: Ngưỡng vận tốc dịch chuyển bất thường (> 120 km/h)
+        // Ngưỡng vận tốc dịch chuyển bất thường (> 120 km/h)
         if (computedSpeedKmh > EnvConfig.maxValidVehicleSpeedKmh) {
           throw GpsIntegrityException(
             ruleId: 'RULE-GEO-02',
@@ -66,7 +66,7 @@ class GpsIntegrityValidator {
     }
   }
 
-  /// RULE-GEO-05: Phát hiện bất thường khi tài xế đứng yên >= 15 phút trong trạng thái đang giao hàng
+  /// Phát hiện bất thường khi tài xế đứng yên >= 15 phút trong trạng thái đang giao hàng
   static bool isStationaryAnomaly({
     required GeoPoint anchorPoint,
     required GeoPoint currentPoint,
@@ -79,7 +79,7 @@ class GpsIntegrityValidator {
     return elapsedSeconds >= EnvConfig.stationaryAnomalyAlertSeconds;
   }
 
-  /// Chính sách điều tiết tần suất phát GPS và đồ họa 3D theo dung lượng pin (Chương 15.2 - Bảng 36)
+  /// Chính sách điều tiết tần suất phát GPS và đồ họa 3D theo dung lượng pin
   static BatteryTrackingPolicy resolvePolicy({
     required int batteryLevelPercent,
     required bool isCharging,

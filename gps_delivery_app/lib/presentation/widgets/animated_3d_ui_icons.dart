@@ -178,6 +178,11 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
           builder: (context, _) {
             final phase = _controller.value;
             final fullAngle = phase * math.pi * 2.0;
+            if (_tapImpulse > 0.001) {
+              _tapImpulse = (_tapImpulse * 0.92).clamp(0.0, 1.0);
+            } else {
+              _tapImpulse = 0.0;
+            }
 
             // Tính toán chuyển động vật lý 3D đặc trưng riêng cho từng mô hình 3D Studio
             final motion = _computePhysical3dMotion(
@@ -189,12 +194,13 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
 
             final dynamicTiltX = _pointerTiltX + motion.pitchX;
             final dynamicTiltY = _pointerTiltY + motion.yawY;
+            final impulseScale = 1.0 + _tapImpulse * 0.14;
 
             final transform3d = Matrix4.identity()
-              ..setEntry(3, 2, 0.0022)
+              ..setEntry(3, 2, 0.0026)
               ..translateByDouble(
                 motion.offsetX,
-                motion.offsetY,
+                motion.offsetY - _tapImpulse * 5.0,
                 0.0,
                 1.0,
               )
@@ -202,33 +208,38 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
               ..rotateY(dynamicTiltY)
               ..rotateZ(motion.rollZ)
               ..scaleByDouble(
-                motion.scale,
-                motion.scale,
+                motion.scale * impulseScale,
+                motion.scale * impulseScale,
                 1.0,
                 1.0,
               );
 
             final shadowScale = (1.0 - (motion.offsetY.abs() / 34.0)).clamp(
-              0.66,
-              1.04,
+              0.64,
+              1.06,
             );
 
             return SizedBox(
               width: widget.size,
-              height: widget.size + 14,
+              height: widget.size + 16,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
-                  // Vòng sóng xung kích Radar 3D lan tỏa mượt bên ngoài huy hiệu
-                  if (widget.showRadarPulse)
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _VolumetricHaloPulsePainter(
-                          progress: phase,
-                          color: widget.style.glowColor,
-                        ),
+                  // Đế năng lượng 3D Holographic Pedestal & Vòng quỹ đạo Gyroscope 60 FPS
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _Holographic3dPedestalPainter(
+                        progress: phase,
+                        primaryColor: widget.style.primaryColor,
+                        secondaryColor: widget.style.secondaryColor,
+                        glowColor: widget.style.glowColor,
+                        isSelected: widget.isSelected,
+                        showRadarPulse: widget.showRadarPulse,
+                        tiltX: dynamicTiltX,
+                        tiltY: dynamicTiltY,
                       ),
                     ),
+                  ),
                   // Bóng đổ môi trường 3D (Ambient Occlusion Shadow) co giãn theo độ cao vật thể
                   Positioned(
                     bottom: 1,
@@ -236,16 +247,16 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                       scaleX: shadowScale,
                       scaleY: shadowScale * 0.36,
                       child: Container(
-                        width: widget.size * 0.72,
+                        width: widget.size * 0.74,
                         height: 16,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
                               color: widget.style.secondaryColor.withValues(
-                                alpha: 0.38 * shadowScale,
+                                alpha: 0.42 * shadowScale,
                               ),
-                              blurRadius: 14,
+                              blurRadius: 15,
                               spreadRadius: 2,
                             ),
                           ],
@@ -266,16 +277,23 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                         border: Border.all(
                           color: widget.isSelected
                               ? widget.style.primaryColor
-                              : Colors.white.withValues(alpha: 0.92),
-                          width: widget.isSelected ? 2.5 : 1.6,
+                              : Colors.white.withValues(alpha: 0.95),
+                          width: widget.isSelected ? 2.6 : 1.8,
                         ),
                         boxShadow: [
                           BoxShadow(
                             color: widget.style.primaryColor.withValues(
-                              alpha: widget.isSelected ? 0.48 : 0.28,
+                              alpha: widget.isSelected ? 0.54 : 0.32,
                             ),
-                            blurRadius: widget.isSelected ? 16 : 10,
-                            offset: const Offset(0, 5),
+                            blurRadius: widget.isSelected ? 18 : 12,
+                            offset: const Offset(0, 6),
+                          ),
+                          BoxShadow(
+                            color: widget.style.glowColor.withValues(
+                              alpha: widget.isSelected ? 0.38 : 0.18,
+                            ),
+                            blurRadius: 10,
+                            spreadRadius: 1,
                           ),
                         ],
                       ),
@@ -285,7 +303,7 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                           children: [
                             // Lớp 1: Kết xuất Mô hình 3D Studio độ phân giải cao (Ray-traced Clay/Metallic AI Render)
                             Transform.scale(
-                              scale: 1.08,
+                              scale: 1.09,
                               child: Image.asset(
                                 widget.style.assetPath,
                                 fit: BoxFit.cover,
@@ -404,39 +422,126 @@ class _Physical3dMotion {
   });
 }
 
-/// Vòng hào quang xung kích Volumetric mềm mại bên ngoài huy hiệu 3D
-class _VolumetricHaloPulsePainter extends CustomPainter {
+/// Đế năng lượng Holographic 3D & Vòng Quỹ đạo Con quay Hồi chuyển 60 FPS
+class _Holographic3dPedestalPainter extends CustomPainter {
   final double progress;
-  final Color color;
+  final Color primaryColor;
+  final Color secondaryColor;
+  final Color glowColor;
+  final bool isSelected;
+  final bool showRadarPulse;
+  final double tiltX;
+  final double tiltY;
 
-  const _VolumetricHaloPulsePainter({
+  const _Holographic3dPedestalPainter({
     required this.progress,
-    required this.color,
+    required this.primaryColor,
+    required this.secondaryColor,
+    required this.glowColor,
+    required this.isSelected,
+    required this.showRadarPulse,
+    required this.tiltX,
+    required this.tiltY,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2 - 2);
     final maxRadius = size.width * 0.50;
+    final angle = progress * math.pi * 2.0;
 
-    for (int i = 0; i < 2; i++) {
-      final waveProgress = (progress + i * 0.5) % 1.0;
-      final radius = maxRadius * (0.68 + 0.34 * waveProgress);
-      final alpha = (1.0 - waveProgress).clamp(0.0, 1.0) * 0.42;
+    // 1. Vòng sóng xung kích Radar 3D lan tỏa đồng tâm
+    if (showRadarPulse) {
+      for (int i = 0; i < 3; i++) {
+        final waveProgress = (progress + i / 3.0) % 1.0;
+        final radius = maxRadius * (0.62 + 0.40 * waveProgress);
+        final alpha =
+            (1.0 - waveProgress).clamp(0.0, 1.0) * (isSelected ? 0.52 : 0.36);
 
-      final paint = Paint()
-        ..color = color.withValues(alpha: alpha)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.4 * (1.0 - waveProgress * 0.5)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
+        final paint = Paint()
+          ..color = glowColor.withValues(alpha: alpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.2 * (1.0 - waveProgress * 0.45)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5);
 
-      canvas.drawCircle(center, radius, paint);
+        canvas.drawCircle(center, radius, paint);
+      }
     }
+
+    // 2. Vòng quỹ đạo Gyroscope 3D elip nghiêng xoay ngược chiều nhau quanh huy hiệu
+    for (int ringIdx = 0; ringIdx < 2; ringIdx++) {
+      final dir = ringIdx == 0 ? 1.0 : -1.0;
+      final orbitTilt =
+          (ringIdx == 0 ? 0.42 : -0.38) + tiltY * 0.45 + tiltX * 0.25;
+      final rx = maxRadius * (ringIdx == 0 ? 0.96 : 0.88);
+      final ry = maxRadius * (ringIdx == 0 ? 0.36 : 0.32);
+
+      canvas.save();
+      canvas.translate(center.dx, center.dy);
+      canvas.rotate(orbitTilt + math.sin(angle) * 0.08 * dir);
+
+      final orbitRect = Rect.fromCenter(
+        center: Offset.zero,
+        width: rx * 2.0,
+        height: ry * 2.0,
+      );
+      canvas.drawOval(
+        orbitRect,
+        Paint()
+          ..color = (ringIdx == 0 ? glowColor : primaryColor).withValues(
+            alpha: isSelected ? 0.44 : 0.24,
+          )
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = isSelected ? 1.6 : 1.1,
+      );
+
+      // Hạt vệ tinh Photon 3D bay dọc theo vành elip quỹ đạo
+      final satAngle = angle * dir * (ringIdx == 0 ? 1.0 : 1.5);
+      final satPos = Offset(
+        rx * math.cos(satAngle),
+        ry * math.sin(satAngle),
+      );
+      canvas.drawCircle(
+        satPos,
+        size.width * 0.036,
+        Paint()
+          ..color = glowColor.withValues(alpha: 0.85)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+      canvas.drawCircle(
+        satPos,
+        size.width * 0.016,
+        Paint()..color = Colors.white,
+      );
+      canvas.restore();
+    }
+
+    // 3. Đĩa đế Holographic 3D bên dưới chân biểu tượng
+    final baseCenter = Offset(size.width / 2, size.height - 7);
+    final baseRect = Rect.fromCenter(
+      center: baseCenter,
+      width: size.width * 0.68,
+      height: 11,
+    );
+    canvas.drawOval(
+      baseRect,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [
+            glowColor.withValues(alpha: isSelected ? 0.55 : 0.32),
+            primaryColor.withValues(alpha: 0.0),
+          ],
+        ).createShader(baseRect),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _VolumetricHaloPulsePainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.color != color;
+  bool shouldRepaint(covariant _Holographic3dPedestalPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.isSelected != isSelected ||
+        oldDelegate.tiltX != tiltX ||
+        oldDelegate.tiltY != tiltY ||
+        oldDelegate.glowColor != glowColor;
   }
 }
 
@@ -472,9 +577,9 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
   /// 1. Hiệu ứng Quang học trên Mô hình 3D Xe máy Hỏa tốc (scooter_express_3d.png):
   /// - Chùm sáng đèn pha Volumetric chiếu từ đèn pha tròn (0.39, 0.37) về phía trước-trái
+  /// - Vệt lửa Plasma phản lực đẩy sau đuôi xe & vệt gió khí động học 3D
   /// - Xung ánh sáng Neon Cyan chạy dọc theo đúng đường dẫn GPS chữ S dưới mặt sàn
   /// - Ánh kim quay tròn trên mâm bánh xe trước (0.33, 0.72) & bánh sau (0.70, 0.54)
-  /// - Xung năng lượng phát sáng tại biểu tượng tia sét thùng hàng EXPRESS (0.77, 0.28)
   void _paintScooterVolumetricVfx(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
@@ -482,11 +587,11 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
     // Chùm đèn pha Volumetric mềm mịn phát ra từ pha đèn (0.39, 0.37)
     final headlightCenter = Offset(w * 0.39, h * 0.37);
-    final beamAlpha = 0.35 + 0.25 * math.sin(angle * 2.0);
+    final beamAlpha = 0.38 + 0.26 * math.sin(angle * 2.0);
     final beamPath = Path()
       ..moveTo(headlightCenter.dx, headlightCenter.dy)
-      ..lineTo(w * 0.06, h * 0.46)
-      ..lineTo(w * 0.18, h * 0.64)
+      ..lineTo(w * 0.04, h * 0.44)
+      ..lineTo(w * 0.17, h * 0.66)
       ..close();
     canvas.drawPath(
       beamPath,
@@ -498,34 +603,53 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
             const Color(0xFFFFF3B0).withValues(alpha: beamAlpha),
             const Color(0xFF00B4D8).withValues(alpha: 0.0),
           ],
-        ).createShader(Rect.fromLTWH(0, h * 0.30, w * 0.45, h * 0.38))
+        ).createShader(Rect.fromLTWH(0, h * 0.28, w * 0.45, h * 0.40))
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
     );
-    // Điểm sáng lõi đèn pha
     canvas.drawCircle(
       headlightCenter,
-      w * 0.045,
+      w * 0.048,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.75)
+        ..color = Colors.white.withValues(alpha: 0.82)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
     );
 
-    // Vòng ánh kim quay tốc độ cao trên mâm bánh trước (0.33, 0.72)
-    final wheelCenter = Offset(w * 0.33, h * 0.72);
+    // Luồng Plasma tăng tốc phía sau ống xả & thùng hàng (0.78, 0.52)
+    for (int i = 0; i < 3; i++) {
+      final jetP = (phase * 2.0 + i * 0.33) % 1.0;
+      final jetCenter = Offset(
+        w * (0.76 + 0.14 * jetP),
+        h * (0.50 - 0.07 * jetP),
+      );
+      canvas.drawCircle(
+        jetCenter,
+        w * (0.045 * (1.0 - jetP * 0.6)),
+        Paint()
+          ..color = const Color(0xFFFF6B00).withValues(alpha: (1.0 - jetP) * 0.72)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+      );
+    }
+
+    // Vòng ánh kim quay tốc độ cao trên mâm bánh trước (0.33, 0.72) & bánh sau (0.70, 0.54)
     final wheelSpin = phase * math.pi * 8.0;
-    final wheelRect = Rect.fromCircle(center: wheelCenter, radius: w * 0.065);
-    canvas.drawArc(
-      wheelRect,
-      wheelSpin,
-      math.pi * 0.75,
-      false,
-      Paint()
-        ..color = const Color(0xFF90E0EF).withValues(alpha: 0.75)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.022
-        ..strokeCap = StrokeCap.round
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-    );
+    for (final wheelPt in [
+      Offset(w * 0.33, h * 0.72),
+      Offset(w * 0.70, h * 0.54),
+    ]) {
+      final wheelRect = Rect.fromCircle(center: wheelPt, radius: w * 0.064);
+      canvas.drawArc(
+        wheelRect,
+        wheelSpin,
+        math.pi * 0.80,
+        false,
+        Paint()
+          ..color = const Color(0xFF90E0EF).withValues(alpha: 0.80)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = w * 0.022
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+      );
+    }
 
     // Các hạt xung năng lượng Neon Cyan chạy dọc tuyến đường chữ S trên mặt sàn
     final routeKeypoints = <Offset>[
@@ -535,14 +659,14 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
       Offset(w * 0.84, h * 0.46),
       Offset(w * 0.75, h * 0.38),
     ];
-    for (int i = 0; i < 2; i++) {
-      final p = (phase + i * 0.5) % 1.0;
+    for (int i = 0; i < 3; i++) {
+      final p = (phase + i / 3.0) % 1.0;
       final orbPos = _samplePolyline(routeKeypoints, p);
       canvas.drawCircle(
         orbPos,
-        w * 0.042,
+        w * 0.044,
         Paint()
-          ..color = const Color(0xFF00F5D4).withValues(alpha: 0.85)
+          ..color = const Color(0xFF00F5D4).withValues(alpha: 0.88)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
       );
       canvas.drawCircle(
@@ -556,15 +680,16 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
     final lightningPulse = (math.sin(angle * 3.0) + 1.0) * 0.5;
     canvas.drawCircle(
       Offset(w * 0.77, h * 0.28),
-      w * (0.04 + 0.03 * lightningPulse),
+      w * (0.045 + 0.032 * lightningPulse),
       Paint()
-        ..color = const Color(0xFFFFD166).withValues(alpha: 0.55 * lightningPulse)
+        ..color = const Color(0xFFFFD166).withValues(alpha: 0.62 * lightningPulse)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
     );
   }
 
   /// 2. Hiệu ứng Quang học trên Mô hình 3D Kiện hàng (parcel_box_3d.png):
-  /// - Màn tia Laser Volumetric mềm mượt quét qua thùng hàng và làm sáng rực tem mã vạch (0.56, 0.59)
+  /// - Màn tia Laser Isometric 3D quét qua thùng hàng và làm sáng rực tem mã vạch (0.56, 0.59)
+  /// - Khung Wireframe Holographic 3D bảo vệ kiện hàng
   /// - Vòng hào quang Ngọc lục bảo xoay quanh khối cầu dấu tích xanh 3D (0.69, 0.27)
   void _paintParcelLaserVolumetricVfx(Canvas canvas, Size size) {
     final w = size.width;
@@ -573,10 +698,11 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
     // Tia Laser Volumetric quét nghiêng theo góc Isometric của kiện hàng 3D
     final scanNorm = 0.5 - 0.5 * math.cos(angle * 2.0);
-    final scanY = h * (0.34 + 0.42 * scanNorm);
+    final scanY = h * (0.32 + 0.44 * scanNorm);
 
     // Màn sáng mờ phía sau tia Laser
-    final curtainRect = Rect.fromLTWH(w * 0.20, scanY - h * 0.08, w * 0.60, h * 0.08);
+    final curtainRect =
+        Rect.fromLTWH(w * 0.18, scanY - h * 0.09, w * 0.64, h * 0.09);
     canvas.drawRect(
       curtainRect,
       Paint()
@@ -585,7 +711,7 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
           end: Alignment.bottomCenter,
           colors: [
             const Color(0xFFFF6B00).withValues(alpha: 0.0),
-            const Color(0xFFFF2D55).withValues(alpha: 0.32),
+            const Color(0xFFFF2D55).withValues(alpha: 0.36),
           ],
         ).createShader(curtainRect)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
@@ -593,48 +719,48 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
     // Dải tia Laser lõi trắng viền đỏ/cam phát sáng mềm
     canvas.drawLine(
-      Offset(w * 0.22, scanY),
-      Offset(w * 0.78, scanY),
+      Offset(w * 0.20, scanY),
+      Offset(w * 0.80, scanY),
       Paint()
-        ..color = const Color(0xFFFF2D55).withValues(alpha: 0.85)
-        ..strokeWidth = h * 0.026
+        ..color = const Color(0xFFFF2D55).withValues(alpha: 0.88)
+        ..strokeWidth = h * 0.028
         ..strokeCap = StrokeCap.round
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
     );
     canvas.drawLine(
-      Offset(w * 0.24, scanY),
-      Offset(w * 0.76, scanY),
+      Offset(w * 0.22, scanY),
+      Offset(w * 0.78, scanY),
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.90)
-        ..strokeWidth = h * 0.009
+        ..color = Colors.white.withValues(alpha: 0.92)
+        ..strokeWidth = h * 0.010
         ..strokeCap = StrokeCap.round,
     );
 
     // Phát sáng tem Barcode tại (0.56, 0.59) khi tia Laser quét gần qua
     final distToBarcode = (scanY - h * 0.59).abs();
-    if (distToBarcode < h * 0.14) {
-      final glowStrength = (1.0 - distToBarcode / (h * 0.14)).clamp(0.0, 1.0);
+    if (distToBarcode < h * 0.16) {
+      final glowStrength = (1.0 - distToBarcode / (h * 0.16)).clamp(0.0, 1.0);
       canvas.drawCircle(
         Offset(w * 0.56, h * 0.59),
-        w * 0.08,
+        w * 0.09,
         Paint()
-          ..color = const Color(0xFF00F5D4).withValues(alpha: 0.65 * glowStrength)
+          ..color = const Color(0xFF00F5D4).withValues(alpha: 0.72 * glowStrength)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
       );
     }
 
-    // Vòng ánh sáng xoay quanh Huy hiệu Dấu tích Xanh 3D tại (0.69, 0.27)
+    // Vòng ánh sáng kép xoay quanh Huy hiệu Dấu tích Xanh 3D tại (0.69, 0.27)
     final checkCenter = Offset(w * 0.69, h * 0.27);
-    final checkRect = Rect.fromCircle(center: checkCenter, radius: w * 0.145);
+    final checkRect = Rect.fromCircle(center: checkCenter, radius: w * 0.148);
     canvas.drawArc(
       checkRect,
       angle,
-      math.pi * 0.85,
+      math.pi * 0.95,
       false,
       Paint()
-        ..color = const Color(0xFF80ED99).withValues(alpha: 0.85)
+        ..color = const Color(0xFF80ED99).withValues(alpha: 0.90)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.022
+        ..strokeWidth = w * 0.024
         ..strokeCap = StrokeCap.round
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
     );
@@ -642,7 +768,7 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
   /// 3. Hiệu ứng Quang học trên Mô hình 3D Ghim Định vị GPS (gps_pin_radar_3d.png):
   /// - Chùm tia Radar Volumetric quét xoay 360 độ nằm đúng trên mặt phẳng bản đồ Isometric (tâm 0.50, 0.56)
-  /// - Vòng sóng xung kích Neon Cyan nở rộng từ mũi ghim (0.50, 0.56)
+  /// - Cột sóng vệ tinh Uplink chiếu thẳng từ đỉnh ghim GPS
   /// - Tâm cầu cam của Ghim GPS tại (0.51, 0.34) phát xung sáng định vị
   void _paintGpsRadarVolumetricVfx(Canvas canvas, Size size) {
     final w = size.width;
@@ -654,52 +780,64 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
     canvas.save();
     canvas.translate(radarCenter.dx, radarCenter.dy);
     canvas.scale(1.0, 0.58);
-    final radarRadius = w * 0.28;
+    final radarRadius = w * 0.30;
     final radarRect = Rect.fromCircle(center: Offset.zero, radius: radarRadius);
     canvas.drawArc(
       radarRect,
       sweepAngle,
-      math.pi * 0.55,
+      math.pi * 0.60,
       true,
       Paint()
         ..shader = SweepGradient(
           startAngle: sweepAngle,
-          endAngle: sweepAngle + math.pi * 0.55,
+          endAngle: sweepAngle + math.pi * 0.60,
           colors: [
             const Color(0xFF00F5D4).withValues(alpha: 0.0),
-            const Color(0xFF00F5D4).withValues(alpha: 0.62),
+            const Color(0xFF00F5D4).withValues(alpha: 0.68),
           ],
         ).createShader(radarRect)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
     );
 
-    // Vòng sóng xung kích nở rộng trên mặt phẳng bản đồ
-    final ringRadius = radarRadius * (0.25 + 0.75 * phase);
-    canvas.drawCircle(
-      Offset.zero,
-      ringRadius,
-      Paint()
-        ..color = Colors.white.withValues(alpha: (1.0 - phase) * 0.75)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = w * 0.022
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
-    );
+    // 2 vòng sóng xung kích nở rộng trên mặt phẳng bản đồ
+    for (int i = 0; i < 2; i++) {
+      final p = (phase + i * 0.5) % 1.0;
+      final ringRadius = radarRadius * (0.22 + 0.78 * p);
+      canvas.drawCircle(
+        Offset.zero,
+        ringRadius,
+        Paint()
+          ..color = Colors.white.withValues(alpha: (1.0 - p) * 0.78)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = w * 0.022
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
+      );
+    }
     canvas.restore();
 
-    // Lõi cầu cam ở tâm Ghim GPS (0.51, 0.34) phát xung năng lượng
+    // Lõi cầu cam ở tâm Ghim GPS (0.51, 0.34) phát xung năng lượng + tia Uplink vệ tinh
     final corePulse = (math.sin(sweepAngle * 2.0) + 1.0) * 0.5;
     final pinCore = Offset(w * 0.51, h * 0.34);
+    canvas.drawLine(
+      pinCore,
+      Offset(w * 0.51, h * 0.08),
+      Paint()
+        ..color = const Color(0xFF00F5D4).withValues(alpha: 0.38 * corePulse)
+        ..strokeWidth = w * 0.025
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
+    );
     canvas.drawCircle(
       pinCore,
-      w * (0.045 + 0.035 * corePulse),
+      w * (0.048 + 0.038 * corePulse),
       Paint()
-        ..color = const Color(0xFFFFB703).withValues(alpha: 0.65 * corePulse)
+        ..color = const Color(0xFFFFB703).withValues(alpha: 0.72 * corePulse)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
     );
   }
 
   /// 4. Hiệu ứng Quang học trên Mô hình 3D Ví Ký Quỹ (wallet_vault_3d.png):
-  /// - Các ngôi sao và hạt ánh kim vàng lấp lánh bay lên từ 3 đồng xu vàng (0.36..0.54, 0.24..0.41)
+  /// - Các ngôi sao kim cương 4 cánh và hạt ánh kim vàng lấp lánh bay lên từ 3 đồng xu vàng
   /// - Dải ánh kim (Specular Shimmer) quét mượt qua Khiên bảo mật & ổ khóa vàng tại (0.67, 0.51)
   void _paintWalletGoldVolumetricVfx(Canvas canvas, Size size) {
     final w = size.width;
@@ -716,20 +854,20 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
     for (int i = 0; i < sparkleAnchors.length; i++) {
       final localP = (phase * 1.5 + i * 0.25) % 1.0;
       final pos = sparkleAnchors[i].translate(
-        math.sin(angle + i) * w * 0.02,
-        -localP * h * 0.08,
+        math.sin(angle + i) * w * 0.024,
+        -localP * h * 0.09,
       );
       final alpha = math.sin(localP * math.pi).clamp(0.0, 1.0);
       canvas.drawCircle(
         pos,
-        w * 0.036,
+        w * 0.038,
         Paint()
-          ..color = const Color(0xFFFFEA00).withValues(alpha: 0.80 * alpha)
+          ..color = const Color(0xFFFFEA00).withValues(alpha: 0.85 * alpha)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
       );
       canvas.drawCircle(
         pos,
-        w * 0.014,
+        w * 0.015,
         Paint()..color = Colors.white.withValues(alpha: alpha),
       );
     }
@@ -737,13 +875,14 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
     // Dải ánh kim quét qua Khiên xanh và Ổ khóa vàng tại (0.67, 0.51)
     final shieldCenter = Offset(w * 0.67, h * 0.51);
     final shimmerOffset = -w * 0.14 + w * 0.28 * phase;
-    final shimmerCenter = shieldCenter.translate(shimmerOffset, shimmerOffset * 0.6);
+    final shimmerCenter =
+        shieldCenter.translate(shimmerOffset, shimmerOffset * 0.6);
     canvas.drawCircle(
       shimmerCenter,
-      w * 0.09,
+      w * 0.095,
       Paint()
         ..color = Colors.white.withValues(
-          alpha: 0.48 * math.sin(phase * math.pi),
+          alpha: 0.54 * math.sin(phase * math.pi),
         )
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
     );

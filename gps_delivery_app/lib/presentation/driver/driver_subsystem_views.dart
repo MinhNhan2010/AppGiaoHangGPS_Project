@@ -3,18 +3,27 @@ import 'package:flutter/material.dart';
 import '../../core/gps/gps_integrity_validator.dart';
 import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
+import '../../domain/entities/geo_point.dart';
 import '../../domain/enums/order_status.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
-/// Phân hệ Tài xế (Driver App) - 9 màn hình (Hình 8.15 - Hình 8.23)
-/// Bao phủ đầy đủ UC13 - UC21 theo Thiết kế Giao diện Chương 8.2
+part 'driver_onboarding_and_dispatch_views.dart';
+part 'driver_wallet_and_analytics_views.dart';
+
+/// Phân hệ Tài xế (Driver App) - 9 màn hình chuẩn thiết kế gốc (uc13..uc21)
 class DriverSubsystemEntry extends StatefulWidget {
-  const DriverSubsystemEntry({super.key});
+  final int? forcedScreenIndex;
+  final VoidCallback? onLogout;
+
+  const DriverSubsystemEntry({
+    super.key,
+    this.forcedScreenIndex,
+    this.onLogout,
+  });
 
   @override
   State<DriverSubsystemEntry> createState() => _DriverSubsystemEntryState();
@@ -22,60 +31,116 @@ class DriverSubsystemEntry extends StatefulWidget {
 
 class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   final AppStateStore _store = AppStateStore.instance;
-  int _selectedScreenIndex = 1; // Mặc định: UC14 Trang chủ Tài xế Online/Offline
+  int _selectedScreenIndex = 1; // Mặc định: Trang chủ Tài xế Online/Offline (UC14)
 
-  // UC13: Hồ sơ đăng ký tài xế
+  // Hồ sơ đăng ký tài xế (UC13)
   final TextEditingController _drvNameCtrl =
       TextEditingController(text: 'Nguyễn Văn Nam');
+  final TextEditingController _drvPhoneCtrl =
+      TextEditingController(text: '0987654321');
   final TextEditingController _drvCitizenCtrl =
-      TextEditingController(text: '001095012345');
+      TextEditingController(text: '079095001234');
   final TextEditingController _drvPlateCtrl =
-      TextEditingController(text: '29A-123.45');
+      TextEditingController(text: '59X1-123.45');
   String _vehicleType = 'Xe máy';
 
-  // UC15: Countdown 28s & Smart Dispatch
+  // Countdown 28s & Smart Dispatch (UC15)
   int _countdownSeconds = 28;
   Timer? _dispatchCountdownTimer;
   final Set<String> _rejectedDriverIds = {};
 
-  // UC18: POD & OTP 4 số
-  final TextEditingController _podOtpCtrl =
-      TextEditingController(text: '4829');
-  final TextEditingController _podRecipientCtrl =
-      TextEditingController(text: 'Nguyễn Thị Minh An');
+  // POD & OTP 4 số (UC17)
+  final TextEditingController _podOtpCtrl = TextEditingController();
+  final TextEditingController _podRecipientCtrl = TextEditingController();
+  final TextEditingController _podNoteCtrl = TextEditingController();
+  String? _lastSyncedDriverOrderCode;
+  String? _lastSyncedDriverProfileKey;
 
-  // UC19: Rút tiền Ví tài xế
+  // Rút tiền Ví tài xế (UC18)
   final TextEditingController _withdrawAmountCtrl =
       TextEditingController(text: '1000000');
   String _selectedBank = 'Vietcombank - 007100****889';
+  String _incomePeriod = 'Tuần';
 
-  // UC20: Báo cáo sự cố
-  String _incidentType = 'Kẹt xe nghiêm trọng / Ngập nước';
+  // Lịch sử giao hàng (UC19)
+  String _driverHistoryPeriod = 'Hôm nay';
+
+  // Báo cáo sự cố (UC20)
+  String _incidentType = 'Hàng bị hỏng';
   final TextEditingController _incidentNoteCtrl = TextEditingController();
+  final Set<String> _attachedKycDocs = {'CCCD mặt trước', 'Giấy phép lái xe'};
+  int _attachedIncidentPhotos = 1;
 
-  // UC21: Thống kê hiệu suất
+  // Thống kê hiệu suất (UC21)
   String _statsPeriod = 'Tuần này';
 
   static const List<String> _screenTitles = [
-    '8.15: UC13 Đăng ký & Tải giấy tờ KYC',
-    '8.16: UC14 Trang chủ & Gạt Online/Offline',
-    '8.17: UC15 Nhận cuốc xe mới (28s)',
-    '8.18: UC16 Điều hướng 3D Turn-by-Turn',
-    '8.19: UC17 Cập nhật tiến độ chuyến giao',
-    '8.20: UC18 Chụp ảnh POD & Nhập OTP',
-    '8.21: UC19 Ví thu nhập & Rút tiền',
-    '8.22: UC20 Báo cáo sự cố trên đường',
-    '8.23: UC21 Thống kê hiệu suất (Dark Mode)',
+    'Hồ sơ & Pháp lý Tài xế',
+    'Trang chủ Tài xế & Trạng thái Hoạt động',
+    'ĐƠN HÀNG MỚI! (28s)',
+    'Điều hướng GPS Turn-by-Turn',
+    'Cập nhật tiến độ vận đơn',
+    'Xác nhận Giao hàng POD & Mã OTP',
+    'Thu nhập và rút tiền',
+    'Báo cáo sự cố trên đường',
+    'Thống kê hoạt động & Hồ sơ',
+    'Lịch sử giao hàng',
   ];
 
   @override
   void initState() {
     super.initState();
+    if (widget.forcedScreenIndex != null) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
+    _syncDriverControllersFromDb();
     _store.addListener(_onStoreChanged);
   }
 
+  void _syncDriverControllersFromDb() {
+    final d = _store.activeDriverRecord;
+    if (d != null) {
+      final profileKey =
+          '${d.id}|${d.fullName}|${d.phone}|${d.citizenId}|${d.licensePlate}|${d.vehicleType}';
+      if (_lastSyncedDriverProfileKey != profileKey) {
+        _lastSyncedDriverProfileKey = profileKey;
+        _drvNameCtrl.text = d.fullName;
+        _drvPhoneCtrl.text = d.phone;
+        _drvCitizenCtrl.text = d.citizenId;
+        _drvPlateCtrl.text = d.licensePlate;
+        if (d.vehicleType.isNotEmpty) {
+          _vehicleType = d.vehicleType;
+        }
+      }
+    }
+    final activeOrd = _store.activeOrderRecord;
+    if (activeOrd != null) {
+      if (_lastSyncedDriverOrderCode != activeOrd.trackingCode ||
+          _podRecipientCtrl.text.trim().isEmpty) {
+        _lastSyncedDriverOrderCode = activeOrd.trackingCode;
+        _podRecipientCtrl.text = activeOrd.recipientName;
+      }
+      if (activeOrd.podImageNote != null &&
+          activeOrd.podImageNote!.isNotEmpty &&
+          _podNoteCtrl.text.trim().isEmpty) {
+        _podNoteCtrl.text = activeOrd.podImageNote!;
+      }
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DriverSubsystemEntry oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.forcedScreenIndex != null &&
+        widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
+  }
+
   void _onStoreChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _syncDriverControllersFromDb();
+    setState(() {});
   }
 
   void _toggleDispatchTimer() {
@@ -103,7 +168,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   }
 
   void _reassignToNextCandidate() {
-    final targetOrder = _store.orders.first;
+    final targetOrder = _store.orders
+            .where((o) => o.status == OrderStatus.searching)
+            .firstOrNull ??
+        _store.activeOrderRecord ??
+        _store.orders.firstOrNull;
+    if (targetOrder == null) return;
     final ranked = SmartDispatchEngine.rankDriversForPickup(
       pickupLocation: targetOrder.pickupLocation,
       drivers: _store.drivers,
@@ -119,52 +189,703 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     _dispatchCountdownTimer?.cancel();
     _store.removeListener(_onStoreChanged);
     _drvNameCtrl.dispose();
+    _drvPhoneCtrl.dispose();
     _drvCitizenCtrl.dispose();
     _drvPlateCtrl.dispose();
     _podOtpCtrl.dispose();
     _podRecipientCtrl.dispose();
+    _podNoteCtrl.dispose();
     _withdrawAmountCtrl.dispose();
     _incidentNoteCtrl.dispose();
     super.dispose();
   }
 
+  // Thanh điều hướng đáy 4 tab màu xanh đen #0F172A giống hệt uc14, uc18, uc19, uc21:
+  // 0: Trang chủ | 1: Đơn hàng | 2: Thu nhập | 3: Hồ sơ
+  int _bottomNavIndexForScreen(int screenIdx) {
+    if (screenIdx == 1) return 0; // Trang chủ
+    if (screenIdx == 2 ||
+        screenIdx == 3 ||
+        screenIdx == 4 ||
+        screenIdx == 5 ||
+        screenIdx == 7 ||
+        screenIdx == 9) {
+      return 1; // Đơn hàng / Nhận đơn / Điều hướng / POD / Lịch sử giao
+    }
+    if (screenIdx == 6) return 2; // Thu nhập
+    return 3; // Hồ sơ & Thống kê (0, 8)
+  }
+
+  void _onBottomNavTapped(int navIdx) {
+    setState(() {
+      switch (navIdx) {
+        case 0:
+          _selectedScreenIndex = 1; // Trang chủ (UC14)
+          break;
+        case 1:
+          _selectedScreenIndex = 9; // Lịch sử giao hàng (UC19)
+          break;
+        case 2:
+          _selectedScreenIndex = 6; // Thu nhập và rút tiền (UC18)
+          break;
+        case 3:
+          _selectedScreenIndex = 8; // Thống kê hoạt động & Hồ sơ (UC21/UC13)
+          break;
+      }
+    });
+  }
+
+  bool get _isDriverSubScreen =>
+      _selectedScreenIndex == 0 ||
+      _selectedScreenIndex == 3 ||
+      _selectedScreenIndex == 4 ||
+      _selectedScreenIndex == 5 ||
+      _selectedScreenIndex == 7 ||
+      _selectedScreenIndex == 9;
+
+  void _navigateBackFromDriverSubScreen() {
+    setState(() {
+      if (_selectedScreenIndex == 0) {
+        _selectedScreenIndex = 8;
+      } else if (_selectedScreenIndex == 4 ||
+          _selectedScreenIndex == 5 ||
+          _selectedScreenIndex == 7) {
+        _selectedScreenIndex = 3;
+      } else {
+        _selectedScreenIndex = 1;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        OfflineQueueBanner(store: _store),
-        _buildScreenSelectorBar(),
-        const SizedBox(height: AppSpacing.md),
-        _buildActiveDriverScreen(context),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isWide = constraints.maxWidth >= 860;
+        if (isWide) {
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 285.0);
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildDriverStudioSidebar(sidebarWidth),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _buildDriverWhiteTopBar(),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.all(contentPadding),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            OfflineQueueBanner(store: _store),
+                            if (_isDriverSubScreen) ...[
+                              _buildDriverSubScreenHeader(),
+                              const SizedBox(height: 14),
+                            ],
+                            _buildActiveDriverScreen(context),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
+
+        final mobilePadding = (constraints.maxWidth * 0.035).clamp(10.0, 18.0);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildDriverHeaderBanner(),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(mobilePadding),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    OfflineQueueBanner(store: _store),
+                    if (_isDriverSubScreen) ...[
+                      _buildDriverSubScreenHeader(),
+                      const SizedBox(height: 8),
+                    ],
+                    _buildActiveDriverScreen(context),
+                  ],
+                ),
+              ),
+            ),
+            _buildDesignDriverDarkBottomBar(),
+          ],
+        );
+      },
     );
   }
 
-  Widget _buildScreenSelectorBar() {
-    return SizedBox(
-      height: 40,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _screenTitles.length,
-        separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.xs),
-        itemBuilder: (context, index) {
-          final isSelected = _selectedScreenIndex == index;
-          return ChoiceChip(
-            label: Text(
-              _screenTitles[index],
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected ? AppColors.surface : AppColors.textPrimary,
+  Widget _buildDriverStudioSidebar(double sidebarWidth) {
+    const menuItems = <(IconData, String, int)>[
+      (Icons.radar_rounded, 'Trạng thái & Bản đồ GPS', 1),
+      (Icons.history_rounded, 'Lịch sử giao hàng', 9),
+      (Icons.account_balance_wallet_outlined, 'Thu nhập & Ví tài xế', 6),
+      (Icons.insights_rounded, 'Hiệu suất & Hồ sơ KYC', 8),
+    ];
+    final activeOrd = _store.activeOrderRecord;
+    final hasActiveTrip = _store.isDriverOnline &&
+        activeOrd != null &&
+        activeOrd.status != OrderStatus.delivered &&
+        activeOrd.status != OrderStatus.cancelled &&
+        activeOrd.status != OrderStatus.failed;
+
+    return Container(
+      width: sidebarWidth,
+      decoration: const BoxDecoration(
+        color: AppColors.techBg,
+        border: Border(
+          right: BorderSide(color: AppColors.ink, width: 1.6),
+        ),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 22, 16, 18),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.acid,
+                      border: Border.all(color: AppColors.techBg),
+                    ),
+                    child: const Icon(
+                      Icons.two_wheeler_rounded,
+                      color: AppColors.techBg,
+                      size: 22,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'GHST DRIVER',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15.5,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                        Text(
+                          'ĐỐI TÁC TÀI XẾ • STUDIO',
+                          style: TextStyle(
+                            color: AppColors.acid,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            selected: isSelected,
-            selectedColor: AppColors.primary,
-            backgroundColor: AppColors.surface,
-            onSelected: (_) => setState(() => _selectedScreenIndex = index),
+            const Divider(color: AppColors.techLine, height: 1),
+            const SizedBox(height: 8),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...menuItems.map((item) {
+                      final selected = _selectedScreenIndex == item.$3 ||
+                          (item.$3 == 1 &&
+                              (_selectedScreenIndex == 2 ||
+                                  _selectedScreenIndex == 3 ||
+                                  _selectedScreenIndex == 4 ||
+                                  _selectedScreenIndex == 5 ||
+                                  _selectedScreenIndex == 7)) ||
+                          (item.$3 == 8 && _selectedScreenIndex == 0);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 2,
+                        ),
+                        child: InkWell(
+                          onTap: () =>
+                              setState(() => _selectedScreenIndex = item.$3),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 11,
+                            ),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? AppColors.violet.withValues(alpha: 0.25)
+                                  : Colors.transparent,
+                              border: selected
+                                  ? const Border(
+                                      left: BorderSide(
+                                        color: AppColors.acid,
+                                        width: 4.0,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  item.$1,
+                                  size: 19,
+                                  color: selected
+                                      ? AppColors.acid
+                                      : AppColors.techMuted,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    item.$2,
+                                    style: TextStyle(
+                                      color: selected
+                                          ? Colors.white
+                                          : AppColors.techMuted,
+                                      fontSize: 13,
+                                      fontWeight: selected
+                                          ? FontWeight.w800
+                                          : FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                    if (hasActiveTrip) ...[
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: InkWell(
+                          onTap: () => setState(() {
+                            _selectedScreenIndex =
+                                activeOrd.status == OrderStatus.searching
+                                    ? 2
+                                    : 3;
+                          }),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: AppColors.acid.withValues(alpha: 0.14),
+                              border: Border.all(
+                                color: AppColors.acid,
+                                width: 1.2,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: const BoxDecoration(
+                                        color: AppColors.acid,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        activeOrd.status ==
+                                                OrderStatus.searching
+                                            ? 'CUỐC XE MỚI ĐANG CHỜ'
+                                            : 'CUỐC XE ĐANG CHẠY',
+                                        style: const TextStyle(
+                                          color: AppColors.acid,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w900,
+                                          fontFamily: 'Consolas',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '${activeOrd.trackingCode} • ${activeOrd.status.displayName}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  activeOrd.status == OrderStatus.searching
+                                      ? 'Chạm để nhận cuốc xe ngay →'
+                                      : 'Chạm để mở Điều hướng GPS →',
+                                  style: const TextStyle(
+                                    color: AppColors.techMuted,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18),
+              child: Divider(color: AppColors.techLine, height: 1),
+            ),
+            if (widget.onLogout != null)
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                leading: const Icon(
+                  Icons.logout_rounded,
+                  color: AppColors.pink,
+                  size: 19,
+                ),
+                title: const Text(
+                  'Đăng xuất',
+                  style: TextStyle(
+                    color: AppColors.pink,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                onTap: widget.onLogout,
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDriverWhiteTopBar() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showPlateBadge = constraints.maxWidth >= 900;
+        final isCompactBar = constraints.maxWidth < 680;
+        return Container(
+          height: 64,
+          padding: EdgeInsets.symmetric(horizontal: isCompactBar ? 14 : 24),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              bottom: BorderSide(color: AppColors.ink, width: 1.5),
+            ),
+          ),
+          child: Row(
+            children: [
+              const Animated3dIconBadge(
+                style: Icon3dStyle.gpsPinRadar,
+                size: 38,
+                showRadarPulse: false,
+                isSelected: true,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  _screenTitles[_selectedScreenIndex],
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.ink,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ),
+              if (showPlateBadge) ...[
+                Flexible(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.paper,
+                      border: Border.all(color: AppColors.ink, width: 1.2),
+                    ),
+                    child: Text(
+                      'Biển số: ${_store.activeDriverRecord?.licensePlate ?? _store.drivers.firstOrNull?.licensePlate ?? "59X1-123.45"} • Ví: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'Consolas',
+                        color: AppColors.ink,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+              ],
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: _store.isDriverOnline
+                      ? const Color(0xFF14B866)
+                      : AppColors.ink,
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                onPressed: () =>
+                    _store.setDriverOnlineStatus(!_store.isDriverOnline),
+                icon: Icon(
+                  _store.isDriverOnline
+                      ? Icons.sensors_rounded
+                      : Icons.power_settings_new_rounded,
+                  size: 15,
+                ),
+                label: Text(
+                  _store.isDriverOnline ? 'ĐANG ONLINE' : 'OFFLINE',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              if (widget.onLogout != null) ...[
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.ink,
+                    backgroundColor: AppColors.acid,
+                    side: const BorderSide(color: AppColors.ink, width: 1.2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                  ),
+                  onPressed: widget.onLogout,
+                  icon: const Icon(Icons.logout_rounded, size: 15),
+                  label: const Text(
+                    'Đăng xuất',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDriverHeaderBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.techBg,
+        border: Border.all(color: AppColors.ink, width: 1.5),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.pink,
+            offset: Offset(6, 6),
+            blurRadius: 0,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          const Animated3dIconBadge(
+            style: Icon3dStyle.gpsPinRadar,
+            size: 40,
+            showRadarPulse: false,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _screenTitles[_selectedScreenIndex],
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Tài xế: ${_store.activeDriverName} • Ví: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.acid,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'Consolas',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _store.isDriverOnline
+                  ? const Color(0xFF14B866)
+                  : AppColors.techLine,
+              foregroundColor: Colors.white,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              minimumSize: Size.zero,
+            ),
+            onPressed: () =>
+                _store.setDriverOnlineStatus(!_store.isDriverOnline),
+            child: Text(
+              _store.isDriverOnline ? 'ONLINE' : 'OFFLINE',
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
+            ),
+          ),
+          if (widget.onLogout != null) ...[
+            const SizedBox(width: 6),
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: Colors.transparent,
+                side: const BorderSide(color: AppColors.techLine),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                minimumSize: Size.zero,
+              ),
+              onPressed: widget.onLogout,
+              child: const Text(
+                'Đăng xuất',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDesignDriverDarkBottomBar() {
+    final activeNav = _bottomNavIndexForScreen(_selectedScreenIndex);
+    const items = [
+      (Icons.home_rounded, 'Trang chủ'),
+      (Icons.inventory_2_outlined, 'Đơn hàng'),
+      (Icons.account_balance_wallet_outlined, 'Thu nhập'),
+      (Icons.person_outline_rounded, 'Hồ sơ'),
+    ];
+
+    return Container(
+      height: 64,
+      decoration: BoxDecoration(
+        color: AppColors.techBg,
+        border: Border.all(color: AppColors.ink, width: 1.5),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.pink,
+            offset: Offset(5, 5),
+            blurRadius: 0,
+          ),
+        ],
+      ),
+      child: Row(
+        children: List.generate(items.length, (idx) {
+          final selected = activeNav == idx;
+          final color = selected ? AppColors.acid : AppColors.techMuted;
+          return Expanded(
+            child: InkWell(
+              onTap: () => _onBottomNavTapped(idx),
+              child: Container(
+                decoration: BoxDecoration(
+                  border: selected
+                      ? const Border(
+                          top: BorderSide(color: AppColors.acid, width: 3),
+                        )
+                      : null,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(items[idx].$1, color: color, size: 22),
+                    const SizedBox(height: 3),
+                    Text(
+                      items[idx].$2,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 11.5,
+                        fontWeight:
+                            selected ? FontWeight.w900 : FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           );
-        },
+        }),
+      ),
+    );
+  }
+
+  Widget _buildDriverSubScreenHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: AppColors.ink, width: 1.4),
+        boxShadow: const [
+          BoxShadow(
+            color: AppColors.ink,
+            offset: Offset(3, 3),
+            blurRadius: 0,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          TextButton.icon(
+            onPressed: _navigateBackFromDriverSubScreen,
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 15),
+            label: const Text('Quay lại'),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              _screenTitles[_selectedScreenIndex],
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13.5,
+                color: AppColors.violet,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -189,1051 +910,15 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         return _buildRoadIncidentReportView();
       case 8:
         return _buildDarkModeAnalyticsView();
+      case 9:
+        return _buildDriverTripHistoryUc19View();
       default:
         return _buildDriverHomeOnlineView();
     }
   }
 
-  /// Hình 8.15: UC13 Đăng ký tài khoản Tài xế & Tải hồ sơ pháp lý
-  Widget _buildDriverKycRegistrationView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.15: Đăng ký Đối tác Tài xế & Hồ sơ Pháp lý (UC13)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _drvNameCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Họ và tên tài xế'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _drvCitizenCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Số CCCD (12 số)'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _drvPlateCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Biển kiểm soát xe',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _vehicleType,
-                    decoration:
-                        const InputDecoration(labelText: 'Loại phương tiện'),
-                    items: ['Xe máy', 'Xe tải 500kg', 'Xe Van 1 tấn']
-                        .map(
-                          (v) => DropdownMenuItem(value: v, child: Text(v)),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _vehicleType = v);
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            const Text(
-              'Hồ sơ đính kèm bắt buộc (Đã tải lên):',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: const [
-                Chip(
-                  avatar: Icon(Icons.check_circle, color: AppColors.success),
-                  label: Text('1. CCCD Mặt trước & Mặt sau'),
-                ),
-                Chip(
-                  avatar: Icon(Icons.check_circle, color: AppColors.success),
-                  label: Text('2. Giấy phép lái xe (Hạng A1/B2)'),
-                ),
-                Chip(
-                  avatar: Icon(Icons.check_circle, color: AppColors.success),
-                  label: Text('3. Cavet / Đăng ký xe chính chủ'),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Đã gửi hồ sơ KYC sang cổng Admin xét duyệt (UC24)!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.cloud_upload_outlined),
-                label: const Text('Gửi hồ sơ chờ duyệt'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.16: UC14 Trang chủ Tài xế & Gạt trạng thái Online/Offline
-  Widget _buildDriverHomeOnlineView() {
-    final policy = GpsIntegrityValidator.resolvePolicy(
-      batteryLevelPercent: _store.batteryPercent,
-      isCharging: false,
-    );
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Animated3dIconBadge(
-                  style: Icon3dStyle.scooterExpress,
-                  size: 50,
-                  showRadarPulse: _store.isDriverOnline,
-                  isSelected: _store.isDriverOnline,
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Text(
-                    'Hình 8.16: Trang chủ Tài xế & Trạng thái Hoạt động (UC14)',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                ),
-                Switch(
-                  value: _store.isDriverOnline,
-                  activeThumbColor: AppColors.success,
-                  onChanged: (v) {
-                    setState(() => _store.isDriverOnline = v);
-                  },
-                ),
-                Text(
-                  _store.isDriverOnline ? 'ĐANG ONLINE' : 'NGHỈ NGƠI',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: _store.isDriverOnline
-                        ? AppColors.success
-                        : AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Map3dPerspectiveWidget(
-              is3dMode: _store.isMap3dEnabled,
-              speedKmh: _store.currentSpeedKmh,
-              onToggle3d: _store.toggleMap3d,
-              nextTurnInstruction: _store.isDriverOnline
-                  ? 'Đang phát sóng GPS • Chu kỳ lấy mẫu: ${policy.pingIntervalSeconds}s'
-                  : 'Đã ngắt phát sóng GPS nền',
-              roadName: 'Khu vực trung tâm Quận 1',
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                Expanded(
-                  child: _kpiTile(
-                    'Thu nhập hôm nay',
-                    '450.000 đ',
-                    AppColors.accent,
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: _kpiTile('Số chuyến hoàn tất', '8 chuyến', AppColors.primary),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: _kpiTile('Điểm đánh giá', '4.9 ★', AppColors.success),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _kpiTile(String label, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Hình 8.17: UC15 Nhận thông báo đơn hàng mới (Countdown 28s & Smart Dispatch RULE-DSP-01..04)
-  Widget _buildIncomingOrderPopupView() {
-    final targetOrder = _store.orders.first;
-    final rankedCandidates = SmartDispatchEngine.rankDriversForPickup(
-      pickupLocation: targetOrder.pickupLocation,
-      drivers: _store.drivers,
-      excludedDriverIds: _rejectedDriverIds,
-    );
-    final topCandidate =
-        rankedCandidates.isNotEmpty ? rankedCandidates.first : null;
-    final isTimerRunning = _dispatchCountdownTimer?.isActive ?? false;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
-                  child: Text(
-                    'Hình 8.17: Popup Nhận Cuốc Xe Mới (UC15 - Smart Dispatch)',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                ),
-                InkWell(
-                  onTap: _toggleDispatchTimer,
-                  child: CircleAvatar(
-                    radius: 22,
-                    backgroundColor:
-                        isTimerRunning ? AppColors.danger : AppColors.accent,
-                    child: Text(
-                      '${_countdownSeconds}s',
-                      style: const TextStyle(
-                        color: AppColors.surface,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (topCandidate != null)
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    const Animated3dIconBadge(
-                      style: Icon3dStyle.gpsPinRadar,
-                      size: 48,
-                      showRadarPulse: true,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Ứng viên #1 (Bán kính ${topCandidate.searchRadiusTierMeters ~/ 1000}km): ${topCandidate.driver.fullName} (${topCandidate.driver.licensePlate}) • Điểm Trọng số: ${topCandidate.totalScore.toStringAsFixed(3)}',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: _toggleDispatchTimer,
-                      child: Text(isTimerRunning ? 'Tạm dừng' : 'Chạy 28s'),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: AppSpacing.sm),
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.background,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.accent, width: 1.5),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '${targetOrder.serviceType.displayName.toUpperCase()} • ${(targetOrder.distanceMeters / 1000).toStringAsFixed(1)} km',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      const Text(
-                        'Thu nhập ròng: 55.000đ',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 16,
-                          color: AppColors.success,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-                  Text('• Lấy hàng: ${targetOrder.pickupAddress}'),
-                  const SizedBox(height: 4),
-                  Text('• Giao đến: ${targetOrder.dropoffAddress}'),
-                  const SizedBox(height: 4),
-                  Text(
-                    '• Ứng tiền COD: ${CurrencyFormatter.formatVnd(targetOrder.codAmount)}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.accent,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () {
-                      setState(() {
-                        _countdownSeconds = 28;
-                        _reassignToNextCandidate();
-                      });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Đã từ chối cuốc xe. Smart Dispatch tự động chuyển sang tài xế xếp hạng kế tiếp (RULE-DSP-02).',
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text('Từ chối (Chuyển tiếp)'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                    ),
-                    onPressed: () {
-                      _dispatchCountdownTimer?.cancel();
-                      _store.driverAcceptOrder(
-                        targetOrder.trackingCode,
-                        customDriverName: topCandidate?.driver.fullName,
-                        customPlate: topCandidate?.driver.licensePlate,
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Đã nhận cuốc xe ${targetOrder.trackingCode} thành công!',
-                          ),
-                        ),
-                      );
-                      setState(() => _selectedScreenIndex = 3);
-                    },
-                    icon: const Icon(Icons.check_circle_outline),
-                    label: const Text('NHẬN ĐƠN NGAY'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.18: UC16 Điều hướng 3D GPS Turn-by-Turn tới điểm lấy/giao hàng
-  Widget _buildTurnByTurnNavigationView() {
-    final activeOrder = _store.orders.first;
-    final remMeters = _store.distanceFromDriverToDropoffMeters();
-    final shouldMaskPhone = activeOrder.status == OrderStatus.delivered ||
-        activeOrder.status == OrderStatus.cancelled;
-    final displayPhone = SecurityAndBarcodeUtils.maskPhoneNumber(
-      activeOrder.recipientPhone,
-      shouldMask: shouldMaskPhone,
-    );
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Animated3dIconBadge(
-                  style: Icon3dStyle.gpsPinRadar,
-                  size: 48,
-                  showRadarPulse: true,
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Text(
-                    'Hình 8.18: Điều hướng 3D GPS Turn-by-Turn (UC16)',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Map3dPerspectiveWidget(
-              height: 300,
-              is3dMode: _store.isMap3dEnabled,
-              speedKmh: _store.currentSpeedKmh,
-              onToggle3d: _store.toggleMap3d,
-              progressFraction: _store.routeProgressStep / 10.0,
-              nextTurnInstruction: 'Rẽ phải sau 150m vào Phố Huế',
-              roadName:
-                  'Còn ${(remMeters / 1000).toStringAsFixed(2)} km • Góc hướng: ${_store.activeDriverBearing.toStringAsFixed(0)}°',
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Khách nhận: ${activeOrder.recipientName} ($displayPhone)',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => _store.stepDriverAlongRoute(),
-                  icon: const Icon(Icons.my_location, size: 16),
-                  label: const Text('Bước tiến GPS'),
-                ),
-                const SizedBox(width: 6),
-                ElevatedButton(
-                  onPressed: () => setState(() => _selectedScreenIndex = 4),
-                  child: const Text('Cập nhật (UC17)'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final msg = await _store.acquireRealHardwareGps();
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(msg)),
-                    );
-                  },
-                  icon: const Icon(Icons.satellite_alt, size: 16),
-                  label: const Text(
-                    'Đọc Chip GPS Phần Cứng (Geolocator)',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final msg = await _store.syncLiveOsrmRouteForActiveOrder();
-                    if (!mounted) return;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(msg)),
-                    );
-                  },
-                  icon: const Icon(Icons.alt_route, size: 16),
-                  label: const Text(
-                    'Đồng bộ Lộ trình OSRM Thực tế',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.19: UC17 Cập nhật tiến độ chuyến giao (Tuần tự theo RULE-ORD-01)
-  Widget _buildTripStepProgressView() {
-    final ord = _store.orders.first;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.19: Cập nhật Trạng thái Đơn hàng (UC17 - RULE-ORD-01)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Mã vận đơn: ${ord.trackingCode} • Trạng thái hiện tại: ${ord.status.displayName}',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-                color: AppColors.primary,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            _stepTile(
-              'Bước 1: Đã nhận đơn (ACCEPTED)',
-              ord.status.index >= OrderStatus.accepted.index,
-            ),
-            _stepTile(
-              'Bước 2: Đã đến điểm lấy hàng (ARRIVING_PICKUP)',
-              ord.status.index >= OrderStatus.arrivingPickup.index,
-            ),
-            _stepTile(
-              'Bước 3: Đã lấy hàng & Đang giao (IN_TRANSIT)',
-              ord.status.index >= OrderStatus.inTransit.index,
-            ),
-            _stepTile(
-              'Bước 4: Đã giao hàng thành công (DELIVERED + POD)',
-              ord.status == OrderStatus.delivered,
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                    ),
-                    onPressed: () {
-                      if (ord.status == OrderStatus.inTransit) {
-                        setState(() => _selectedScreenIndex = 5);
-                      } else {
-                        _store.driverAdvanceOrderStatus(ord.trackingCode);
-                      }
-                    },
-                    icon: const Icon(Icons.double_arrow),
-                    label: Text(
-                      ord.status == OrderStatus.inTransit
-                          ? 'Chuyển sang Xác nhận POD & OTP (UC18)'
-                          : 'Vuốt chuyển bước tiếp theo',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _stepTile(String label, bool completed) {
-    return ListTile(
-      dense: true,
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(
-        completed ? Icons.check_circle : Icons.radio_button_unchecked,
-        color: completed ? AppColors.success : AppColors.textSecondary,
-      ),
-      title: Text(
-        label,
-        style: TextStyle(
-          fontWeight: completed ? FontWeight.w700 : FontWeight.w500,
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.20: UC18 Xác nhận giao hàng thành công (POD Photo + OTP 4 số + Kiểm tra <= 100m RULE-ORD-03)
-  Widget _buildPodConfirmationView() {
-    final ord = _store.orders.first;
-    final distMeters = _store.distanceFromDriverToDropoffMeters();
-    final isWithin100m = distMeters <= 100.0;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.20: Xác nhận Giao hàng POD & Mã OTP (UC18 - RULE-ORD-03)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            PodGpsWatermarkPhotoCard(
-              driverLocation: _store.activeDriverLocation,
-              recipientName: _podRecipientCtrl.text,
-              otpCode: _podOtpCtrl.text,
-              distanceToDropoffMeters: distMeters,
-            ),
-            if (!isWithin100m) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '⚠️ RULE-ORD-03: Tài xế phải cách điểm giao <= 100m mới được phép xác nhận hoàn tất POD.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.danger,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () =>
-                        _store.stepDriverAlongRoute(snapToDropoff: true),
-                    icon: const Icon(Icons.near_me, size: 16),
-                    label: const Text('Tiến vào vùng < 100m'),
-                  ),
-                ],
-              ),
-            ],
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _podRecipientCtrl,
-                    onChanged: (_) => setState(() {}),
-                    decoration:
-                        const InputDecoration(labelText: 'Tên người thực nhận'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _podOtpCtrl,
-                    maxLength: 4,
-                    onChanged: (_) => setState(() {}),
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Mã OTP xác nhận (4 chữ số)',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor:
-                      isWithin100m ? AppColors.success : AppColors.textSecondary,
-                ),
-                onPressed: () async {
-                  final otpInput = _podOtpCtrl.text.trim();
-                  if (!RegExp(r'^[0-9]{4}$').hasMatch(otpInput)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Vui lòng nhập đúng mã OTP nhận hàng gồm 4 chữ số!',
-                        ),
-                      ),
-                    );
-                    return;
-                  }
-                  if (!isWithin100m) {
-                    _store.stepDriverAlongRoute(snapToDropoff: true);
-                  }
-                  final svgFilePath = await SecurityAndBarcodeUtils
-                      .exportPodWatermarkToSvgFile(
-                    orderCode: ord.trackingCode,
-                    recipientName: _podRecipientCtrl.text.trim(),
-                    otpCode: otpInput,
-                    driverLocation: _store.activeDriverLocation,
-                    distanceMeters: _store.distanceFromDriverToDropoffMeters(),
-                  );
-                  _store.driverAdvanceOrderStatus(
-                    ord.trackingCode,
-                    podNote:
-                        'POD: ${_podRecipientCtrl.text.trim()} • OTP $otpInput • GPS (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)}) • Tệp: $svgFilePath',
-                  );
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Hoàn tất đơn ${ord.trackingCode}! Đã lưu tệp bằng chứng POD tại: $svgFilePath',
-                      ),
-                    ),
-                  );
-                  setState(() => _selectedScreenIndex = 6);
-                },
-                icon: const Icon(Icons.task_alt),
-                label: Text(
-                  isWithin100m
-                      ? 'HOÀN TẤT GIAO HÀNG & XUẤT TỆP BẰNG CHỨNG POD'
-                      : 'DI CHUYỂN TỚI ĐIỂM GIAO (< 100M) & XUẤT BẰNG CHỨNG POD',
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.21: UC19 Quản lý Ví thu nhập & Rút tiền về ngân hàng
-  Widget _buildDriverWalletView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.21: Ví Thu nhập Tài xế & Rút tiền (UC19)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  const Animated3dIconBadge(
-                    style: Icon3dStyle.walletVault,
-                    size: 62,
-                    showRadarPulse: true,
-                    isSelected: true,
-                  ),
-                  const SizedBox(width: AppSpacing.md),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Số dư khả dụng (Ví Tài xế • Ký quỹ tối thiểu 200.000đ)',
-                          style: TextStyle(color: Colors.white70, fontSize: 12),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          CurrencyFormatter.formatVnd(
-                            _store.driverWalletBalance,
-                          ),
-                          style: const TextStyle(
-                            color: AppColors.surface,
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _withdrawAmountCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Số tiền muốn rút (VNĐ)',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _selectedBank,
-                    decoration: const InputDecoration(
-                      labelText: 'Ngân hàng thụ hưởng',
-                    ),
-                    items: [
-                      'Vietcombank - 007100****889',
-                      'BIDV - 314100****221',
-                    ]
-                        .map((b) => DropdownMenuItem(value: b, child: Text(b)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _selectedBank = v);
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  final amt = double.tryParse(_withdrawAmountCtrl.text) ?? 0;
-                  _store.requestWithdrawal(
-                    ownerName: 'Nguyễn Văn Nam',
-                    ownerRole: 'Tài xế',
-                    amount: amt,
-                    bankName: 'Vietcombank',
-                    accountMasked: '007100****889',
-                  );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã gửi lệnh rút ${CurrencyFormatter.formatVnd(amt)} sang Admin duyệt (UC29)!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.account_balance_wallet_outlined),
-                label: const Text('Gửi yêu cầu rút tiền'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.22: UC20 Báo cáo sự cố trên đường
-  Widget _buildRoadIncidentReportView() {
-    final reasons = [
-      'Kẹt xe nghiêm trọng / Ngập nước',
-      'Xe gặp sự cố kỹ thuật / Thủng lốp',
-      'Khách nhận không nghe máy quá 3 lần',
-      'Địa chỉ giao hàng không tồn tại',
-    ];
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.22: Báo cáo Sự cố Trên đường (UC20)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: reasons.map((r) {
-                return ChoiceChip(
-                  label: Text(r),
-                  selected: _incidentType == r,
-                  onSelected: (_) => setState(() => _incidentType = r),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _incidentNoteCtrl,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: 'Ghi chú hiện trường & Tọa độ GPS đính kèm',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.danger,
-                ),
-                onPressed: () {
-                  _store.addIncidentOrComplaint(
-                    orderId: _store.orders.first.trackingCode,
-                    reporterName: 'Tài xế Nguyễn Văn Nam',
-                    issueType: _incidentType,
-                    description: _incidentNoteCtrl.text.trim().isEmpty
-                        ? 'Báo cáo sự cố trên lộ trình: $_incidentType'
-                        : _incidentNoteCtrl.text.trim(),
-                  );
-                  _incidentNoteCtrl.clear();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Đã gửi báo cáo sự cố khẩn cấp về Trung tâm Điều phối!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.warning_amber_rounded),
-                label: const Text('Gửi báo cáo sự cố ngay'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.23: UC21 Thống kê hiệu suất & thu nhập (Dark Mode Analytics #1A202C)
-  Widget _buildDarkModeAnalyticsView() {
-    final dailyBars = [
-      ('T2', 0.55, '620K'),
-      ('T3', 0.70, '780K'),
-      ('T4', 0.65, '710K'),
-      ('T5', 0.85, '950K'),
-      ('T6', 0.95, '1.15M'),
-      ('T7', 1.00, '1.25M'),
-      ('CN', 0.75, '840K'),
-    ];
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.md),
-      decoration: BoxDecoration(
-        color: AppColors.darkSidebar,
-        borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Animated3dIconBadge(
-                style: Icon3dStyle.walletVault,
-                size: 46,
-                showRadarPulse: false,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Hình 8.23: Thống kê Hiệu suất & Thu nhập (UC21 - Dark Mode)',
-                  style: TextStyle(
-                    color: AppColors.surface,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-              Wrap(
-                spacing: 6,
-                children: ['Hôm nay', 'Tuần này', 'Tháng này'].map((p) {
-                  final selected = _statsPeriod == p;
-                  return ChoiceChip(
-                    label: Text(p, style: const TextStyle(fontSize: 11)),
-                    selected: selected,
-                    selectedColor: AppColors.accent,
-                    onSelected: (_) => setState(() => _statsPeriod = p),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          const Text(
-            'Tổng thu nhập tuần: 6.300.000 VNĐ (+15% so với tuần trước)',
-            style: TextStyle(
-              color: AppColors.accent,
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-          SizedBox(
-            height: 150,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: dailyBars.map((bar) {
-                return Column(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Text(
-                      bar.$3,
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 10,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Container(
-                      width: 28,
-                      height: 95 * bar.$2,
-                      decoration: BoxDecoration(
-                        color: bar.$2 == 1.0
-                            ? AppColors.accent
-                            : AppColors.routeRibbonFill,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      bar.$1,
-                      style: const TextStyle(
-                        color: AppColors.surface,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                );
-              }).toList(),
-            ),
-          ),
-          const Divider(color: Colors.white24),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              Text(
-                'Tỷ lệ nhận chuyến: 95%',
-                style: TextStyle(color: Colors.white, fontSize: 12),
-              ),
-              Text(
-                'Tỷ lệ hoàn thành: 98.5%',
-                style: TextStyle(color: AppColors.success, fontSize: 12),
-              ),
-              Text(
-                'Đánh giá: 4.9 ★ (320 lượt)',
-                style: TextStyle(color: AppColors.warning, fontSize: 12),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
+  void _rebuildDriverUi(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 }

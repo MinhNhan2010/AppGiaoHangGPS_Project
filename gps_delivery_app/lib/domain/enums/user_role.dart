@@ -1,8 +1,8 @@
 enum SubsystemRole {
-  customer('CUSTOMER', 'Phân hệ Khách hàng', '14 Use Case (UC01–UC12, UC41–UC42)'),
-  driver('DRIVER', 'Phân hệ Tài xế', '9 Use Case (UC13–UC21)'),
-  merchant('MERCHANT', 'Phân hệ Cửa hàng / Người gửi', '11 Use Case (UC30–UC40)'),
-  admin('ADMIN', 'Phân hệ Quản trị viên', '12 Use Case (UC22–UC29, UC43–UC46)');
+  customer('CUSTOMER', 'Phân hệ Khách hàng', 'Đặt đơn giao hàng, định vị GPS 3D, thanh toán & đánh giá dịch vụ'),
+  driver('DRIVER', 'Phân hệ Tài xế', 'Nhận cuốc xe thông minh, dẫn đường 3D, xác nhận POD & ví thu nhập'),
+  merchant('MERCHANT', 'Phân hệ Cửa hàng / Người gửi', 'Tạo đơn lẻ/hàng loạt CSV, in vận đơn A6, đối soát & rút tiền COD'),
+  admin('ADMIN', 'Phân hệ Quản trị viên', 'Giám sát đội xe GPS, cấu hình giá cước, vùng Geofence & phân quyền');
 
   final String code;
   final String title;

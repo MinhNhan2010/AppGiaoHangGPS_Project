@@ -34,7 +34,7 @@ class DriverEntity extends Equatable {
     this.walletBalance = 0.0,
   });
 
-  /// Điểm điều phối thông minh đa tiêu chí (Mục 4.2.2)
+  /// Điểm điều phối thông minh đa tiêu chí
   /// Kết hợp khoảng cách GPS (bán kính 3km), điểm đánh giá (1..5) và tỷ lệ nhận chuyến (0..100%)
   double computeDispatchScore(GeoPoint pickupLocation) {
     if (!isOnline || approvalStatus != 'APPROVED' || currentLocation == null) {

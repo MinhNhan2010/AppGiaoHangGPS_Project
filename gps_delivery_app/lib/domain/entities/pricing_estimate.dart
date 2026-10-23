@@ -22,7 +22,7 @@ class PricingEstimate extends Equatable {
     required this.totalAmount,
   });
 
-  /// Tính toán chính xác cước phí giao hàng khớp với UC05 (Hình 8.5) & UC26 (Hình 8.28)
+  /// Tính toán chính xác cước phí giao hàng theo bảng giá dịch vụ và phụ phí.
   factory PricingEstimate.calculate({
     required DeliveryServiceType serviceType,
     required int distanceMeters,
@@ -30,10 +30,15 @@ class PricingEstimate extends Equatable {
     bool isPeakHour = false,
     double geofenceSurcharge = 0.0,
     double voucherDiscount = 0.0,
+    double baseFareScale = 1.0,
+    double pricePerKmScale = 1.0,
   }) {
     final distanceKm = distanceMeters / 1000.0;
-    final baseFare = serviceType.defaultBaseFare;
-    final distanceFare = distanceKm * serviceType.defaultPricePerKm;
+    final baseFare =
+        (serviceType.defaultBaseFare * baseFareScale).roundToDouble();
+    final distanceFare =
+        (distanceKm * serviceType.defaultPricePerKm * pricePerKmScale)
+            .roundToDouble();
     final peakFee = isPeakHour ? serviceType.defaultPeakSurcharge : 0.0;
     final surchargeFee = peakFee + geofenceSurcharge;
     final rawTotal = baseFare + distanceFare + surchargeFee - voucherDiscount;

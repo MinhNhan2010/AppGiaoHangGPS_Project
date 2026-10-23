@@ -1,19 +1,30 @@
 import 'package:flutter/material.dart';
+import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/geo_math.dart';
 import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
+import '../../domain/entities/geo_point.dart';
+import '../../domain/entities/pricing_estimate.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
 import '../widgets/animated_3d_ui_icons.dart';
+import '../widgets/system_state_screens.dart';
+
+part 'merchant_store_and_order_views.dart';
+part 'merchant_tracking_and_finance_views.dart';
+
 
 class _BatchCsvRow {
   final int rowNumber;
   final String recipientName;
   final String phone;
   final String address;
+  final String packageDescription;
+  final double weightKg;
   final double codAmount;
+  final DeliveryServiceType serviceType;
   final String? validationError;
 
   const _BatchCsvRow({
@@ -21,17 +32,27 @@ class _BatchCsvRow {
     required this.recipientName,
     required this.phone,
     required this.address,
+    this.packageDescription = 'Kiện hàng thương mại điện tử',
+    this.weightKg = 1.2,
     required this.codAmount,
+    this.serviceType = DeliveryServiceType.standard,
     this.validationError,
   });
 
   bool get isValid => validationError == null;
 }
 
-/// Phân hệ Cửa hàng / Đối tác B2B (Merchant Web Portal) - 11 màn hình (Hình 8.36 - 8.46)
-/// Bao phủ đầy đủ UC30 - UC40 theo Thiết kế Giao diện Chương 8.4
+/// Phân hệ Cửa hàng / Đối tác B2B (Merchant Web Portal) - 11 màn hình
+/// Giao diện phân hệ nghiệp vụ.
 class MerchantSubsystemEntry extends StatefulWidget {
-  const MerchantSubsystemEntry({super.key});
+  final int? forcedScreenIndex;
+  final VoidCallback? onLogout;
+
+  const MerchantSubsystemEntry({
+    super.key,
+    this.forcedScreenIndex,
+    this.onLogout,
+  });
 
   @override
   State<MerchantSubsystemEntry> createState() => _MerchantSubsystemEntryState();
@@ -39,27 +60,54 @@ class MerchantSubsystemEntry extends StatefulWidget {
 
 class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   final AppStateStore _store = AppStateStore.instance;
-  int _selectedScreenIndex = 2; // Mặc định: UC32 Tạo đơn lẻ
+  int _selectedScreenIndex = 2; // Mặc định: Tạo đơn gửi hàng (UC32)
 
-  // UC30 & UC31: Thông tin cửa hàng
+  // Thông tin cửa hàng (UC30)
   late final TextEditingController _storeNameCtrl;
   late final TextEditingController _taxCodeCtrl;
   late final TextEditingController _bankAccountCtrl;
-
-  // UC32: Tạo đơn lẻ
-  final TextEditingController _singleNameCtrl =
-      TextEditingController(text: 'Trần Thị Bích Ngọc');
-  final TextEditingController _singlePhoneCtrl =
-      TextEditingController(text: '0918223344');
-  final TextEditingController _singleAddrCtrl = TextEditingController(
-    text: '88 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP. HCM',
+  final TextEditingController _repNameCtrl =
+      TextEditingController(text: 'Nguyễn Văn A');
+  final TextEditingController _shopPhoneCtrl =
+      TextEditingController(text: '0909112233');
+  final TextEditingController _shopEmailCtrl =
+      TextEditingController(text: 'contact@gomsuviet.vn');
+  final TextEditingController _shopAddressCtrl = TextEditingController(
+    text: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
   );
+  String _businessCategory = 'Gốm sứ & Nội thất';
+  String _selectedBankName = 'Ngân hàng VPBank (VPB)';
+
+  // Tạo đơn gửi hàng lẻ (UC32)
+  String _selectedWarehouseName =
+      'Kho chính - 123 Đường Lê Lợi, Quận 1, TP. HCM';
+  final TextEditingController _singleNameCtrl = TextEditingController();
+  final TextEditingController _singlePhoneCtrl = TextEditingController();
+  final TextEditingController _singleAddrCtrl = TextEditingController();
+  String _singlePkgCategory = 'Quần áo, Điện tử';
+  final TextEditingController _singleWeightCtrl =
+      TextEditingController(text: '2.5');
+  final TextEditingController _singleDimCtrl =
+      TextEditingController(text: '30 x 20 x 10 cm');
   final TextEditingController _singleCodCtrl =
-      TextEditingController(text: '650000');
+      TextEditingController(text: '0');
+  final TextEditingController _singleNoteCtrl = TextEditingController();
+  String _feePayer = 'Người gửi trả phí';
+  DeliveryServiceType _merchantServiceType = DeliveryServiceType.express30m;
   bool _isFragile = true;
   bool _isKeepCold = false;
+  int _selectedWaybillOrderIndex = 0;
+  int _selectedWarehouseIndex = 0;
 
-  // UC33: Batch CSV/Excel Parser
+  // Sửa thông tin đơn hàng (UC36) tách biệt khỏi form Tạo đơn (UC32)
+  final TextEditingController _editOrderNameCtrl = TextEditingController();
+  final TextEditingController _editOrderPhoneCtrl = TextEditingController();
+  final TextEditingController _editOrderAddrCtrl = TextEditingController();
+  final TextEditingController _editOrderCodCtrl = TextEditingController();
+  String? _lastSyncedEditOrderCode;
+  String? _lastSyncedMerchantProfileKey;
+
+  // Batch CSV/Excel Parser
   final TextEditingController _csvInputCtrl = TextEditingController(
     text: 'Nguyễn Văn A,0987654321,123 Đường Lê Lợi Q.1 TP.HCM,350000\n'
         'Trần Thị B,09123456,456 Nguyễn Huệ Phú Nhuận TP.HCM,500000\n'
@@ -68,42 +116,102 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   );
   List<_BatchCsvRow> _parsedRows = [];
 
-  // UC36: Pickup Request
+  // Pickup Request
   final TextEditingController _pickupQtyCtrl =
       TextEditingController(text: '15');
   final TextEditingController _pickupWeightCtrl =
       TextEditingController(text: '25.5');
-  String _pickupVehicle = 'Xe tải nhỏ (500kg)';
 
-  // UC38: Rút tiền COD
+  // Rút tiền COD
   final TextEditingController _codWithdrawCtrl =
       TextEditingController(text: '2000000');
 
-  static const List<String> _screenTitles = [
-    '8.36: UC30 Đăng ký Đối tác Cửa hàng',
-    '8.37: UC31 Cấu hình Shop & Nhiều Kho',
-    '8.38: UC32 Tạo đơn giao hàng lẻ',
-    '8.39-8.40: UC33 Nhập đơn Excel/CSV & Kiểm lỗi',
-    '8.41: UC34 In vận đơn A6 (Barcode/QR)',
-    '8.42: UC35 Theo dõi Đa vận đơn Real-time',
-    '8.43: UC36 Gọi tài xế lấy hàng định kỳ',
-    '8.44: UC37 Đối soát công nợ COD',
-    '8.45: UC38 Rút tiền COD về Ngân hàng',
-    '8.46: UC39/UC40 Đơn hoàn & Báo cáo tháng',
-  ];
+  // Trạng thái bộ lọc Theo dõi đơn Shop (UC35) & Khiếu nại Shop (UC40)
+  String _shopOrderStatusTab = 'Tất cả';
+  String _shopComplaintType = 'Hàng hư hỏng / Mất hàng';
+  final TextEditingController _shopComplaintOrderCtrl = TextEditingController();
+  final TextEditingController _shopComplaintDescCtrl = TextEditingController();
+  String _shopCancelReason = 'Khách hàng báo hủy đơn';
+  final Set<String> _attachedMerchantDocs = {
+    'Giấy phép kinh doanh',
+    'Biển hiệu cửa hàng',
+  };
+  int _attachedShopEvidenceCount = 1;
 
   @override
   void initState() {
     super.initState();
+    if (widget.forcedScreenIndex != null) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
     _storeNameCtrl = TextEditingController(text: _store.merchantStoreName);
     _taxCodeCtrl = TextEditingController(text: _store.merchantTaxCode);
     _bankAccountCtrl = TextEditingController(text: _store.merchantBankAccount);
+    _syncMerchantControllersFromDb();
     _parseCsvBatch();
     _store.addListener(_onStoreChanged);
   }
 
+  void _syncMerchantControllersFromDb() {
+    final mer = _store.activeMerchantRecord;
+    final storeName = mer?.storeName ?? _store.merchantStoreName;
+    final taxCode = mer?.taxCode ?? _store.merchantTaxCode;
+    final bankAcc = mer?.bankAccount ?? _store.merchantBankAccount;
+    final repName = mer?.representativeName ?? _store.merchantRepresentative;
+    final ownerPhone = mer?.ownerPhone ?? '';
+    final userEmail = _store.activeAuthenticatedUser?.email ?? '';
+    final safeWhIdx = _store.merchantWarehouses.isNotEmpty
+        ? _selectedWarehouseIndex.clamp(
+            0,
+            _store.merchantWarehouses.length - 1,
+          )
+        : 0;
+    final whKey = _store.merchantWarehouses.isNotEmpty
+        ? '${_store.merchantWarehouses[safeWhIdx].id}|${_store.merchantWarehouses[safeWhIdx].address}'
+        : '';
+    final profileKey =
+        '$storeName|$taxCode|$bankAcc|$repName|$ownerPhone|$userEmail|$whKey';
+    if (_lastSyncedMerchantProfileKey != profileKey) {
+      _lastSyncedMerchantProfileKey = profileKey;
+      _storeNameCtrl.text = storeName;
+      _taxCodeCtrl.text = taxCode;
+      _bankAccountCtrl.text = bankAcc;
+      _repNameCtrl.text = repName;
+      if (ownerPhone.isNotEmpty) {
+        _shopPhoneCtrl.text = ownerPhone;
+      }
+      if (userEmail.isNotEmpty) {
+        _shopEmailCtrl.text = userEmail;
+      }
+      if (_store.merchantWarehouses.isNotEmpty) {
+        final wh = _store.merchantWarehouses[safeWhIdx];
+        _shopAddressCtrl.text = wh.address;
+        _selectedWarehouseName = '${wh.name} - ${wh.address}';
+      }
+    }
+    final firstOrd = _store.activeOrderRecord ?? _store.orders.firstOrNull;
+    if (firstOrd != null &&
+        (_shopComplaintOrderCtrl.text.isEmpty ||
+            !_store.orders.any(
+              (o) => o.trackingCode == _shopComplaintOrderCtrl.text.trim(),
+            ))) {
+      _shopComplaintOrderCtrl.text = firstOrd.trackingCode;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant MerchantSubsystemEntry oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.forcedScreenIndex != null &&
+        widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
+      _selectedScreenIndex = widget.forcedScreenIndex!;
+    }
+  }
+
   void _onStoreChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    _syncMerchantControllersFromDb();
+    setState(() {});
   }
 
   void _parseCsvBatch() {
@@ -112,26 +220,72 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i].trim();
       if (line.isEmpty) continue;
-      final parts = line.split(',');
-      final name = parts.isNotEmpty ? parts[0].trim() : '';
-      final phone = parts.length > 1 ? parts[1].trim() : '';
-      final addr = parts.length > 2 ? parts[2].trim() : '';
-      final cod = parts.length > 3 ? (double.tryParse(parts[3].trim()) ?? 0) : 0.0;
+      final lower = line.toLowerCase();
+      if (lower.contains('nguoi_nhan') || lower.contains('recipient')) {
+        continue;
+      }
+      final parts = line.split(',').map((p) => p.trim()).toList();
+      final name = parts.isNotEmpty ? parts[0] : '';
+      final phone = parts.length > 1 ? parts[1].replaceAll(' ', '') : '';
+      final addr = parts.length > 2 ? parts[2] : '';
+
+      final isFourColCodFormat = parts.length == 4 &&
+          double.tryParse(
+                parts[3].replaceAll('.', '').replaceAll('đ', '').trim(),
+              ) !=
+              null;
+
+      final desc = isFourColCodFormat
+          ? 'Kiện hàng thương mại điện tử'
+          : (parts.length > 3 && parts[3].isNotEmpty
+              ? parts[3]
+              : 'Kiện hàng thương mại điện tử');
+      final weight = isFourColCodFormat
+          ? 1.2
+          : (parts.length > 4 ? (double.tryParse(parts[4]) ?? 1.2) : 1.2);
+      final cod = isFourColCodFormat
+          ? (double.tryParse(
+                  parts[3].replaceAll('.', '').replaceAll('đ', '').trim(),
+                ) ??
+              0.0)
+          : (parts.length > 5
+              ? (double.tryParse(
+                      parts[5].replaceAll('.', '').replaceAll('đ', '').trim(),
+                    ) ??
+                  0.0)
+              : 0.0);
+      final svcStr = !isFourColCodFormat && parts.length > 6
+          ? parts[6].toUpperCase()
+          : 'STANDARD';
+      final svc = svcStr.contains('EXPRESS')
+          ? DeliveryServiceType.express30m
+          : svcStr.contains('ECONOMY') || svcStr.contains('SAVING')
+              ? DeliveryServiceType.saving
+              : DeliveryServiceType.standard;
 
       String? err;
-      if (!RegExp(r'^0\d{9}$').hasMatch(phone)) {
+      if (name.isEmpty) {
+        err = 'Thiếu tên người nhận';
+      } else if (!RegExp(r'^(\+84|0)\d{8,10}$').hasMatch(phone)) {
         err = 'SĐT không hợp lệ (Phải đủ 10 chữ số)';
       } else if (!RegExp(r'\d+').hasMatch(addr) || addr.length < 18) {
         err = 'Địa chỉ thiếu số nhà hoặc Tỉnh/Thành phố';
+      } else if (weight <= 0 || weight > 500) {
+        err = 'Khối lượng không hợp lệ';
+      } else if (cod < 0) {
+        err = 'Tiền COD không hợp lệ';
       }
 
       result.add(
         _BatchCsvRow(
-          rowNumber: i + 1,
+          rowNumber: result.length + 1,
           recipientName: name,
           phone: phone,
           address: addr,
+          packageDescription: desc,
+          weightKg: weight,
           codAmount: cod,
+          serviceType: svc,
           validationError: err,
         ),
       );
@@ -145,14 +299,27 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     _storeNameCtrl.dispose();
     _taxCodeCtrl.dispose();
     _bankAccountCtrl.dispose();
+    _repNameCtrl.dispose();
+    _shopPhoneCtrl.dispose();
+    _shopEmailCtrl.dispose();
+    _shopAddressCtrl.dispose();
     _singleNameCtrl.dispose();
     _singlePhoneCtrl.dispose();
     _singleAddrCtrl.dispose();
+    _singleWeightCtrl.dispose();
+    _singleDimCtrl.dispose();
     _singleCodCtrl.dispose();
+    _singleNoteCtrl.dispose();
+    _editOrderNameCtrl.dispose();
+    _editOrderPhoneCtrl.dispose();
+    _editOrderAddrCtrl.dispose();
+    _editOrderCodCtrl.dispose();
     _csvInputCtrl.dispose();
     _pickupQtyCtrl.dispose();
     _pickupWeightCtrl.dispose();
     _codWithdrawCtrl.dispose();
+    _shopComplaintOrderCtrl.dispose();
+    _shopComplaintDescCtrl.dispose();
     super.dispose();
   }
 
@@ -171,173 +338,559 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     }
   }
 
-  Widget _buildMerchant3dBanner() {
-    final style = _merchantScreen3dStyle(_selectedScreenIndex);
-    return Container(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.xs,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.divider),
-      ),
-      child: Row(
-        children: [
-          Animated3dIconBadge(
-            style: style,
-            size: 52,
-            showRadarPulse: true,
-            isSelected: true,
-          ),
-          const SizedBox(width: AppSpacing.sm),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Cổng Đối tác B2B • ${_store.merchantStoreName}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.primary,
-                    fontSize: 13,
-                  ),
-                ),
-                Text(
-                  'Đang mở: ${_screenTitles[_selectedScreenIndex]} • Số dư COD: ${CurrencyFormatter.formatVnd(_store.merchantCodBalance)}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+  int _merchantPillarForScreen(int screenIdx) {
+    if (screenIdx == 5 || screenIdx == 4 || screenIdx == 6) return 0;
+    if (screenIdx == 2 || screenIdx == 3) return 1;
+    if (screenIdx == 7 || screenIdx == 8) return 2;
+    if (screenIdx == 9 || screenIdx == 10) return 3;
+    return 4; // 0, 1
+  }
+
+  void _onMerchantPillarSelected(int pillarIdx) {
+    setState(() {
+      switch (pillarIdx) {
+        case 0:
+          _selectedScreenIndex = 5;
+          break;
+        case 1:
+          _selectedScreenIndex = 2;
+          break;
+        case 2:
+          _selectedScreenIndex = 7;
+          break;
+        case 3:
+          _selectedScreenIndex = 9;
+          break;
+        case 4:
+          _selectedScreenIndex = 1;
+          break;
+      }
+    });
+  }
+
+  List<(IconData, String, int)> _subTabsForActivePillar() {
+    switch (_merchantPillarForScreen(_selectedScreenIndex)) {
+      case 0:
+        return const [
+          (Icons.location_searching_outlined, 'Theo dõi đơn hàng Shop', 5),
+          (Icons.print_outlined, 'In phiếu gửi hàng A6', 4),
+          (Icons.edit_note_outlined, 'Sửa / Hủy đơn & Giao lại', 6),
+        ];
+      case 1:
+        return const [
+          (Icons.add_box_outlined, 'Tạo đơn gửi hàng lẻ', 2),
+          (Icons.upload_file_outlined, 'Nhập lô Excel / CSV', 3),
+        ];
+      case 2:
+        return const [
+          (Icons.fact_check_outlined, 'Đối soát công nợ COD', 7),
+          (Icons.account_balance_wallet_outlined, 'Rút tiền COD về Ngân hàng', 8),
+        ];
+      case 3:
+        return const [
+          (Icons.bar_chart_outlined, 'Báo cáo & Thống kê Shop', 9),
+          (Icons.support_agent_outlined, 'Gửi khiếu nại & Hỗ trợ', 10),
+        ];
+      default:
+        return const [
+          (Icons.warehouse_outlined, 'Điểm lấy hàng & Cấu hình Kho', 1),
+          (Icons.storefront_outlined, 'Hồ sơ & Xác thực pháp lý', 0),
+        ];
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 900) {
+        final isWide = constraints.maxWidth >= 860;
+        if (isWide) {
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 290.0);
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 250,
-                padding: const EdgeInsets.all(AppSpacing.sm),
-                decoration: BoxDecoration(
-                  color: AppColors.darkSidebar,
-                  borderRadius: BorderRadius.circular(AppSpacing.cardRadius),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(AppSpacing.sm),
-                      child: Row(
-                        children: [
-                          Animated3dIconBadge(
-                            style: _merchantScreen3dStyle(_selectedScreenIndex),
-                            size: 46,
-                            showRadarPulse: false,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'MERCHANT PORTAL B2B\n${_store.merchantStoreName}',
-                              style: const TextStyle(
-                                color: AppColors.surface,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(color: Colors.white24),
-                    ...List.generate(_screenTitles.length, (index) {
-                      final selected = _selectedScreenIndex == index;
-                      return ListTile(
-                        dense: true,
-                        selected: selected,
-                        selectedTileColor: AppColors.accent,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        title: Text(
-                          _screenTitles[index],
-                          style: TextStyle(
-                            color:
-                                selected ? AppColors.surface : Colors.white70,
-                            fontSize: 12,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w500,
-                          ),
-                        ),
-                        onTap: () =>
-                            setState(() => _selectedScreenIndex = index),
-                      );
-                    }),
-                  ],
-                ),
-              ),
-              const SizedBox(width: AppSpacing.md),
+              _buildMerchantDarkSidebar(sidebarWidth),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildMerchant3dBanner(),
-                    _buildActiveMerchantScreen(context),
+                    _buildMerchantOrangeTopHeader(),
+                    _buildMerchantContextualSubTabBar(contentPadding),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: EdgeInsets.all(contentPadding),
+                        child: _buildActiveMerchantScreen(context),
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           );
         }
+        final mobilePadding = (constraints.maxWidth * 0.035).clamp(10.0, 18.0);
         return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _buildMerchant3dBanner(),
-            _buildScreenSelectorBar(),
-            const SizedBox(height: AppSpacing.md),
-            _buildActiveMerchantScreen(context),
+            _buildMerchantOrangeTopHeader(),
+            _buildMerchantContextualSubTabBar(mobilePadding),
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(mobilePadding),
+                child: _buildActiveMerchantScreen(context),
+              ),
+            ),
+            _buildMerchantBottomNavBar(),
           ],
         );
       },
     );
   }
 
-  Widget _buildScreenSelectorBar() {
-    return SizedBox(
-      height: 40,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: _screenTitles.length,
-        separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.xs),
-        itemBuilder: (context, index) {
-          final isSelected = _selectedScreenIndex == index;
-          return ChoiceChip(
-            label: Text(
-              _screenTitles[index],
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
-                color: isSelected ? AppColors.surface : AppColors.textPrimary,
+  Widget _buildMerchantDarkSidebar(double sidebarWidth) {
+    const pillars = <(IconData, String, String, int)>[
+      (
+        Icons.inventory_2_outlined,
+        'Quản lý Vận đơn',
+        'Theo dõi • In A6 • Xử lý đơn',
+        0,
+      ),
+      (
+        Icons.add_box_outlined,
+        'Tạo đơn gửi hàng',
+        'Đơn lẻ & Nhập lô CSV',
+        1,
+      ),
+      (
+        Icons.account_balance_wallet_outlined,
+        'Đối soát & Ví COD',
+        'Công nợ & Rút tiền ngân hàng',
+        2,
+      ),
+      (
+        Icons.insights_rounded,
+        'Báo cáo & Hỗ trợ',
+        'Thống kê doanh thu & Khiếu nại',
+        3,
+      ),
+      (
+        Icons.storefront_outlined,
+        'Cửa hàng & Kho',
+        'Kho lấy hàng & Hồ sơ pháp lý',
+        4,
+      ),
+    ];
+    final activePillar = _merchantPillarForScreen(_selectedScreenIndex);
+
+    return Container(
+      width: sidebarWidth,
+      decoration: const BoxDecoration(
+        color: AppColors.techBg,
+        border: Border(
+          right: BorderSide(color: AppColors.ink, width: 1.6),
+        ),
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(18, 16, 14, 14),
+              child: Row(
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.acid,
+                      border: Border.all(color: AppColors.techBg),
+                    ),
+                    child: const Icon(
+                      Icons.storefront_rounded,
+                      color: AppColors.techBg,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'GHST MERCHANT • B2B',
+                          style: TextStyle(
+                            color: AppColors.acid,
+                            fontSize: 9,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 0.9,
+                          ),
+                        ),
+                        const Text(
+                          'Shop của tôi',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 14,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
-            selected: isSelected,
-            selectedColor: AppColors.primary,
-            backgroundColor: AppColors.surface,
-            onSelected: (_) => setState(() => _selectedScreenIndex = index),
+            const Divider(color: AppColors.techLine, height: 1),
+            const SizedBox(height: 8),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ...pillars.map((p) {
+                      final selected = activePillar == p.$4;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 3,
+                        ),
+                        child: InkWell(
+                          onTap: () => _onMerchantPillarSelected(p.$4),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 11,
+                            ),
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? AppColors.violet.withValues(alpha: 0.26)
+                                  : Colors.transparent,
+                              border: selected
+                                  ? const Border(
+                                      left: BorderSide(
+                                        color: AppColors.acid,
+                                        width: 4,
+                                      ),
+                                    )
+                                  : null,
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  p.$1,
+                                  color: selected
+                                      ? AppColors.acid
+                                      : AppColors.techMuted,
+                                  size: 19,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        p.$2,
+                                        style: TextStyle(
+                                          color: selected
+                                              ? Colors.white
+                                              : Colors.white70,
+                                          fontSize: 12.5,
+                                          fontWeight: selected
+                                              ? FontWeight.w800
+                                              : FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 1),
+                                      Text(
+                                        p.$3,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: AppColors.techMuted,
+                                          fontSize: 10.5,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.acid,
+                          foregroundColor: AppColors.techBg,
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.zero,
+                          ),
+                        ),
+                        onPressed: () =>
+                            setState(() => _selectedScreenIndex = 2),
+                        icon: const Icon(Icons.add_box_rounded, size: 16),
+                        label: const Text(
+                          'Tạo vận đơn mới',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMerchantOrangeTopHeader() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 560;
+        return Container(
+          height: 58,
+          padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 24),
+          decoration: const BoxDecoration(
+            color: AppColors.violet,
+            border: Border(
+              bottom: BorderSide(color: AppColors.ink, width: 1.6),
+            ),
+          ),
+          child: Row(
+            children: [
+              Animated3dIconBadge(
+                style: _merchantScreen3dStyle(_selectedScreenIndex),
+                size: 38,
+                showRadarPulse: false,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'GHST SHOP • ${_store.merchantStoreName} (Số dư COD: ${CurrencyFormatter.formatVnd(_store.merchantCodBalance)})',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13.5,
+                    fontFamily: 'Consolas',
+                  ),
+                ),
+              ),
+              if (!isCompact) ...[
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      tooltip: 'Khiếu nại & Hỗ trợ Shop',
+                      onPressed: () =>
+                          setState(() => _selectedScreenIndex = 10),
+                      icon: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        color: Colors.white,
+                        size: 20,
+                      ),
+                    ),
+                    Positioned(
+                      right: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        color: AppColors.acid,
+                        child: Text(
+                          '${_store.complaints.where((c) => c.status != "Đã giải quyết").length}',
+                          style: const TextStyle(
+                            color: AppColors.techBg,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                IconButton(
+                  tooltip: 'Theo dõi vận đơn Shop',
+                  onPressed: () => setState(() => _selectedScreenIndex = 5),
+                  icon: const Icon(
+                    Icons.notifications_none_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Tra cứu & In vận đơn A6',
+                  onPressed: () => setState(() => _selectedScreenIndex = 4),
+                  icon: const Icon(
+                    Icons.search_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+              ],
+              if (widget.onLogout != null) ...[
+                const SizedBox(width: 6),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.techBg,
+                    backgroundColor: AppColors.acid,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.zero,
+                    ),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isCompact ? 8 : 12,
+                      vertical: 8,
+                    ),
+                    minimumSize: Size.zero,
+                  ),
+                  onPressed: widget.onLogout,
+                  icon: const Icon(Icons.logout_rounded, size: 15),
+                  label: Text(
+                    isCompact ? 'Thoát' : 'Đăng xuất',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMerchantContextualSubTabBar(double hPad) {
+    final subTabs = _subTabsForActivePillar();
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: AppColors.ink, width: 1.2),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: subTabs.map((tab) {
+            final selected = _selectedScreenIndex == tab.$3;
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InkWell(
+                onTap: () => setState(() => _selectedScreenIndex = tab.$3),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: selected ? AppColors.ink : AppColors.paper,
+                    border: Border.all(color: AppColors.ink, width: 1.2),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        tab.$1,
+                        size: 15,
+                        color: selected ? AppColors.acid : AppColors.ink,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        tab.$2,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight:
+                              selected ? FontWeight.w900 : FontWeight.w600,
+                          color: selected ? AppColors.acid : AppColors.ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMerchantBottomNavBar() {
+    final activePillar = _merchantPillarForScreen(_selectedScreenIndex);
+    const items = [
+      (Icons.inventory_2_outlined, 'Đơn hàng'),
+      (Icons.add_box_outlined, 'Tạo đơn'),
+      (Icons.account_balance_wallet_outlined, 'Ví COD'),
+      (Icons.insights_rounded, 'Báo cáo'),
+      (Icons.storefront_outlined, 'Cửa hàng'),
+    ];
+    return Container(
+      height: 62,
+      decoration: const BoxDecoration(
+        color: AppColors.techBg,
+        border: Border(
+          top: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+      ),
+      child: Row(
+        children: List.generate(items.length, (idx) {
+          final selected = activePillar == idx;
+          final color = selected ? AppColors.acid : AppColors.techMuted;
+          return Expanded(
+            child: InkWell(
+              onTap: () => _onMerchantPillarSelected(idx),
+              child: Container(
+                decoration: BoxDecoration(
+                  border: selected
+                      ? const Border(
+                          top: BorderSide(color: AppColors.acid, width: 3),
+                        )
+                      : null,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(items[idx].$1, color: color, size: 20),
+                    const SizedBox(height: 2),
+                    Text(
+                      items[idx].$2,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 10.5,
+                        fontWeight:
+                            selected ? FontWeight.w900 : FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           );
-        },
+        }),
       ),
     );
   }
@@ -364,758 +917,17 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
         return _buildCodWithdrawalView();
       case 9:
         return _buildReturnAndMonthlyAnalyticsView();
+      case 10:
+        return _buildMerchantComplaintSupportUc40View();
       default:
         return _buildSingleOrderCreateView();
     }
   }
 
-  /// Hình 8.36: UC30 Đăng ký tài khoản Đối tác Cửa hàng
-  Widget _buildMerchantRegistrationView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.36: Đăng ký Tài khoản Đối tác Cửa hàng (UC30)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _storeNameCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Tên thương hiệu / Cửa hàng',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _taxCodeCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Mã số thuế doanh nghiệp',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _bankAccountCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Tài khoản ngân hàng nhận đối soát COD (VPBank)',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  setState(() {
-                    _store.merchantStoreName = _storeNameCtrl.text;
-                    _store.merchantTaxCode = _taxCodeCtrl.text;
-                    _store.merchantBankAccount = _bankAccountCtrl.text;
-                  });
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Đã lưu hồ sơ Đối tác B2B & kích hoạt Kho lấy hàng!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.storefront),
-                label: const Text('Hoàn tất đăng ký Cửa hàng'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.37: UC31 Cập nhật thông tin cửa hàng & Danh sách Kho lấy hàng
-  Widget _buildStoreConfigAndWarehousesView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.37: Quản lý Cửa hàng & Điểm lấy hàng (UC31)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              'Thương hiệu: ${_store.merchantStoreName} • MST: ${_store.merchantTaxCode} • Giờ mở cửa: ${_store.merchantOpenHours}',
-              style: const TextStyle(color: AppColors.textSecondary),
-            ),
-            const Divider(),
-            const Text(
-              'Danh sách Kho lấy hàng đã cấu hình tọa độ GPS:',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            ..._store.merchantWarehouses.map(
-              (wh) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(
-                  Icons.warehouse_outlined,
-                  color: AppColors.primary,
-                ),
-                title: Text(
-                  '${wh.name} (${wh.location.latitude}, ${wh.location.longitude})',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(wh.address),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.38: UC32 Tạo đơn giao hàng lẻ (Cửa hàng)
-  Widget _buildSingleOrderCreateView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.38: Tạo Đơn Giao hàng Lẻ B2B (UC32)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _singleNameCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'Tên khách nhận'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _singlePhoneCtrl,
-                    decoration:
-                        const InputDecoration(labelText: 'SĐT khách nhận'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _singleAddrCtrl,
-              decoration:
-                  const InputDecoration(labelText: 'Địa chỉ giao hàng'),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _singleCodCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration:
-                        const InputDecoration(labelText: 'Thu hộ COD (VNĐ)'),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                FilterChip(
-                  label: const Text('Hàng dễ vỡ'),
-                  selected: _isFragile,
-                  onSelected: (v) => setState(() => _isFragile = v),
-                ),
-                const SizedBox(width: 6),
-                FilterChip(
-                  label: const Text('Giữ lạnh'),
-                  selected: _isKeepCold,
-                  onSelected: (v) => setState(() => _isKeepCold = v),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  final ord = _store.createNewOrder(
-                    pickupAddress: _store.merchantWarehouses.first.address,
-                    dropoffAddress: _singleAddrCtrl.text,
-                    recipientName: _singleNameCtrl.text,
-                    recipientPhone: _singlePhoneCtrl.text,
-                    packageDescription:
-                        'Kiện hàng Shop (${_isFragile ? "Dễ vỡ" : "Tiêu chuẩn"})',
-                    weightKg: 2.0,
-                    dimensionsCm: '30x20x15 cm',
-                    serviceType: DeliveryServiceType.express30m,
-                    codAmount: double.tryParse(_singleCodCtrl.text) ?? 0,
-                    paymentMethod: 'Tiền mặt (COD)',
-                  );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã tạo vận đơn B2B ${ord.trackingCode} thành công!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.send_outlined),
-                label: const Text('Tạo đơn & Gọi tài xế ngay (Phí: 45.000đ)'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.39 & Hình 8.40: UC33 Tạo đơn hàng loạt từ Excel/CSV & Kiểm lỗi tự động
-  Widget _buildBatchCsvUploadAndValidationView() {
-    final validCount = _parsedRows.where((r) => r.isValid).length;
-    final errorCount = _parsedRows.length - validCount;
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.39 & 8.40: Tạo đơn hàng loạt CSV/Excel & Kiểm lỗi (UC33)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            const Text(
-              'Định dạng chuẩn: Tên người nhận, SĐT (10 số), Địa chỉ chi tiết, Tiền COD',
-              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _csvInputCtrl,
-              maxLines: 4,
-              onChanged: (_) => setState(_parseCsvBatch),
-              decoration: const InputDecoration(
-                labelText: 'Dữ liệu dòng CSV/Excel nhập hàng loạt',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Chip(
-                  backgroundColor: AppColors.success.withValues(alpha: 0.15),
-                  label: Text(
-                    'Hợp lệ: $validCount đơn',
-                    style: const TextStyle(
-                      color: AppColors.success,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Chip(
-                  backgroundColor: AppColors.danger.withValues(alpha: 0.15),
-                  label: Text(
-                    'Lỗi định dạng: $errorCount đơn',
-                    style: const TextStyle(
-                      color: AppColors.danger,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            ..._parsedRows.map(
-              (r) => Container(
-                margin: const EdgeInsets.only(bottom: 6),
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: r.isValid
-                      ? AppColors.background
-                      : AppColors.danger.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      r.isValid ? Icons.check_circle : Icons.error_outline,
-                      color: r.isValid ? AppColors.success : AppColors.danger,
-                      size: 18,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Dòng #${r.rowNumber}: ${r.recipientName} (${r.phone}) - ${r.address} • COD: ${CurrencyFormatter.formatVnd(r.codAmount)}'
-                        '${r.validationError != null ? "\n⚠️ ${r.validationError}" : ""}',
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                ),
-                onPressed: () {
-                  for (final r in _parsedRows.where((x) => x.isValid)) {
-                    _store.createNewOrder(
-                      pickupAddress: _store.merchantWarehouses.first.address,
-                      dropoffAddress: r.address,
-                      recipientName: r.recipientName,
-                      recipientPhone: r.phone,
-                      packageDescription: 'Đơn hàng loạt Batch CSV',
-                      weightKg: 1.2,
-                      dimensionsCm: '25x20x10 cm',
-                      serviceType: DeliveryServiceType.standard,
-                      codAmount: r.codAmount,
-                      paymentMethod: 'Tiền mặt (COD)',
-                    );
-                  }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã phát hành thành công $validCount đơn hợp lệ!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.playlist_add_check),
-                label: Text('Xác nhận tạo $validCount đơn hợp lệ'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.41: UC34 Quản lý & In phiếu gửi hàng A6 (Barcode Code-128 & QR Code)
-  Widget _buildWaybillA6PrintView() {
-    final ord = _store.orders.first;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.41: Bản xem trước Phiếu gửi hàng Khổ A6 (UC34)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Container(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppColors.textPrimary, width: 1.5),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: Code128BarcodeWidget(
-                          data: 'GHN-987654321-${ord.trackingCode}',
-                          height: 44,
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.md),
-                      QrMatrixPainterWidget(
-                        payload:
-                            '${ord.trackingCode}|${ord.recipientPhone}|${ord.codAmount.toStringAsFixed(0)}',
-                        size: 68,
-                      ),
-                    ],
-                  ),
-                  const Divider(),
-                  Text('Từ Shop: ${_store.merchantStoreName}'),
-                  Text('Địa chỉ Kho: ${_store.merchantWarehouses.first.address}'),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Người nhận: ${ord.recipientName} (${ord.recipientPhone})',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  Text('Giao đến: ${ord.dropoffAddress}'),
-                  const Divider(),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Hàng hóa: ${ord.packageDescription}'),
-                      Text(
-                        'THU HỘ COD: ${CurrencyFormatter.formatVnd(ord.codAmount)}',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.danger,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () async {
-                  final savedPath =
-                      await SecurityAndBarcodeUtils.exportA6LabelToHtmlFile(
-                    trackingCode: ord.trackingCode,
-                    storeName: _store.merchantStoreName,
-                    warehouseAddress: _store.merchantWarehouses.first.address,
-                    recipientName: ord.recipientName,
-                    recipientPhone: ord.recipientPhone,
-                    dropoffAddress: ord.dropoffAddress,
-                    packageDescription: ord.packageDescription,
-                    codAmount: ord.codAmount,
-                  );
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã kết xuất tệp vận đơn khổ A6 thực tế tại: $savedPath',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.print_outlined),
-                label: const Text('Kết xuất & In vận đơn Khổ nhiệt A6 (.HTML)'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.42: UC35 Theo dõi trạng thái nhiều đơn hàng cùng lúc
-  Widget _buildMultiOrderTrackingView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.42: Theo dõi Đa vận đơn Real-time (UC35)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            ..._store.orders.map(
-              (o) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(
-                  Icons.local_shipping,
-                  color: AppColors.primary,
-                ),
-                title: Text(
-                  '${o.trackingCode} • Khách: ${o.recipientName}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Tài xế: ${o.assignedDriverName ?? "Đang điều phối"} • Giao: ${o.dropoffAddress}',
-                ),
-                trailing: Chip(
-                  label: Text(
-                    o.status.displayName,
-                    style: const TextStyle(fontSize: 11),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.43: UC36 Gọi tài xế đến lấy hàng định kỳ (Pickup Request)
-  Widget _buildScheduledPickupRequestView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.43: Đặt lịch Gọi Tài xế Đến Lấy hàng Định kỳ (UC36)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _pickupQtyCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Số lượng kiện hàng dự kiến',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: TextField(
-                    controller: _pickupWeightCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Tổng khối lượng (kg)',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            DropdownButtonFormField<String>(
-              initialValue: _pickupVehicle,
-              decoration:
-                  const InputDecoration(labelText: 'Loại xe yêu cầu lấy hàng'),
-              items: [
-                'Xe máy (Dưới 30kg)',
-                'Xe tải nhỏ (500kg)',
-                'Xe Van nội thành (1 tấn)',
-              ]
-                  .map((v) => DropdownMenuItem(value: v, child: Text(v)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) setState(() => _pickupVehicle = v);
-              },
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã đặt lịch điều xe $_pickupVehicle lấy ${_pickupQtyCtrl.text} kiện hàng lúc 14:00 - 16:00!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.schedule_send),
-                label: const Text('Gửi yêu cầu điều xe lấy hàng'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.44: UC37 Đối soát công nợ tiền thu hộ COD
-  Widget _buildCodReconciliationView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.44: Bảng Đối soát Công nợ Tiền thu hộ COD (UC37)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _codCard('Tổng COD đã thu', '45.200.000 VNĐ', AppColors.primary),
-                _codCard('Phí vận chuyển cấn trừ', '3.850.000 VNĐ', AppColors.danger),
-                _codCard('Số dư thực nhận', '41.350.000 VNĐ', AppColors.success),
-              ],
-            ),
-            const Divider(),
-            ..._store.orders.map(
-              (o) => ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  '${o.trackingCode} • COD: ${CurrencyFormatter.formatVnd(o.codAmount)}',
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                subtitle: Text(
-                  'Phí ship: ${CurrencyFormatter.formatVnd(o.totalAmount)} • Thực nhận: ${CurrencyFormatter.formatVnd((o.codAmount - o.totalAmount).clamp(0, double.infinity))}',
-                ),
-                trailing: Text(
-                  o.status == OrderStatus.delivered
-                      ? 'Đã đối soát'
-                      : 'Chờ đối soát',
-                  style: TextStyle(
-                    color: o.status == OrderStatus.delivered
-                        ? AppColors.success
-                        : AppColors.accent,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _codCard(String title, String value, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(AppSpacing.sm),
-      decoration: BoxDecoration(
-        color: AppColors.background,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: const TextStyle(fontSize: 11)),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              fontSize: 15,
-              color: color,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Hình 8.45: UC38 Yêu cầu rút tiền COD về tài khoản ngân hàng
-  Widget _buildCodWithdrawalView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.45: Rút Tiền Thu hộ COD Về Ngân hàng (UC38)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              'Số dư COD khả dụng: ${CurrencyFormatter.formatVnd(_store.merchantCodBalance)} (${_store.merchantBankName} - ${_store.merchantBankAccount})',
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                color: AppColors.success,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            TextField(
-              controller: _codWithdrawCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Số tiền COD muốn rút (Tối thiểu 100.000đ)',
-              ),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                ),
-                onPressed: () {
-                  final amt = double.tryParse(_codWithdrawCtrl.text) ?? 0;
-                  _store.requestWithdrawal(
-                    ownerName: _store.merchantStoreName,
-                    ownerRole: 'Cửa hàng (COD)',
-                    amount: amt,
-                    bankName: _store.merchantBankName,
-                    accountMasked: _store.merchantBankAccount,
-                  );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã tạo lệnh rút COD ${CurrencyFormatter.formatVnd(amt)}!',
-                      ),
-                    ),
-                  );
-                },
-                icon: const Icon(Icons.payments_outlined),
-                label: const Text('Xác nhận rút tiền COD'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Hình 8.46: UC39 & UC40 Quản lý đơn hoàn trả & Thống kê chi phí tháng
-  Widget _buildReturnAndMonthlyAnalyticsView() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Hình 8.46: Quản lý Đơn hoàn & Báo cáo Doanh thu Tháng (UC39 & UC40)',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _codCard('Doanh thu tháng', '128.500.000 VNĐ', AppColors.primary),
-                _codCard('Tổng số đơn', '450 đơn (94.2% Giao TC)', AppColors.success),
-                _codCard('Tổng phí ship', '12.450.000 VNĐ', AppColors.accent),
-              ],
-            ),
-            const Divider(),
-            const Text(
-              'Danh sách đơn giao thất bại / Đang hoàn về kho (UC39):',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('#DH992014 • Khách từ chối nhận hàng'),
-              subtitle: const Text(
-                'Tài xế đang hoàn trả về Kho chính (123 Lê Lợi, Q.1)',
-              ),
-              trailing: OutlinedButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Đã xác nhận nhận lại hàng hoàn về kho!'),
-                    ),
-                  );
-                },
-                child: const Text('Đã nhận lại hàng'),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+  void _rebuildMerchantUi(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
   }
 }
+
+

@@ -45,8 +45,8 @@ class OsrmRouteResult {
   });
 }
 
-/// Động cơ Điều phối Tài xế Thông minh (Chương 4.3 & Chương 14.2 - RULE-DSP-01..04)
-/// & Bộ giải mã Địa chỉ OpenStreetMap Nominatim / Dẫn đường OSRM Thực tế
+/// Động cơ Điều phối Tài xế Thông minh
+/// & Bộ giải mã Địa chỉ Google Maps Geocoding / Nominatim + Dẫn đường Google Directions / OSRM Thực tế
 class SmartDispatchEngine {
   const SmartDispatchEngine._();
 
@@ -99,7 +99,7 @@ class SmartDispatchEngine {
     ...knownPlaces,
   ];
 
-  /// Tìm kiếm gợi ý địa chỉ cục bộ + bộ nhớ đệm Nominatim (UC03, UC04)
+  /// Tìm kiếm gợi ý địa chỉ cục bộ + bộ nhớ đệm Google Maps / Nominatim
   static List<GeocodedPlaceSuggestion> searchAddressSuggestions(String query) {
     final normalized = query.trim().toLowerCase();
     if (normalized.isEmpty) return _allPlaces.take(4).toList();
@@ -113,7 +113,7 @@ class SmartDispatchEngine {
     return matches.isEmpty ? _allPlaces.take(3).toList() : matches;
   }
 
-  /// Truy vấn trực tiếp API OpenStreetMap Nominatim toàn quốc (`countrycodes=vn`)
+  /// Truy vấn trực tiếp Google Maps Geocoding API + OpenStreetMap Nominatim toàn quốc (`countrycodes=vn`)
   static Future<List<GeocodedPlaceSuggestion>> fetchLiveNominatimSuggestions(
     String query,
   ) async {
@@ -123,6 +123,53 @@ class SmartDispatchEngine {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 4);
     try {
+      if (EnvConfig.isGoogleMapsKeyConfigured) {
+        final gUri = Uri.parse(EnvConfig.googleMapsGeocodeEndpoint).replace(
+          queryParameters: {
+            'address': trimmed,
+            'components': 'country:VN',
+            'language': 'vi',
+            'key': EnvConfig.googleMapsApiKey,
+          },
+        );
+        final gReq = await client.getUrl(gUri);
+        final gResp = await gReq.close().timeout(const Duration(seconds: 4));
+        if (gResp.statusCode == 200) {
+          final gBody = await gResp.transform(utf8.decoder).join();
+          final gDecoded = jsonDecode(gBody);
+          if (gDecoded is Map<String, dynamic> &&
+              gDecoded['status'] == 'OK' &&
+              gDecoded['results'] is List) {
+            final gResults = <GeocodedPlaceSuggestion>[];
+            for (final item in gDecoded['results'] as List) {
+              if (item is Map<String, dynamic>) {
+                final formatted = '${item['formatted_address'] ?? ''}'.trim();
+                final geom = item['geometry'] as Map<String, dynamic>?;
+                final loc = geom?['location'] as Map<String, dynamic>?;
+                final lat = (loc?['lat'] as num?)?.toDouble();
+                final lng = (loc?['lng'] as num?)?.toDouble();
+                if (lat != null && lng != null && formatted.isNotEmpty) {
+                  final parts = formatted.split(',');
+                  final shortTitle = parts.take(2).join(',').trim();
+                  final suggestion = GeocodedPlaceSuggestion(
+                    title: shortTitle.isEmpty ? formatted : shortTitle,
+                    fullAddress: formatted,
+                    location: GeoPoint(latitude: lat, longitude: lng),
+                  );
+                  gResults.add(suggestion);
+                  if (!_liveCachedPlaces.any(
+                    (p) => p.fullAddress == suggestion.fullAddress,
+                  )) {
+                    _liveCachedPlaces.insert(0, suggestion);
+                  }
+                }
+              }
+            }
+            if (gResults.isNotEmpty) return gResults;
+          }
+        }
+      }
+
       final uri = Uri.parse(EnvConfig.nominatimSearchEndpoint).replace(
         queryParameters: {
           'format': 'json',
@@ -176,7 +223,43 @@ class SmartDispatchEngine {
     return searchAddressSuggestions(trimmed);
   }
 
-  /// Truy vấn trực tiếp API dẫn đường thực tế OSRM (`router.project-osrm.org`)
+  /// Giải mã chuỗi Encoded Polyline chuẩn Google Maps Directions API (5-bit chunk / ZigZag)
+  static List<GeoPoint> decodeGoogleEncodedPolyline(String encoded) {
+    final points = <GeoPoint>[];
+    var index = 0;
+    final len = encoded.length;
+    var lat = 0;
+    var lng = 0;
+
+    while (index < len) {
+      var b = 0;
+      var shift = 0;
+      var result = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20 && index < len);
+      final dlat = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      lat += dlat;
+
+      shift = 0;
+      result = 0;
+      if (index >= len) break;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20 && index < len);
+      final dlng = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
+      lng += dlng;
+
+      points.add(GeoPoint(latitude: lat / 1e5, longitude: lng / 1e5));
+    }
+    return points;
+  }
+
+  /// Truy vấn trực tiếp Google Maps Directions API + OSRM (`router.project-osrm.org`)
   static Future<OsrmRouteResult> fetchLiveOsrmRoute(
     GeoPoint start,
     GeoPoint end,
@@ -184,6 +267,56 @@ class SmartDispatchEngine {
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 4);
     try {
+      if (EnvConfig.isGoogleMapsKeyConfigured) {
+        final gUri = Uri.parse(EnvConfig.googleMapsDirectionsEndpoint).replace(
+          queryParameters: {
+            'origin': '${start.latitude},${start.longitude}',
+            'destination': '${end.latitude},${end.longitude}',
+            'mode': 'driving',
+            'language': 'vi',
+            'key': EnvConfig.googleMapsApiKey,
+          },
+        );
+        final gReq = await client.getUrl(gUri);
+        final gResp = await gReq.close().timeout(const Duration(seconds: 4));
+        if (gResp.statusCode == 200) {
+          final gBody = await gResp.transform(utf8.decoder).join();
+          final gDecoded = jsonDecode(gBody);
+          if (gDecoded is Map<String, dynamic> &&
+              gDecoded['status'] == 'OK' &&
+              gDecoded['routes'] is List &&
+              (gDecoded['routes'] as List).isNotEmpty) {
+            final route =
+                (gDecoded['routes'] as List).first as Map<String, dynamic>;
+            final legs = route['legs'] as List?;
+            final firstLeg = legs != null && legs.isNotEmpty
+                ? legs.first as Map<String, dynamic>
+                : null;
+            final dist =
+                ((firstLeg?['distance']?['value'] as num?)?.round() ?? 1200)
+                    .clamp(300, 100000);
+            final dur =
+                ((firstLeg?['duration']?['value'] as num?)?.round() ?? 300)
+                    .clamp(60, 36000);
+            final overview =
+                route['overview_polyline'] as Map<String, dynamic>?;
+            final encodedPoints = '${overview?['points'] ?? ''}'.trim();
+            if (encodedPoints.isNotEmpty) {
+              final pts = decodeGoogleEncodedPolyline(encodedPoints);
+              if (pts.length >= 2) {
+                _lastLiveOsrmPolyline = pts;
+                return OsrmRouteResult(
+                  distanceMeters: dist,
+                  durationSeconds: dur,
+                  polylinePoints: pts,
+                  isLiveOsrm: true,
+                );
+              }
+            }
+          }
+        }
+      }
+
       final url =
           '${EnvConfig.osrmRouteEndpoint}/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
       final req = await client.getUrl(Uri.parse(url));
@@ -260,7 +393,7 @@ class SmartDispatchEngine {
     return fallback;
   }
 
-  /// RULE-DSP-01..04: Xếp hạng ứng viên tài xế theo bán kính mở rộng (3km -> 5km -> 8km)
+  /// Xếp hạng ứng viên tài xế theo bán kính mở rộng (3km -> 5km -> 8km)
   /// Công thức: Score = 0.5 * DistanceScore + 0.3 * RatingScore + 0.2 * AcceptanceRate
   static List<DispatchCandidateScore> rankDriversForPickup({
     required GeoPoint pickupLocation,
@@ -343,7 +476,7 @@ class SmartDispatchEngine {
     return points;
   }
 
-  /// Kiểm tra tài xế đã vào vùng bán kính 100m điểm giao hàng chưa (RULE-ORD-03)
+  /// Kiểm tra tài xế đã vào vùng bán kính 100m điểm giao hàng chưa
   static bool isWithinDropoffGeofence({
     required GeoPoint driverLocation,
     required GeoPoint dropoffLocation,
@@ -352,4 +485,3 @@ class SmartDispatchEngine {
     return dist <= EnvConfig.arrivalGeofenceRadiusMeters;
   }
 }
-
