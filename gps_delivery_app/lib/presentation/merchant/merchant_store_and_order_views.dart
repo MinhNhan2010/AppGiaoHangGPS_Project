@@ -3,6 +3,11 @@ part of 'merchant_subsystem_views.dart';
 extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
   /// UC30: Đăng ký & xác thực cửa hàng (Khớp 100% uc30_dang_ky_cua_hang.jpg)
   Widget _buildMerchantRegistrationView() {
+    final activeMer = _store.activeMerchantRecord;
+    final merStatus = activeMer?.approvalStatus ?? 'Chưa gửi hồ sơ';
+    final isMerApproved = merStatus == 'Đã duyệt';
+    final isMerRejected = merStatus == 'Từ chối';
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -15,7 +20,55 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
             color: Color(0xFF15131E),
           ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: isMerApproved
+                ? const Color(0xFFDCFCE7)
+                : isMerRejected
+                    ? const Color(0xFFFEE2E2)
+                    : const Color(0xFFFEF3C7),
+            border: Border.all(
+              color: isMerApproved
+                  ? AppColors.success
+                  : isMerRejected
+                      ? AppColors.danger
+                      : const Color(0xFFF59E0B),
+              width: 1.5,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isMerApproved
+                    ? Icons.verified_rounded
+                    : isMerRejected
+                        ? Icons.cancel_rounded
+                        : Icons.pending_actions_rounded,
+                color: isMerApproved
+                    ? AppColors.success
+                    : isMerRejected
+                        ? AppColors.danger
+                        : const Color(0xFFB45309),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  activeMer != null
+                      ? 'Trạng thái KYC Cửa hàng B2B (${activeMer.id}): $merStatus • MST: ${activeMer.taxCode} • Đã đính kèm ${_attachedMerchantDocs.length}/2 giấy tờ pháp lý'
+                      : 'Trạng thái KYC Cửa hàng B2B: $merStatus • Vui lòng điền thông tin và đính kèm giấy tờ pháp lý',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12.5,
+                    color: Color(0xFF15131E),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -317,6 +370,17 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           );
                           return;
                         }
+                        if (_attachedMerchantDocs.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              backgroundColor: AppColors.danger,
+                              content: Text(
+                                'Vui lòng đính kèm ít nhất 1 giấy tờ pháp lý (Giấy phép kinh doanh / Biển hiệu cửa hàng)!',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
                         if (_store.activeMerchantRecord == null ||
                             _store.activeMerchantRecord!.approvalStatus ==
                                 'Từ chối') {
@@ -415,7 +479,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
     return InkWell(
       onTap: () {
         _rebuildMerchantUi(() {
-          if (isAttached && _attachedMerchantDocs.length > 1) {
+          if (isAttached) {
             _attachedMerchantDocs.remove(title);
           } else {
             _attachedMerchantDocs.add(title);
@@ -548,7 +612,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                     ),
                                   ),
                                 ),
-                                if (idx == 0) ...[
+                                if (idx == safeWhIdx) ...[
                                   const SizedBox(width: 6),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
@@ -569,6 +633,42 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                     ),
                                   ),
                                 ],
+                                if (_store.merchantWarehouses.length > 1)
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    tooltip: 'Xóa kho lấy hàng này',
+                                    icon: const Icon(
+                                      Icons.delete_outline,
+                                      size: 18,
+                                      color: AppColors.danger,
+                                    ),
+                                    onPressed: () {
+                                      final removed =
+                                          _store.deleteMerchantWarehouse(w.id);
+                                      if (removed) {
+                                        _rebuildMerchantUi(() {
+                                          _selectedWarehouseIndex = 0;
+                                          if (_store
+                                              .merchantWarehouses.isNotEmpty) {
+                                            final firstWh =
+                                                _store.merchantWarehouses.first;
+                                            _shopAddressCtrl.text =
+                                                firstWh.address;
+                                            _selectedWarehouseName =
+                                                '${firstWh.name} - ${firstWh.address}';
+                                          }
+                                        });
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Đã xóa điểm lấy hàng ${w.name} (${w.id}).',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 4),
@@ -972,35 +1072,83 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       ],
                     ),
                     const SizedBox(height: 12),
-                    TextField(
-                      controller: _singleAddrCtrl,
-                      onChanged: (_) => _rebuildMerchantUi(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Địa chỉ giao (Thành phố, Quận/Huyện/Phường)',
-                        suffixIcon: Icon(Icons.keyboard_arrow_down_rounded),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _singleAddrCtrl,
+                            onChanged: (_) => _rebuildMerchantUi(() {}),
+                            decoration: const InputDecoration(
+                              labelText:
+                                  'Địa chỉ giao (Thành phố, Quận/Huyện/Phường)',
+                              suffixIcon:
+                                  Icon(Icons.keyboard_arrow_down_rounded),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: _isSearchingMerchantNominatim
+                              ? null
+                              : () async {
+                                  final q = _singleAddrCtrl.text.trim();
+                                  if (q.isEmpty) return;
+                                  _rebuildMerchantUi(
+                                    () => _isSearchingMerchantNominatim = true,
+                                  );
+                                  final results = await SmartDispatchEngine
+                                      .fetchLiveNominatimSuggestions(q);
+                                  if (!mounted) return;
+                                  _rebuildMerchantUi(() {
+                                    _liveMerchantNominatimSuggestions = results;
+                                    _isSearchingMerchantNominatim = false;
+                                  });
+                                },
+                          icon: const Icon(Icons.travel_explore, size: 16),
+                          label: Text(
+                            _isSearchingMerchantNominatim
+                                ? 'Đang tìm...'
+                                : 'Tra cứu OSM',
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 6),
                     Wrap(
                       spacing: 6,
                       runSpacing: 6,
-                      children: SmartDispatchEngine.searchAddressSuggestions(
-                        _singleAddrCtrl.text,
-                      )
-                          .take(3)
-                          .map(
-                            (place) => ActionChip(
-                              visualDensity: VisualDensity.compact,
-                              label: Text(
-                                place.title,
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              onPressed: () => _rebuildMerchantUi(
-                                () => _singleAddrCtrl.text = place.fullAddress,
+                      children: [
+                        ..._liveMerchantNominatimSuggestions.map(
+                          (place) => ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: const Color(0xFFEDE9FE),
+                            label: Text(
+                              '🌐 ${place.title}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
-                          )
-                          .toList(),
+                            onPressed: () => _rebuildMerchantUi(
+                              () => _singleAddrCtrl.text = place.fullAddress,
+                            ),
+                          ),
+                        ),
+                        ...SmartDispatchEngine.searchAddressSuggestions(
+                          _singleAddrCtrl.text,
+                        ).take(3).map(
+                          (place) => ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(
+                              place.title,
+                              style: const TextStyle(fontSize: 11),
+                            ),
+                            onPressed: () => _rebuildMerchantUi(
+                              () => _singleAddrCtrl.text = place.fullAddress,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 16),
                     const Text(
@@ -1466,27 +1614,30 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         backgroundColor: const Color(0xFF5B33E6),
                       ),
                       onPressed: () {
+                        const sample7Cols =
+                            'Phạm Thị Bảy,0902345678,45 Lê Duẩn Quận 1 TP.HCM,Giày thể thao,1.8,450000,EXPRESS\n'
+                            'Nguyễn Minh Quân,0913456789,210 Điện Biên Phủ Quận 3 TP.HCM,Mỹ phẩm chính hãng,1.2,320000,STANDARD';
                         final path = _store.exportReportFileToDisk(
-                          fileName: 'Mau_Tao_Don_Hang_Loat.csv',
+                          fileName: 'Mau_Tao_Don_7_Cot.csv',
                           content:
                               'ten_nguoi_nhan,sdt_nguoi_nhan,dia_chi_giao,mo_ta_hang,khoi_luong_kg,tien_cod_vnd,loai_dich_vu\n'
-                              '${_csvInputCtrl.text}',
+                              '$sample7Cols',
                         );
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Đã xuất mẫu file chuẩn tại: $path',
+                              'Đã xuất mẫu 7 cột đầy đủ tại: $path',
                             ),
                           ),
                         );
                       },
                       icon: const Icon(Icons.download, size: 16),
-                      label: const Text('Tải mẫu Excel (.xlsx)'),
+                      label: const Text('Tải mẫu Đầy đủ (7 cột .csv)'),
                     ),
                     OutlinedButton.icon(
                       onPressed: () {
                         final path = _store.exportReportFileToDisk(
-                          fileName: 'Mau_Tao_Don_Hang_Loat.csv',
+                          fileName: 'Mau_Tao_Don_4_Cot.csv',
                           content:
                               'ten_nguoi_nhan,sdt_nguoi_nhan,dia_chi_giao,tien_cod_vnd\n'
                               '${_csvInputCtrl.text}',
@@ -1494,16 +1645,53 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Đã lưu file mẫu CSV thực tế tại: $path',
+                              'Đã lưu file mẫu rút gọn 4 cột tại: $path',
                             ),
                           ),
                         );
                       },
                       icon: const Icon(Icons.description_outlined, size: 16),
-                      label: const Text('Tải mẫu CSV (.csv)'),
+                      label: const Text('Tải mẫu Rút gọn (4 cột .csv)'),
                     ),
                   ],
                 ),
+                if (_store.merchantWarehouses.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    isExpanded: true,
+                    initialValue: _selectedWarehouseIndex.clamp(
+                      0,
+                      _store.merchantWarehouses.length - 1,
+                    ),
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Kho lấy hàng áp dụng cho lô đơn CSV',
+                      prefixIcon: Icon(
+                        Icons.warehouse_outlined,
+                        color: Color(0xFF5B33E6),
+                        size: 18,
+                      ),
+                    ),
+                    items: List.generate(
+                      _store.merchantWarehouses.length,
+                      (idx) {
+                        final wh = _store.merchantWarehouses[idx];
+                        return DropdownMenuItem<int>(
+                          value: idx,
+                          child: Text(
+                            '${wh.name} (${wh.address})',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      },
+                    ),
+                    onChanged: (idx) {
+                      if (idx != null) {
+                        _rebuildMerchantUi(() => _selectedWarehouseIndex = idx);
+                      }
+                    },
+                  ),
+                ],
                 const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
@@ -1702,7 +1890,9 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                             for (final r
                                 in _parsedRows.where((x) => x.isValid)) {
                               _store.createNewOrder(
-                                pickupAddress: selectedWhAddr,
+                                pickupAddress: r.customPickupAddress.isNotEmpty
+                                    ? r.customPickupAddress
+                                    : selectedWhAddr,
                                 dropoffAddress: r.address,
                                 recipientName: r.recipientName,
                                 recipientPhone: r.phone,

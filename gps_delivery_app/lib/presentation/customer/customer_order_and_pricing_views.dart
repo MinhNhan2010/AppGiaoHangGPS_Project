@@ -3,6 +3,8 @@ part of 'customer_subsystem_views.dart';
 extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
   /// UC03 & UC04: Tạo đơn hàng mới & Chọn dịch vụ 2x2 Grid (Khớp 100% uc03 & uc04)
   Widget _buildCreateOrderView() {
+    final pickupSuggestions =
+        SmartDispatchEngine.searchAddressSuggestions(_pickupCtrl.text);
     final dropoffSuggestions =
         SmartDispatchEngine.searchAddressSuggestions(_dropoffCtrl.text);
     final pPt = SmartDispatchEngine.resolveAddressToCoordinate(
@@ -13,12 +15,19 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
       _dropoffCtrl.text,
       fallback: const GeoPoint(latitude: 10.7550, longitude: 106.6750),
     );
-    final estDistKm = _osrmDistMeters != null
-        ? (_osrmDistMeters! / 1000.0).clamp(0.5, 65.0)
-        : ((GeoMath.distanceMeters(pPt, dPt) * 1.28) / 1000.0).clamp(1.2, 45.0);
-    final estDurationMin = _osrmDurationSec != null
-        ? (_osrmDurationSec! / 60.0).round().clamp(5, 240)
-        : (estDistKm * 3.5).round().clamp(10, 180);
+    final rawAirMeters = GeoMath.distanceMeters(pPt, dPt);
+    final isDefaultRoute = _pickupCtrl.text.contains('Phố Huế') &&
+        _dropoffCtrl.text.contains('Lê Trọng Tấn');
+    final resolvedDistMeters = _osrmDistMeters ??
+        (isDefaultRoute
+            ? 14500
+            : (rawAirMeters * 1.28).round().clamp(1500, 45000));
+    final resolvedDurSec = _osrmDurationSec ??
+        (isDefaultRoute
+            ? 2700
+            : ((resolvedDistMeters / 1000.0) * 180).round());
+    final estDistKm = (resolvedDistMeters / 1000.0).clamp(0.5, 65.0);
+    final estDurationMin = (resolvedDurSec / 60.0).round().clamp(5, 240);
     final previewRoutePoints =
         (_osrmPreviewPoints != null && _osrmPreviewPoints!.length >= 2)
             ? _osrmPreviewPoints!
@@ -93,12 +102,32 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
             const SizedBox(height: 8),
             TextField(
               controller: _pickupCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Điểm lấy hàng (Người gửi)',
-                prefixIcon: Icon(
+                prefixIcon: const Icon(
                   Icons.radio_button_checked_rounded,
                   color: AppColors.violet,
                   size: 18,
+                ),
+                suffixIcon: IconButton(
+                  tooltip: 'Tra cứu điểm lấy thực tế từ OpenStreetMap',
+                  onPressed: () async {
+                    final results = await SmartDispatchEngine
+                        .fetchLiveNominatimSuggestions(_pickupCtrl.text);
+                    if (!mounted) return;
+                    _rebuildCustomerUi(() {});
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Đã tìm thấy ${results.length} địa điểm lấy hàng cho "${_pickupCtrl.text}"',
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.travel_explore_rounded,
+                    color: AppColors.violet,
+                  ),
                 ),
               ),
               onChanged: (_) => _rebuildCustomerUi(() {
@@ -107,6 +136,59 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                 _osrmDurationSec = null;
               }),
             ),
+            if (_store.customerSavedAddresses.isNotEmpty ||
+                pickupSuggestions.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  ..._store.customerSavedAddresses.map((addr) {
+                    return ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(
+                        Icons.bookmark_rounded,
+                        size: 13,
+                        color: AppColors.violet,
+                      ),
+                      label: Text(
+                        'Lấy tại: ${addr.label}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      onPressed: () => _rebuildCustomerUi(() {
+                        _pickupCtrl.text = addr.fullAddress;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
+                      }),
+                    );
+                  }),
+                  ...pickupSuggestions.take(2).map((place) {
+                    return ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(
+                        Icons.my_location_rounded,
+                        size: 13,
+                        color: AppColors.violet,
+                      ),
+                      label: Text(
+                        place.title,
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      onPressed: () => _rebuildCustomerUi(() {
+                        _pickupCtrl.text = place.fullAddress;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
+                      }),
+                    );
+                  }),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             TextField(
               controller: _dropoffCtrl,
@@ -144,31 +226,57 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                 _osrmDurationSec = null;
               }),
             ),
-            if (dropoffSuggestions.isNotEmpty) ...[
+            if (_store.customerSavedAddresses.isNotEmpty ||
+                dropoffSuggestions.isNotEmpty) ...[
               const SizedBox(height: 8),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: dropoffSuggestions.take(4).map((place) {
-                  return ActionChip(
-                    visualDensity: VisualDensity.compact,
-                    avatar: const Icon(
-                      Icons.place,
-                      size: 13,
-                      color: AppColors.pink,
-                    ),
-                    label: Text(
-                      place.title,
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                    onPressed: () => _rebuildCustomerUi(() {
-                      _dropoffCtrl.text = place.fullAddress;
-                      _osrmPreviewPoints = null;
-                      _osrmDistMeters = null;
-                      _osrmDurationSec = null;
-                    }),
-                  );
-                }).toList(),
+                children: [
+                  ..._store.customerSavedAddresses.map((addr) {
+                    return ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(
+                        Icons.bookmark_border_rounded,
+                        size: 13,
+                        color: AppColors.pink,
+                      ),
+                      label: Text(
+                        'Giao tới: ${addr.label}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      onPressed: () => _rebuildCustomerUi(() {
+                        _dropoffCtrl.text = addr.fullAddress;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
+                      }),
+                    );
+                  }),
+                  ...dropoffSuggestions.take(3).map((place) {
+                    return ActionChip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const Icon(
+                        Icons.place,
+                        size: 13,
+                        color: AppColors.pink,
+                      ),
+                      label: Text(
+                        place.title,
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                      onPressed: () => _rebuildCustomerUi(() {
+                        _dropoffCtrl.text = place.fullAddress;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
+                      }),
+                    );
+                  }),
+                ],
               ),
             ],
             const SizedBox(height: 16),
@@ -678,6 +786,13 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
     final weightVal = double.tryParse(_weightCtrl.text.trim()) ?? 1.5;
     if (weightVal > 5.0) {
       geofenceFee += ((weightVal - 5.0) * 3000).roundToDouble();
+    }
+    final combinedDesc = '$_pkgCategory ${_pkgDescCtrl.text}'.toLowerCase();
+    if (combinedDesc.contains('dễ vỡ')) {
+      geofenceFee += 5000;
+    }
+    if (combinedDesc.contains('giữ lạnh')) {
+      geofenceFee += 10000;
     }
 
     final baseScale = (_store.baseFareConfig / 25000.0).clamp(0.4, 5.0);
@@ -1277,6 +1392,9 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     codAmount: double.tryParse(_codCtrl.text) ?? 0,
                     paymentMethod: _selectedPaymentMethod,
                     voucherCode: _voucherCtrl.text,
+                    customDistanceMeters: distMeters,
+                    customDurationSeconds: durationSec,
+                    isPrepaidConfirmed: _isPreOrderPaid,
                   );
                   if (_isPreOrderPaid &&
                       _selectedPaymentMethod != 'Tiền mặt (COD)') {
@@ -1482,8 +1600,10 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
       );
     }
 
-    final remMeters = _store.distanceFromDriverToDropoffMeters();
+    final remMeters = _store.distanceFromDriverToOrderDropoffMeters(activeOrder);
     final etaMinutes = (remMeters / 500.0).ceil().clamp(1, 45);
+    final deliveryOtp4 =
+        SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(activeOrder.trackingCode);
     final isSearching = activeOrder.status == OrderStatus.searching ||
         activeOrder.status == OrderStatus.draft;
     final isAccepted = activeOrder.status == OrderStatus.accepted ||
@@ -1559,8 +1679,53 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     ),
                   ),
                 ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECFDF5),
+                    border: Border.all(color: const Color(0xFF14B866)),
+                  ),
+                  child: Text(
+                    'OTP nhận hàng: $deliveryOtp4',
+                    style: const TextStyle(
+                      color: Color(0xFF14B866),
+                      fontWeight: FontWeight.w900,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ),
               ],
             ),
+            if (_store.customerOrders.length > 1) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _store.customerOrders.map((ordItem) {
+                  final isCurrent = ordItem.trackingCode == activeOrder.trackingCode;
+                  return ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: isCurrent ? Colors.white : AppColors.ink,
+                      ),
+                    ),
+                    selected: isCurrent,
+                    selectedColor: const Color(0xFF5B33E6),
+                    onSelected: (_) => _rebuildCustomerUi(() {
+                      _store.selectCustomerOrder(ordItem.trackingCode);
+                    }),
+                  );
+                }).toList(),
+              ),
+            ],
             const SizedBox(height: 12),
             Map3dPerspectiveWidget(
               mode: MapViewMode.customerLiveTracking,
@@ -1681,34 +1846,48 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                       ],
                     ),
                   ),
-                  IconButton.filled(
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF5B33E6),
+                  if (activeOrder.assignedDriverName != null) ...[
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF5B33E6),
+                      ),
+                      onPressed: () {
+                        final rawPhone = assignedDriverRecord?.phone ??
+                            _store.activeDriverRecord?.phone ??
+                            _store.activeDriverPhone;
+                        final maskedPhone =
+                            SecurityAndBarcodeUtils.maskPhoneNumber(
+                          rawPhone,
+                          shouldMask: isDelivered || isCancelled,
+                        );
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Đang kết nối cuộc gọi tới tài xế $maskedPhone...',
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.phone,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                     ),
-                    onPressed: () {
-                      final drvPhone = assignedDriverRecord?.phone ??
-                          _store.activeDriverRecord?.phone ??
-                          _store.activeDriverPhone;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Đang gọi tới tài xế $drvPhone...'),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.phone, color: Colors.white, size: 18),
-                  ),
-                  const SizedBox(width: 6),
-                  IconButton.filled(
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF5B33E6),
+                    const SizedBox(width: 6),
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: const Color(0xFF5B33E6),
+                      ),
+                      onPressed: () =>
+                          _rebuildCustomerUi(() => _selectedScreenIndex = 5),
+                      icon: const Icon(
+                        Icons.chat_bubble_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
                     ),
-                    onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 5),
-                    icon: const Icon(
-                      Icons.chat_bubble_rounded,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -1717,22 +1896,27 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
               spacing: 8,
               runSpacing: 8,
               children: [
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF5B33E6),
-                    foregroundColor: Colors.white,
+                if (activeOrder.assignedDriverName != null)
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF5B33E6),
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () =>
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 5),
+                    icon: const Icon(Icons.chat_bubble_outline, size: 17),
+                    label: const Text('Nhắn tin tài xế'),
                   ),
-                  onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 5),
-                  icon: const Icon(Icons.chat_bubble_outline, size: 17),
-                  label: const Text('Nhắn tin tài xế'),
-                ),
+                if (isDelivered && activeOrder.paymentStatus != 'RETURNED')
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 8),
+                    icon: const Icon(Icons.star_outline_rounded, size: 17),
+                    label: const Text('Đánh giá 5 sao'),
+                  ),
                 OutlinedButton.icon(
-                  onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 8),
-                  icon: const Icon(Icons.star_outline_rounded, size: 17),
-                  label: const Text('Đánh giá 5 sao'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 9),
+                  onPressed: () =>
+                      _rebuildCustomerUi(() => _selectedScreenIndex = 9),
                   icon: const Icon(Icons.report_problem_outlined, size: 17),
                   label: const Text('Khiếu nại'),
                 ),
@@ -1742,7 +1926,8 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                       foregroundColor: const Color(0xFFDC2626),
                       side: const BorderSide(color: Color(0xFFFCA5A5)),
                     ),
-                    onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 6),
+                    onPressed: () =>
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 6),
                     icon: const Icon(Icons.cancel_outlined, size: 17),
                     label: const Text('Hủy đơn'),
                   ),

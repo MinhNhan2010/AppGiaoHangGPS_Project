@@ -42,12 +42,21 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                 // Bản đồ Google Maps ghim vị trí địa chỉ đã lưu
                 Builder(
                   builder: (context) {
-                    final pinPos = mySavedAddresses.isNotEmpty
-                        ? mySavedAddresses.first.location
+                    final safeAddrIdx = mySavedAddresses.isEmpty
+                        ? 0
+                        : _selectedSavedAddressIndex.clamp(
+                            0,
+                            mySavedAddresses.length - 1,
+                          );
+                    final focusedSaved = mySavedAddresses.isNotEmpty
+                        ? mySavedAddresses[safeAddrIdx]
+                        : null;
+                    final pinPos = focusedSaved != null
+                        ? focusedSaved.location
                         : (_store.activeAuthenticatedUser?.defaultLocation ??
                             _store.activeDriverLocation);
-                    final pinAddress = mySavedAddresses.isNotEmpty
-                        ? mySavedAddresses.first.fullAddress
+                    final pinAddress = focusedSaved != null
+                        ? focusedSaved.fullAddress
                         : (_store.customerDefaultAddress.isNotEmpty
                             ? _store.customerDefaultAddress
                             : 'Chưa thiết lập địa chỉ mặc định');
@@ -69,11 +78,15 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                             longitude: pinPos.longitude + 0.0040,
                           ),
                         ],
-                        pickupLabel: mySavedAddresses.isNotEmpty
-                            ? '📍 ${mySavedAddresses.first.label}'
+                        pickupLabel: focusedSaved != null
+                            ? '📍 ${focusedSaved.label}'
                             : '📍 Vị trí lưu',
                         dropoffLabel: 'Khu vực lân cận',
-                        nextTurnInstruction: 'Địa chỉ mặc định của bạn',
+                        nextTurnInstruction: focusedSaved != null &&
+                                focusedSaved.fullAddress ==
+                                    _store.customerDefaultAddress
+                            ? 'Địa chỉ mặc định của bạn'
+                            : 'Đang xem trước địa chỉ đã lưu',
                         roadName: pinAddress,
                       ),
                     );
@@ -93,21 +106,23 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                     onPressed: () async {
                       final gpsMsg = await _store.acquireRealHardwareGps();
                       if (!mounted) return;
-                      final pos = mySavedAddresses.isNotEmpty
-                          ? mySavedAddresses.first.location
-                          : (_store.activeAuthenticatedUser?.defaultLocation ??
-                              _store.activeDriverLocation);
-                      final fallbackAddr = mySavedAddresses.isNotEmpty
-                          ? mySavedAddresses.first.fullAddress
-                          : _store.customerDefaultAddress;
-                      final resolvedText = fallbackAddr.isNotEmpty
-                          ? fallbackAddr
-                          : 'Vị trí GPS (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})';
+                      final pos = _store.activeDriverLocation;
+                      final candidates = SmartDispatchEngine.searchAddressSuggestions('');
+                      GeocodedPlaceSuggestion? nearestPlace;
+                      double minDist = double.infinity;
+                      for (final c in candidates) {
+                        final d = GeoMath.distanceMeters(pos, c.location);
+                        if (d < minDist) {
+                          minDist = d;
+                          nearestPlace = c;
+                        }
+                      }
+                      final resolvedText = (nearestPlace != null && minDist <= 2500)
+                          ? '${nearestPlace.fullAddress} (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})'
+                          : 'Vị trí GPS thực tế (${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)})';
                       _rebuildCustomerUi(() {
                         _pickupCtrl.text = resolvedText;
-                        if (_newAddressCtrl.text.trim().isEmpty) {
-                          _newAddressCtrl.text = resolvedText;
-                        }
+                        _newAddressCtrl.text = resolvedText;
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -151,130 +166,217 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                     ),
                   )
                 else
-                  ...mySavedAddresses.map(
-                  (addr) => Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.all(Radius.zero),
-                      border: Border.all(color: const Color(0xFF15131E)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                  ...mySavedAddresses.asMap().entries.map((entry) {
+                    final idx = entry.key;
+                    final addr = entry.value;
+                    final isDefault =
+                        addr.fullAddress == _store.customerDefaultAddress;
+                    final isFocused = idx ==
+                        _selectedSavedAddressIndex.clamp(
+                          0,
+                          mySavedAddresses.length - 1,
+                        );
+                    return InkWell(
+                      onTap: () => _rebuildCustomerUi(
+                        () => _selectedSavedAddressIndex = idx,
+                      ),
+                      child: Container(
+                        margin: const EdgeInsets.only(bottom: 10),
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isFocused
+                              ? const Color(0xFFF5F1E8)
+                              : Colors.white,
+                          borderRadius: BorderRadius.all(Radius.zero),
+                          border: Border.all(
+                            color: isFocused
+                                ? const Color(0xFF5B33E6)
+                                : const Color(0xFF15131E),
+                            width: isFocused ? 1.5 : 1.0,
+                          ),
+                        ),
+                        child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE9E9E4),
-                                borderRadius: BorderRadius.all(Radius.zero),
-                              ),
-                              child: Icon(
-                                addr.label.contains('Nhà')
-                                    ? Icons.home_rounded
-                                    : addr.label.contains('Cơ quan') ||
-                                            addr.label.contains('Công ty')
-                                        ? Icons.business_rounded
-                                        : Icons.location_on_rounded,
-                                color: const Color(0xFF5B33E6),
-                              ),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFE9E9E4),
+                                    borderRadius: BorderRadius.all(Radius.zero),
+                                  ),
+                                  child: Icon(
+                                    addr.label.contains('Nhà')
+                                        ? Icons.home_rounded
+                                        : addr.label.contains('Cơ quan') ||
+                                                addr.label.contains('Công ty')
+                                            ? Icons.business_rounded
+                                            : Icons.location_on_rounded,
+                                    color: const Color(0xFF5B33E6),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Wrap(
+                                        spacing: 6,
+                                        runSpacing: 4,
+                                        crossAxisAlignment:
+                                            WrapCrossAlignment.center,
+                                        children: [
+                                          Text(
+                                            addr.label,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w800,
+                                              fontSize: 13.5,
+                                            ),
+                                          ),
+                                          if (isDefault)
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                horizontal: 6,
+                                                vertical: 2,
+                                              ),
+                                              color: const Color(0xFF5B33E6),
+                                              child: const Text(
+                                                'Mặc định',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        addr.fullAddress,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF4A4754),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    color: Color(0xFFDC2626),
+                                    size: 20,
+                                  ),
+                                  onPressed: () =>
+                                      _store.removeCustomerAddress(addr.id),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    addr.label,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 13.5,
+                            const SizedBox(height: 6),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              children: [
+                                OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 4,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    addr.fullAddress,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Color(0xFF4A4754),
+                                  onPressed: () {
+                                    _pickupCtrl.text = addr.fullAddress;
+                                    _rebuildCustomerUi(
+                                      () => _selectedScreenIndex = 2,
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.trip_origin_rounded,
+                                    size: 14,
+                                  ),
+                                  label: const Text(
+                                    'Chọn lấy',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                FilledButton.tonalIcon(
+                                  style: FilledButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 4,
                                     ),
                                   ),
-                                ],
-                              ),
-                            ),
-                            IconButton(
-                              visualDensity: VisualDensity.compact,
-                              icon: const Icon(
-                                Icons.delete_outline,
-                                color: Color(0xFFDC2626),
-                                size: 20,
-                              ),
-                              onPressed: () =>
-                                  _store.removeCustomerAddress(addr.id),
+                                  onPressed: () {
+                                    _dropoffCtrl.text = addr.fullAddress;
+                                    _rebuildCustomerUi(
+                                      () => _selectedScreenIndex = 2,
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.location_on_outlined,
+                                    size: 14,
+                                  ),
+                                  label: const Text(
+                                    'Chọn giao',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                if (!isDefault)
+                                  TextButton.icon(
+                                    style: TextButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                    ),
+                                    onPressed: () {
+                                      _store.setDefaultCustomerAddress(
+                                        addr.fullAddress,
+                                      );
+                                      _rebuildCustomerUi(() {
+                                        _selectedSavedAddressIndex = idx;
+                                        _profileAddressCtrl.text =
+                                            addr.fullAddress;
+                                      });
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Đã đặt "${addr.label}" làm địa chỉ mặc định!',
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.star_outline_rounded,
+                                      size: 14,
+                                      color: Color(0xFF5B33E6),
+                                    ),
+                                    label: const Text(
+                                      'Đặt mặc định',
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: [
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                              ),
-                              onPressed: () {
-                                _pickupCtrl.text = addr.fullAddress;
-                                _rebuildCustomerUi(
-                                  () => _selectedScreenIndex = 2,
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.trip_origin_rounded,
-                                size: 14,
-                              ),
-                              label: const Text(
-                                'Chọn lấy',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                            ),
-                            FilledButton.tonalIcon(
-                              style: FilledButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 4,
-                                ),
-                              ),
-                              onPressed: () {
-                                _dropoffCtrl.text = addr.fullAddress;
-                                _rebuildCustomerUi(
-                                  () => _selectedScreenIndex = 2,
-                                );
-                              },
-                              icon: const Icon(
-                                Icons.location_on_outlined,
-                                size: 14,
-                              ),
-                              label: const Text(
-                                'Chọn giao',
-                                style: TextStyle(fontSize: 12),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                      ),
+                    );
+                  }),
                 const SizedBox(height: 6),
                 Wrap(
                   spacing: 8,
@@ -293,10 +395,34 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                     Expanded(
                       child: TextField(
                         controller: _newAddressCtrl,
-                        decoration: const InputDecoration(
+                        onChanged: (_) => _rebuildCustomerUi(() {}),
+                        decoration: InputDecoration(
                           isDense: true,
                           hintText: 'Nhập địa chỉ mới để lưu vào sổ...',
-                          prefixIcon: Icon(Icons.place_outlined),
+                          prefixIcon: const Icon(Icons.place_outlined),
+                          suffixIcon: IconButton(
+                            tooltip: 'Tra cứu địa chỉ thực tế từ OpenStreetMap',
+                            onPressed: () async {
+                              final q = _newAddressCtrl.text.trim();
+                              if (q.isEmpty) return;
+                              final results = await SmartDispatchEngine
+                                  .fetchLiveNominatimSuggestions(q);
+                              if (!mounted) return;
+                              _rebuildCustomerUi(() {});
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Đã tìm thấy ${results.length} địa chỉ thực tế cho "$q"',
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(
+                              Icons.travel_explore_rounded,
+                              color: Color(0xFF5B33E6),
+                              size: 18,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -309,7 +435,7 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                           horizontal: 14,
                           vertical: 12,
                         ),
-                        shape: RoundedRectangleBorder(
+                        shape: const RoundedRectangleBorder(
                           borderRadius: BorderRadius.all(Radius.zero),
                         ),
                       ),
@@ -329,6 +455,32 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                     ),
                   ],
                 ),
+                if (_newAddressCtrl.text.trim().isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: SmartDispatchEngine.searchAddressSuggestions(
+                      _newAddressCtrl.text,
+                    ).take(3).map((place) {
+                      return ActionChip(
+                        visualDensity: VisualDensity.compact,
+                        avatar: const Icon(
+                          Icons.location_searching_rounded,
+                          size: 13,
+                          color: Color(0xFF5B33E6),
+                        ),
+                        label: Text(
+                          place.title,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        onPressed: () => _rebuildCustomerUi(
+                          () => _newAddressCtrl.text = place.fullAddress,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ],
               ],
             ),
           ),

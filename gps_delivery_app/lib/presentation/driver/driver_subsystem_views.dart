@@ -49,10 +49,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   Timer? _dispatchCountdownTimer;
   final Set<String> _rejectedDriverIds = {};
 
-  // POD & OTP 4 số (UC17)
+  // POD & OTP 4 số (UC17) & Chat hai chiều với Khách (UC16)
   final TextEditingController _podOtpCtrl = TextEditingController();
   final TextEditingController _podRecipientCtrl = TextEditingController();
   final TextEditingController _podNoteCtrl = TextEditingController();
+  final TextEditingController _driverChatInputCtrl = TextEditingController();
+  bool _showDriverChatPanel = false;
   String? _lastSyncedDriverOrderCode;
   String? _lastSyncedDriverProfileKey;
 
@@ -115,9 +117,17 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     }
     final activeOrd = _store.activeOrderRecord;
     if (activeOrd != null) {
-      if (_lastSyncedDriverOrderCode != activeOrd.trackingCode ||
-          _podRecipientCtrl.text.trim().isEmpty) {
+      if (_lastSyncedDriverOrderCode != activeOrd.trackingCode) {
         _lastSyncedDriverOrderCode = activeOrd.trackingCode;
+        _podRecipientCtrl.text = activeOrd.recipientName;
+        if (activeOrd.status == OrderStatus.delivered) {
+          _podOtpCtrl.text = SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(
+            activeOrd.trackingCode,
+          );
+        } else {
+          _podOtpCtrl.clear();
+        }
+      } else if (_podRecipientCtrl.text.trim().isEmpty) {
         _podRecipientCtrl.text = activeOrd.recipientName;
       }
       if (activeOrd.podImageNote != null &&
@@ -140,30 +150,6 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   void _onStoreChanged() {
     if (!mounted) return;
     _syncDriverControllersFromDb();
-    setState(() {});
-  }
-
-  void _toggleDispatchTimer() {
-    if (_dispatchCountdownTimer?.isActive ?? false) {
-      _dispatchCountdownTimer?.cancel();
-      setState(() {});
-      return;
-    }
-    _dispatchCountdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) {
-        t.cancel();
-        return;
-      }
-      setState(() {
-        if (_countdownSeconds > 1) {
-          _countdownSeconds--;
-        } else {
-          _countdownSeconds = 28;
-          t.cancel();
-          _reassignToNextCandidate();
-        }
-      });
-    });
     setState(() {});
   }
 
@@ -195,6 +181,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     _podOtpCtrl.dispose();
     _podRecipientCtrl.dispose();
     _podNoteCtrl.dispose();
+    _driverChatInputCtrl.dispose();
     _withdrawAmountCtrl.dispose();
     _incidentNoteCtrl.dispose();
     super.dispose();
@@ -638,8 +625,44 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
               ],
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Thông báo Đối tác Tài xế',
+                    onPressed: () => _showDriverNotificationsDialog(context),
+                    icon: const Icon(
+                      Icons.notifications_none_rounded,
+                      color: AppColors.ink,
+                      size: 22,
+                    ),
+                  ),
+                  if (_store.driverNotifications.any((n) => !n.isRead))
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        color: AppColors.pink,
+                        child: Text(
+                          '${_store.driverNotifications.where((n) => !n.isRead).length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 6),
               FilledButton.icon(
                 style: FilledButton.styleFrom(
                   backgroundColor: _store.isDriverOnline
@@ -744,7 +767,44 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               ],
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 4),
+          InkWell(
+            onTap: () => _showDriverNotificationsDialog(context),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.notifications_none_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                if (_store.driverNotifications.any((n) => !n.isRead))
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
+                      color: AppColors.pink,
+                      child: Text(
+                        '${_store.driverNotifications.where((n) => !n.isRead).length}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 4),
           FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: _store.isDriverOnline
@@ -915,6 +975,164 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       default:
         return _buildDriverHomeOnlineView();
     }
+  }
+
+  void _showDriverNotificationsDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final items = _store.driverNotifications;
+            return AlertDialog(
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+                side: BorderSide(color: AppColors.ink, width: 1.8),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              contentPadding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              title: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  Text(
+                    'Thông báo Đối tác Tài xế (${items.where((n) => !n.isRead).length} chưa đọc)',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      _store.markAllNotificationsAsRead();
+                      setDialogState(() {});
+                    },
+                    child: const Text(
+                      'Đánh dấu đã đọc',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 480,
+                height: 360,
+                child: items.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'Chưa có thông báo nào dành cho Tài xế.',
+                          style: TextStyle(color: AppColors.textSecondary),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (_, idx) {
+                          final n = items[idx];
+                          final orderMatch = RegExp(
+                            r'#DH[0-9A-Za-z-]+',
+                          ).firstMatch(n.title);
+                          final orderCode = orderMatch?.group(0);
+                          return InkWell(
+                            onTap: () {
+                              _store.markNotificationAsRead(n.id);
+                              setDialogState(() {});
+                              if (orderCode != null) {
+                                _store.selectDriverOrder(orderCode);
+                                final ord = _store.orders
+                                    .where((o) => o.trackingCode == orderCode)
+                                    .firstOrNull;
+                                Navigator.of(dialogCtx).pop();
+                                setState(() {
+                                  _selectedScreenIndex =
+                                      ord?.status == OrderStatus.searching
+                                          ? 2
+                                          : 3;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: n.isRead
+                                    ? Colors.white
+                                    : const Color(0xFFF0FDF4),
+                                border: Border.all(
+                                  color: AppColors.ink,
+                                  width: n.isRead ? 1.0 : 1.5,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          n.category,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 11,
+                                            color: AppColors.violet,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        n.timeAgo,
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          color: AppColors.textSecondary,
+                                          fontFamily: 'Consolas',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    n.title,
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: n.isRead
+                                          ? FontWeight.w600
+                                          : FontWeight.w900,
+                                      color: AppColors.ink,
+                                    ),
+                                  ),
+                                  if (orderCode != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Nhấn để mở chuyến xe $orderCode →',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.violet,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _rebuildDriverUi(VoidCallback fn) {

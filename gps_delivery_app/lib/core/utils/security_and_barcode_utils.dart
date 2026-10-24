@@ -17,6 +17,19 @@ class SecurityAndBarcodeUtils {
     return '$prefix***$suffix';
   }
 
+  /// Sinh mã OTP 4 chữ số xác nhận giao hàng POD cố định theo từng mã vận đơn
+  static String generateOrderDeliveryOtp4(String trackingCode) {
+    final cleaned = trackingCode.trim().toUpperCase();
+    if (cleaned.isEmpty) return '6886';
+    var acc = 2166136261;
+    for (final unit in cleaned.codeUnits) {
+      acc ^= unit;
+      acc = (acc * 16777619) & 0x7FFFFFFF;
+    }
+    final pin = 1000 + (acc % 9000);
+    return pin.toString();
+  }
+
   /// Băm mật khẩu có muối (Salt) bảo mật xác thực tài khoản
   static String hashPasswordWithSalt(String password, String phoneSalt) {
     final bytes = utf8.encode('SALT:$phoneSalt|PWD:$password|PEPPER:GPS2026');
@@ -252,7 +265,7 @@ class _Code128Painter extends CustomPainter {
       oldDelegate.data != data;
 }
 
-/// Widget vẽ Ma trận QR Code 21x21 chuẩn cho thanh toán VietQR và phiếu gửi hàng A6
+/// Widget vẽ Ma trận QR Code chuẩn ISO/IEC 18004 (Reed-Solomon ECC) quét trực tiếp bằng Camera điện thoại
 class QrMatrixPainterWidget extends StatelessWidget {
   final String payload;
   final double size;
@@ -268,11 +281,11 @@ class QrMatrixPainterWidget extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      padding: const EdgeInsets.all(4),
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: AppColors.surface,
+        color: Colors.white,
         border: Border.all(color: AppColors.divider),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: CustomPaint(
         painter: _QrMatrixPainter(payload: payload),
@@ -286,45 +299,248 @@ class _QrMatrixPainter extends CustomPainter {
 
   const _QrMatrixPainter({required this.payload});
 
-  bool _isFinderModule(int r, int c) {
-    bool inBox(int top, int left) {
-      final dr = r - top;
-      final dc = c - left;
-      if (dr < 0 || dr >= 7 || dc < 0 || dc >= 7) return false;
-      if (dr == 0 || dr == 6 || dc == 0 || dc == 6) return true;
-      if (dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4) return true;
-      return false;
-    }
+  static final List<int> _gfExp = _buildGfExp();
+  static final List<int> _gfLog = _buildGfLog();
 
-    return inBox(0, 0) || inBox(0, 14) || inBox(14, 0);
+  static List<int> _buildGfExp() {
+    final exp = List<int>.filled(512, 0);
+    var x = 1;
+    for (var i = 0; i < 255; i++) {
+      exp[i] = x;
+      x <<= 1;
+      if ((x & 0x100) != 0) x ^= 0x11D;
+    }
+    for (var i = 255; i < 512; i++) {
+      exp[i] = exp[i - 255];
+    }
+    return exp;
   }
 
-  bool _isFinderArea(int r, int c) {
-    return (r < 8 && c < 8) || (r < 8 && c >= 13) || (r >= 13 && c < 8);
+  static List<int> _buildGfLog() {
+    final log = List<int>.filled(256, 0);
+    var x = 1;
+    for (var i = 0; i < 255; i++) {
+      log[x] = i;
+      x <<= 1;
+      if ((x & 0x100) != 0) x ^= 0x11D;
+    }
+    return log;
+  }
+
+  static int _gfMul(int a, int b) {
+    if (a == 0 || b == 0) return 0;
+    return _gfExp[_gfLog[a] + _gfLog[b]];
+  }
+
+  static List<int> _computeReedSolomonEcc(List<int> data, int ecCount) {
+    var gen = <int>[1];
+    for (var i = 0; i < ecCount; i++) {
+      final next = List<int>.filled(gen.length + 1, 0);
+      for (var j = 0; j < gen.length; j++) {
+        next[j] ^= gen[j];
+        next[j + 1] ^= _gfMul(gen[j], _gfExp[i]);
+      }
+      gen = next;
+    }
+    final ecc = List<int>.filled(ecCount, 0);
+    for (final b in data) {
+      final lead = b ^ ecc[0];
+      for (var j = 0; j < ecCount - 1; j++) {
+        ecc[j] = ecc[j + 1];
+      }
+      ecc[ecCount - 1] = 0;
+      if (lead != 0) {
+        for (var j = 0; j < ecCount; j++) {
+          ecc[j] ^= _gfMul(gen[j + 1], lead);
+        }
+      }
+    }
+    return ecc;
+  }
+
+  static List<List<bool>> _encodeIso18004Matrix(String text) {
+    var rawBytes = utf8.encode(text.isEmpty ? 'GHST' : text);
+    if (rawBytes.length > 106) {
+      rawBytes = rawBytes.sublist(0, 106);
+    }
+
+    const dataCapByVer = [0, 19, 34, 55, 80, 108];
+    const ecCodewordsByVer = [0, 7, 10, 15, 20, 26];
+
+    var version = 1;
+    for (var v = 1; v <= 5; v++) {
+      if (rawBytes.length + 2 <= dataCapByVer[v]) {
+        version = v;
+        break;
+      }
+    }
+
+    final totalDataBytes = dataCapByVer[version];
+    final ecCount = ecCodewordsByVer[version];
+    final bits = <bool>[];
+
+    void pushBits(int val, int count) {
+      for (var i = count - 1; i >= 0; i--) {
+        bits.add(((val >> i) & 1) == 1);
+      }
+    }
+
+    pushBits(0x4, 4);
+    pushBits(rawBytes.length, 8);
+    for (final b in rawBytes) {
+      pushBits(b, 8);
+    }
+
+    final maxDataBits = totalDataBytes * 8;
+    for (var i = 0; i < 4 && bits.length < maxDataBits; i++) {
+      bits.add(false);
+    }
+    while (bits.length % 8 != 0) {
+      bits.add(false);
+    }
+
+    final dataCodewords = <int>[];
+    for (var i = 0; i < bits.length; i += 8) {
+      var byteVal = 0;
+      for (var j = 0; j < 8; j++) {
+        byteVal = (byteVal << 1) | (bits[i + j] ? 1 : 0);
+      }
+      dataCodewords.add(byteVal);
+    }
+
+    var padToggle = true;
+    while (dataCodewords.length < totalDataBytes) {
+      dataCodewords.add(padToggle ? 0xEC : 0x11);
+      padToggle = !padToggle;
+    }
+
+    final eccCodewords = _computeReedSolomonEcc(dataCodewords, ecCount);
+    final allCodewords = <int>[...dataCodewords, ...eccCodewords];
+    final fullBitStream = <bool>[];
+    for (final cw in allCodewords) {
+      for (var b = 7; b >= 0; b--) {
+        fullBitStream.add(((cw >> b) & 1) == 1);
+      }
+    }
+
+    final dim = 17 + 4 * version;
+    final modules = List.generate(dim, (_) => List<bool>.filled(dim, false));
+    final isFunction = List.generate(dim, (_) => List<bool>.filled(dim, false));
+
+    void setFunctionModule(int r, int c, bool dark) {
+      if (r < 0 || r >= dim || c < 0 || c >= dim) return;
+      modules[r][c] = dark;
+      isFunction[r][c] = true;
+    }
+
+    void drawFinderPattern(int top, int left) {
+      for (var dr = -1; dr <= 7; dr++) {
+        for (var dc = -1; dc <= 7; dc++) {
+          final r = top + dr;
+          final c = left + dc;
+          final inOuter = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+          final onBorder = dr == 0 || dr == 6 || dc == 0 || dc == 6;
+          final inInner = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+          setFunctionModule(r, c, inOuter && (onBorder || inInner));
+        }
+      }
+    }
+
+    drawFinderPattern(0, 0);
+    drawFinderPattern(0, dim - 7);
+    drawFinderPattern(dim - 7, 0);
+
+    if (version >= 2) {
+      final center = dim - 7;
+      for (var dr = -2; dr <= 2; dr++) {
+        for (var dc = -2; dc <= 2; dc++) {
+          final dark =
+              dr.abs() == 2 || dc.abs() == 2 || (dr == 0 && dc == 0);
+          setFunctionModule(center + dr, center + dc, dark);
+        }
+      }
+    }
+
+    for (var i = 8; i < dim - 8; i++) {
+      setFunctionModule(6, i, i.isEven);
+      setFunctionModule(i, 6, i.isEven);
+    }
+
+    setFunctionModule(4 * version + 9, 8, true);
+    for (var i = 0; i <= 8; i++) {
+      if (i != 6) {
+        isFunction[8][i] = true;
+        isFunction[i][8] = true;
+      }
+    }
+    for (var i = 0; i < 8; i++) {
+      isFunction[8][dim - 1 - i] = true;
+    }
+    for (var i = 0; i < 7; i++) {
+      isFunction[dim - 1 - i][8] = true;
+    }
+
+    var bitIdx = 0;
+    var upward = true;
+    for (var rightCol = dim - 1; rightCol > 0; rightCol -= 2) {
+      if (rightCol == 6) rightCol = 5;
+      for (var step = 0; step < dim; step++) {
+        final r = upward ? (dim - 1 - step) : step;
+        for (var offset = 0; offset < 2; offset++) {
+          final c = rightCol - offset;
+          if (!isFunction[r][c]) {
+            var dark =
+                bitIdx < fullBitStream.length ? fullBitStream[bitIdx++] : false;
+            if ((r + c).isEven) dark = !dark;
+            modules[r][c] = dark;
+          }
+        }
+      }
+      upward = !upward;
+    }
+
+    const formatBits = 0x77C4;
+    bool fmtBit(int idx) => ((formatBits >> idx) & 1) == 1;
+
+    const topLeftCols = [0, 1, 2, 3, 4, 5, 7, 8];
+    for (var i = 0; i < 8; i++) {
+      modules[8][topLeftCols[i]] = fmtBit(14 - i);
+    }
+    const topLeftRows = [7, 5, 4, 3, 2, 1, 0];
+    for (var i = 0; i < 7; i++) {
+      modules[topLeftRows[i]][8] = fmtBit(6 - i);
+    }
+    for (var i = 0; i < 7; i++) {
+      modules[dim - 1 - i][8] = fmtBit(14 - i);
+    }
+    for (var i = 0; i < 8; i++) {
+      modules[8][dim - 8 + i] = fmtBit(7 - i);
+    }
+
+    return modules;
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    const grid = 21;
-    final cell = size.width / grid;
-    final darkPaint = Paint()..color = AppColors.textPrimary;
-    final bytes = utf8.encode(payload.isEmpty ? 'VIETQR' : payload);
+    final matrix = _encodeIso18004Matrix(payload);
+    final dim = matrix.length;
+    const quietZone = 2;
+    final totalGrid = dim + quietZone * 2;
+    final cell = size.width / totalGrid;
+    final darkPaint = Paint()
+      ..color = Colors.black
+      ..style = PaintingStyle.fill;
 
-    for (var r = 0; r < grid; r++) {
-      for (var c = 0; c < grid; c++) {
-        bool dark = false;
-        if (_isFinderArea(r, c)) {
-          dark = _isFinderModule(r, c);
-        } else if (r == 6 || c == 6) {
-          dark = (r + c).isEven;
-        } else {
-          final idx = (r * grid + c) % bytes.length;
-          final bit = (r + c) % 8;
-          dark = ((bytes[idx] >> bit) ^ (r * 3 + c)) % 2 == 0;
-        }
-        if (dark) {
+    for (var r = 0; r < dim; r++) {
+      for (var c = 0; c < dim; c++) {
+        if (matrix[r][c]) {
           canvas.drawRect(
-            Rect.fromLTWH(c * cell, r * cell, cell, cell),
+            Rect.fromLTWH(
+              (c + quietZone) * cell,
+              (r + quietZone) * cell,
+              cell + 0.35,
+              cell + 0.35,
+            ),
             darkPaint,
           );
         }

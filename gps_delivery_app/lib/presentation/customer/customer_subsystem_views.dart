@@ -61,6 +61,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   // Trạng thái Sổ địa chỉ (UC02)
   String _selectedAddressTag = 'Nhà riêng';
+  int _selectedSavedAddressIndex = 0;
   final TextEditingController _newAddressCtrl = TextEditingController();
 
   // Trạng thái Chat nội bộ (UC09)
@@ -131,8 +132,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     _profileEmailCtrl = TextEditingController(text: _store.customerEmail);
     _profileAddressCtrl =
         TextEditingController(text: _store.customerDefaultAddress);
+    _profileGender = _store.customerGender;
     _lastSyncedCustomerProfileKey =
-        '${_store.customerFullName}|${_store.displayCustomerPhone}|${_store.customerEmail}|${_store.customerDefaultAddress}';
+        '${_store.customerFullName}|${_store.displayCustomerPhone}|${_store.customerEmail}|${_store.customerDefaultAddress}|${_store.customerGender}';
     _syncCustomerControllersFromDb();
     _store.addListener(_onStoreChanged);
   }
@@ -156,13 +158,14 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   void _onStoreChanged() {
     if (!mounted) return;
     final profileKey =
-        '${_store.customerFullName}|${_store.displayCustomerPhone}|${_store.customerEmail}|${_store.customerDefaultAddress}';
+        '${_store.customerFullName}|${_store.displayCustomerPhone}|${_store.customerEmail}|${_store.customerDefaultAddress}|${_store.customerGender}';
     if (_lastSyncedCustomerProfileKey != profileKey) {
       _lastSyncedCustomerProfileKey = profileKey;
       _profileNameCtrl.text = _store.customerFullName;
       _profilePhoneCtrl.text = _store.displayCustomerPhone;
       _profileEmailCtrl.text = _store.customerEmail;
       _profileAddressCtrl.text = _store.customerDefaultAddress;
+      _profileGender = _store.customerGender;
     }
     _syncCustomerControllersFromDb();
     setState(() {});
@@ -526,8 +529,44 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 10),
               ],
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    tooltip: 'Trung tâm thông báo',
+                    onPressed: () => setState(() => _selectedScreenIndex = 11),
+                    icon: const Icon(
+                      Icons.notifications_none_rounded,
+                      color: AppColors.ink,
+                      size: 22,
+                    ),
+                  ),
+                  if (_store.customerNotifications.any((n) => !n.isRead))
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        color: AppColors.pink,
+                        child: Text(
+                          '${_store.customerNotifications.where((n) => !n.isRead).length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(width: 8),
               InkWell(
                 onTap: () => setState(() => _selectedScreenIndex = 10),
                 child: Row(
@@ -540,8 +579,13 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                         color: AppColors.acid,
                         border: Border.all(color: AppColors.ink, width: 1.2),
                       ),
-                      child: const Icon(
-                        Icons.person,
+                      child: Icon(
+                        const [
+                          Icons.person,
+                          Icons.sentiment_very_satisfied_rounded,
+                          Icons.verified_user_rounded,
+                          Icons.workspace_premium_rounded,
+                        ][_store.customerAvatarBadgeIndex % 4],
                         color: AppColors.ink,
                         size: 19,
                       ),
@@ -759,7 +803,33 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(items[idx].$1, color: color, size: 22),
+                    Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Icon(items[idx].$1, color: color, size: 22),
+                        if (idx == 2 &&
+                            _store.customerNotifications.any((n) => !n.isRead))
+                          Positioned(
+                            right: -8,
+                            top: -4,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 1,
+                              ),
+                              color: AppColors.pink,
+                              child: Text(
+                                '${_store.customerNotifications.where((n) => !n.isRead).length}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                     const SizedBox(height: 3),
                     Text(
                       items[idx].$2,
@@ -817,7 +887,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   Widget _buildCustomerHomeDashboardView() {
     final myOrders = _store.customerOrders;
-    final recentOrders = myOrders.take(3).toList();
+    final recentOrders = myOrders;
     final activeOrders = myOrders
         .where(
           (o) =>
@@ -828,7 +898,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
         )
         .toList();
     final activeOrdersCount = activeOrders.length;
-    final primaryActiveOrder = activeOrders.isNotEmpty ? activeOrders.first : null;
+    final selectedActive = _store.activeCustomerOrderRecord;
+    final primaryActiveOrder = (selectedActive != null &&
+            activeOrders.any((o) => o.trackingCode == selectedActive.trackingCode))
+        ? selectedActive
+        : (activeOrders.isNotEmpty ? activeOrders.first : null);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1534,7 +1608,6 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
             final activeVouchers = _store.vouchers
                 .where((v) => v.status == 'Đang hoạt động')
-                .take(2)
                 .toList();
             final utilitiesPanel = Container(
               padding: const EdgeInsets.all(18),

@@ -21,6 +21,7 @@ class _BatchCsvRow {
   final String recipientName;
   final String phone;
   final String address;
+  final String customPickupAddress;
   final String packageDescription;
   final double weightKg;
   final double codAmount;
@@ -32,6 +33,7 @@ class _BatchCsvRow {
     required this.recipientName,
     required this.phone,
     required this.address,
+    this.customPickupAddress = '',
     this.packageDescription = 'Kiện hàng thương mại điện tử',
     this.weightKg = 1.2,
     required this.codAmount,
@@ -137,6 +139,8 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     'Biển hiệu cửa hàng',
   };
   int _attachedShopEvidenceCount = 1;
+  List<GeocodedPlaceSuggestion> _liveMerchantNominatimSuggestions = const [];
+  bool _isSearchingMerchantNominatim = false;
 
   @override
   void initState() {
@@ -262,6 +266,9 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           : svcStr.contains('ECONOMY') || svcStr.contains('SAVING')
               ? DeliveryServiceType.saving
               : DeliveryServiceType.standard;
+      final customPickup = !isFourColCodFormat && parts.length > 7
+          ? parts[7].trim()
+          : '';
 
       String? err;
       if (name.isEmpty) {
@@ -282,6 +289,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           recipientName: name,
           phone: phone,
           address: addr,
+          customPickupAddress: customPickup,
           packageDescription: desc,
           weightKg: weight,
           codAmount: cod,
@@ -539,6 +547,16 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                             letterSpacing: -0.4,
                           ),
                         ),
+                        Text(
+                          _store.merchantStoreName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.techMuted,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -653,6 +671,29 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                 ),
               ),
             ),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 18),
+              child: Divider(color: AppColors.techLine, height: 1),
+            ),
+            if (widget.onLogout != null)
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                leading: const Icon(
+                  Icons.logout_rounded,
+                  color: AppColors.pink,
+                  size: 19,
+                ),
+                title: const Text(
+                  'Đăng xuất',
+                  style: TextStyle(
+                    color: AppColors.pink,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                onTap: widget.onLogout,
+              ),
             const SizedBox(height: 12),
           ],
         ),
@@ -728,14 +769,39 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                     ),
                   ],
                 ),
-                IconButton(
-                  tooltip: 'Theo dõi vận đơn Shop',
-                  onPressed: () => setState(() => _selectedScreenIndex = 5),
-                  icon: const Icon(
-                    Icons.notifications_none_rounded,
-                    color: Colors.white,
-                    size: 22,
-                  ),
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      tooltip: 'Thông báo Cửa hàng B2B',
+                      onPressed: () => _showMerchantNotificationsDialog(context),
+                      icon: const Icon(
+                        Icons.notifications_none_rounded,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                    if (_store.merchantNotifications.any((n) => !n.isRead))
+                      Positioned(
+                        right: 6,
+                        top: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          color: AppColors.pink,
+                          child: Text(
+                            '${_store.merchantNotifications.where((n) => !n.isRead).length}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
                 IconButton(
                   tooltip: 'Tra cứu & In vận đơn A6',
@@ -922,6 +988,158 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       default:
         return _buildSingleOrderCreateView();
     }
+  }
+
+  void _showMerchantNotificationsDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            final items = _store.merchantNotifications;
+            return AlertDialog(
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+                side: BorderSide(color: AppColors.ink, width: 1.8),
+              ),
+              titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              contentPadding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              title: Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  Text(
+                    'Thông báo Cửa hàng B2B (${items.where((n) => !n.isRead).length} chưa đọc)',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      _store.markAllNotificationsAsRead();
+                      setDialogState(() {});
+                    },
+                    child: const Text(
+                      'Đánh dấu đã đọc',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 480,
+                height: 360,
+                child: items.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'Chưa có thông báo nào dành cho Cửa hàng.',
+                          style: TextStyle(color: AppColors.textSecondary),
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: items.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 8),
+                        itemBuilder: (_, idx) {
+                          final n = items[idx];
+                          final orderMatch = RegExp(
+                            r'#DH[0-9A-Za-z-]+',
+                          ).firstMatch(n.title);
+                          final orderCode = orderMatch?.group(0);
+                          return InkWell(
+                            onTap: () {
+                              _store.markNotificationAsRead(n.id);
+                              setDialogState(() {});
+                              if (orderCode != null) {
+                                _store.selectDriverOrder(orderCode);
+                                Navigator.of(dialogCtx).pop();
+                                setState(() {
+                                  _selectedScreenIndex = 5;
+                                });
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: n.isRead
+                                    ? Colors.white
+                                    : const Color(0xFFF0FDF4),
+                                border: Border.all(
+                                  color: AppColors.ink,
+                                  width: n.isRead ? 1.0 : 1.5,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          n.category,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 11,
+                                            color: AppColors.violet,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        n.timeAgo,
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          color: AppColors.textSecondary,
+                                          fontFamily: 'Consolas',
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    n.title,
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: n.isRead
+                                          ? FontWeight.w600
+                                          : FontWeight.w900,
+                                      color: AppColors.ink,
+                                    ),
+                                  ),
+                                  if (orderCode != null) ...[
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      'Nhấn để theo dõi đơn $orderCode trên bản đồ →',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                        color: AppColors.violet,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _rebuildMerchantUi(VoidCallback fn) {

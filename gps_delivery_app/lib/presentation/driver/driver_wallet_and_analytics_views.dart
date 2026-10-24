@@ -10,22 +10,44 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
               o.paymentStatus != 'RETURNED',
         )
         .toList();
-    final todayDeliveredSum = deliveredOrders
-        .where((o) => o.createdDateLabel == 'Hôm nay')
-        .fold<double>(
-          0,
-          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-        );
-    final weekDeliveredSum = deliveredOrders
-        .where(
-          (o) =>
-              o.createdDateLabel == 'Hôm nay' ||
-              o.createdDateLabel == 'Hôm qua',
-        )
-        .fold<double>(
-          0,
-          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-        );
+    final now = DateTime.now();
+    final todayPrefix = now.day.toString().padLeft(2, '0');
+    int? daysSinceDeliveredOrder(ActiveOrderRecord o) {
+      if (o.createdDateLabel == 'Hôm nay' ||
+          o.createdDateLabel.startsWith(todayPrefix)) {
+        return 0;
+      }
+      if (o.createdDateLabel == 'Hôm qua') return 1;
+      final parts = o.createdDateLabel.split('/');
+      if (parts.length == 3) {
+        final d = int.tryParse(parts[0]);
+        final m = int.tryParse(parts[1]);
+        final y = int.tryParse(parts[2]);
+        if (d != null && m != null && y != null) {
+          return DateTime(now.year, now.month, now.day)
+              .difference(DateTime(y, m, d))
+              .inDays
+              .abs();
+        }
+      }
+      return null;
+    }
+
+    final todayMatchedOrders = deliveredOrders
+        .where((o) => daysSinceDeliveredOrder(o) == 0)
+        .toList();
+    final todayDeliveredSum = todayMatchedOrders.fold<double>(
+      0,
+      (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
+    );
+    final weekMatchedOrders = deliveredOrders.where((o) {
+      final diff = daysSinceDeliveredOrder(o);
+      return diff != null && diff <= 7;
+    }).toList();
+    final weekDeliveredSum = weekMatchedOrders.fold<double>(
+      0,
+      (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
+    );
     final deliveredSum = deliveredOrders.fold<double>(
       0,
       (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
@@ -35,22 +57,37 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
         : _incomePeriod == 'Tuần'
             ? weekDeliveredSum
             : deliveredSum;
-    final walletBase = _store.driverWalletBalance > 0
-        ? _store.driverWalletBalance
-        : (deliveredSum > 0 ? deliveredSum : 100000.0);
-    final w1Val = walletBase * 0.22;
-    final w2Val = walletBase * 0.28;
-    final w3Val = walletBase * 0.20;
-    final w4Val = (walletBase * 0.30) + deliveredSum;
+    final yesterdaySum = deliveredOrders
+        .where((o) => daysSinceDeliveredOrder(o) == 1)
+        .fold<double>(
+          0,
+          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
+        );
+    final olderDeliveredSum = deliveredOrders
+        .where((o) {
+          final diff = daysSinceDeliveredOrder(o);
+          return diff == null || diff > 1;
+        })
+        .fold<double>(
+          0,
+          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
+        );
+    final driverWithdrawnSum = _store.withdrawalRequests
+        .where((w) => w.ownerRole == 'Tài xế' && w.status != 'Từ chối')
+        .fold<double>(0, (sum, w) => sum + w.amount);
+    final w1Val = olderDeliveredSum;
+    final w2Val = driverWithdrawnSum;
+    final w3Val = yesterdaySum;
+    final w4Val = todayDeliveredSum;
     final maxW = [w1Val, w2Val, w3Val, w4Val, 1.0].reduce((a, b) => a > b ? a : b);
     String fmtShort(double v) => v >= 1000000
         ? '${(v / 1000000).toStringAsFixed(2)}M'
         : '${(v / 1000).toStringAsFixed(0)}k';
     final weeklyBars = [
-      ('Tuần 1', (w1Val / maxW).clamp(0.15, 1.0), fmtShort(w1Val)),
-      ('Tuần 2', (w2Val / maxW).clamp(0.15, 1.0), fmtShort(w2Val)),
-      ('Tuần 3', (w3Val / maxW).clamp(0.15, 1.0), fmtShort(w3Val)),
-      ('Tuần 4', (w4Val / maxW).clamp(0.15, 1.0), fmtShort(w4Val)),
+      ('Trước đó', (w1Val / maxW).clamp(0.15, 1.0), fmtShort(w1Val)),
+      ('Đã rút', (w2Val / maxW).clamp(0.15, 1.0), fmtShort(w2Val)),
+      ('Hôm qua', (w3Val / maxW).clamp(0.15, 1.0), fmtShort(w3Val)),
+      ('Hôm nay', (w4Val / maxW).clamp(0.15, 1.0), fmtShort(w4Val)),
     ];
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
@@ -342,13 +379,91 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     ],
                   ),
                 ),
+                if (_store.withdrawalRequests
+                    .any((w) => w.ownerRole == 'Tài xế')) ...[
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Lịch sử lệnh rút tiền Ví Tài xế (Đồng bộ Admin UC29)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14.5,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ..._store.withdrawalRequests
+                      .where((w) => w.ownerRole == 'Tài xế')
+                      .map((w) {
+                    final isApproved = w.status == 'Đã duyệt';
+                    final isRejected = w.status == 'Từ chối';
+                    final statusColor = isApproved
+                        ? const Color(0xFF14B866)
+                        : isRejected
+                            ? AppColors.danger
+                            : const Color(0xFFD97706);
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: const Color(0xFF15131E)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '#${w.id} • ${CurrencyFormatter.formatVnd(w.amount)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  '${w.bankName} (${w.accountMasked}) • ${w.requestDate}',
+                                  style: const TextStyle(
+                                    fontSize: 11.5,
+                                    color: Color(0xFF4A4754),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: statusColor.withValues(alpha: 0.14),
+                              border: Border.all(color: statusColor),
+                            ),
+                            child: Text(
+                              w.status,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: statusColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
                 const SizedBox(height: 14),
                 const Text(
-                  'Chuyến xe gần đây',
+                  'Chuyến xe gần đây (Bấm để xem lộ trình)',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
                 ),
                 const SizedBox(height: 8),
-                ..._store.orders.take(3).map((ord) {
+                ..._store.orders.map((ord) {
                   final isCancelledOrFailed =
                       ord.status == OrderStatus.cancelled ||
                       ord.status == OrderStatus.failed ||
@@ -358,71 +473,77 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                       ? 0.0
                       : ((ord.deliveryFee + ord.surchargeFee) * 0.80)
                             .roundToDouble();
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.all(Radius.zero),
-                      border: Border.all(color: const Color(0xFF15131E)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                  return InkWell(
+                    onTap: () {
+                      _store.selectDriverOrder(ord.trackingCode);
+                      _rebuildDriverUi(() => _selectedScreenIndex = 3);
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.all(Radius.zero),
+                        border: Border.all(color: const Color(0xFF15131E)),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Đơn ${ord.trackingCode} • ${ord.serviceType.displayName} (${ord.status.displayName})',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                Text(
+                                  '${ord.pickupAddress} → ${ord.dropoffAddress}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 11.5,
+                                    color: Color(0xFF4A4754),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                               Text(
-                                'Đơn ${ord.trackingCode} • ${ord.serviceType.displayName} (${ord.status.displayName})',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 13,
+                                isCancelledOrFailed
+                                    ? '0 đ'
+                                    : '+${CurrencyFormatter.formatVnd(driverNetFee)}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 14,
+                                  color: isCancelledOrFailed
+                                      ? AppColors.danger
+                                      : const Color(0xFF14B866),
                                 ),
                               ),
                               Text(
-                                '${ord.pickupAddress} → ${ord.dropoffAddress}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                isCancelledOrFailed
+                                    ? '${ord.status.displayName} / 0%'
+                                    : (isDone ? 'Thực nhận 80%' : 'Dự kiến 80%'),
                                 style: const TextStyle(
-                                  fontSize: 11.5,
-                                  color: Color(0xFF4A4754),
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFF6B667A),
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              isCancelledOrFailed
-                                  ? '0 đ'
-                                  : '+${CurrencyFormatter.formatVnd(driverNetFee)}',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 14,
-                                color: isCancelledOrFailed
-                                    ? AppColors.danger
-                                    : const Color(0xFF14B866),
-                              ),
-                            ),
-                            Text(
-                              isCancelledOrFailed
-                                  ? '${ord.status.displayName} / 0%'
-                                  : (isDone ? 'Thực nhận 80%' : 'Dự kiến 80%'),
-                              style: const TextStyle(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF6B667A),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   );
                 }),
@@ -436,23 +557,36 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
 
   /// UC19: Lịch sử giao hàng của Tài xế (Khớp 100% uc19_lich_su_giao_1791014821234.jpg)
   Widget _buildDriverTripHistoryUc19View() {
-    final todayPrefix = DateTime.now().day.toString().padLeft(2, '0');
+    final now = DateTime.now();
+    final todayPrefix = now.day.toString().padLeft(2, '0');
+    int? daysSinceOrder(ActiveOrderRecord o) {
+      if (o.createdDateLabel == 'Hôm nay' ||
+          o.createdDateLabel.startsWith(todayPrefix)) {
+        return 0;
+      }
+      if (o.createdDateLabel == 'Hôm qua') return 1;
+      final parts = o.createdDateLabel.split('/');
+      if (parts.length == 3) {
+        final d = int.tryParse(parts[0]);
+        final m = int.tryParse(parts[1]);
+        final y = int.tryParse(parts[2]);
+        if (d != null && m != null && y != null) {
+          return DateTime(now.year, now.month, now.day)
+              .difference(DateTime(y, m, d))
+              .inDays
+              .abs();
+        }
+      }
+      return null;
+    }
+
     final filteredTrips = _driverHistoryPeriod == 'Hôm nay'
-        ? (() {
-            final matches = _store.orders
-                .where(
-                  (o) =>
-                      o.createdDateLabel == 'Hôm nay' ||
-                      o.createdDateLabel.startsWith(todayPrefix) ||
-                      o.createdDateLabel.startsWith('26/'),
-                )
-                .toList();
-            return matches.isNotEmpty
-                ? matches
-                : _store.orders.take(1).toList();
-          })()
+        ? _store.orders.where((o) => daysSinceOrder(o) == 0).toList()
         : _driverHistoryPeriod == 'Tuần này'
-            ? _store.orders.take(2).toList()
+            ? _store.orders.where((o) {
+                final diff = daysSinceOrder(o);
+                return diff != null && diff <= 7;
+              }).toList()
             : _store.orders;
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
@@ -523,154 +657,161 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                       ? 0.0
                       : ((ord.deliveryFee + ord.surchargeFee) * 0.80)
                             .roundToDouble();
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.all(Radius.zero),
-                      border: Border.all(color: const Color(0xFF15131E)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Hình thu nhỏ lộ trình GPS bên trái giống uc19_lich_su_giao_1791014821234.jpg
-                        Container(
-                          width: 72,
-                          height: 72,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.all(Radius.zero),
-                            border: Border.all(color: const Color(0xFF86EFAC)),
+                  return InkWell(
+                    onTap: () => _rebuildDriverUi(() {
+                      _store.selectDriverOrder(ord.trackingCode);
+                      _selectedScreenIndex =
+                          ord.status == OrderStatus.delivered ? 5 : 3;
+                    }),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.all(Radius.zero),
+                        border: Border.all(color: const Color(0xFF15131E)),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
                           ),
-                          child: const Stack(
-                            children: [
-                              Center(
-                                child: Icon(
-                                  Icons.route_rounded,
-                                  color: Color(0xFF14B866),
-                                  size: 32,
+                        ],
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Hình thu nhỏ lộ trình GPS bên trái giống uc19_lich_su_giao_1791014821234.jpg
+                          Container(
+                            width: 72,
+                            height: 72,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFDCFCE7),
+                              borderRadius: BorderRadius.all(Radius.zero),
+                              border: Border.all(color: const Color(0xFF86EFAC)),
+                            ),
+                            child: const Stack(
+                              children: [
+                                Center(
+                                  child: Icon(
+                                    Icons.route_rounded,
+                                    color: Color(0xFF14B866),
+                                    size: 32,
+                                  ),
                                 ),
-                              ),
-                              Positioned(
-                                top: 6,
-                                left: 6,
-                                child: Icon(
-                                  Icons.circle,
-                                  size: 8,
-                                  color: Color(0xFF5B33E6),
+                                Positioned(
+                                  top: 6,
+                                  left: 6,
+                                  child: Icon(
+                                    Icons.circle,
+                                    size: 8,
+                                    color: Color(0xFF5B33E6),
+                                  ),
                                 ),
-                              ),
-                              Positioned(
-                                bottom: 6,
-                                right: 6,
-                                child: Icon(
-                                  Icons.location_on,
-                                  size: 14,
-                                  color: Color(0xFFDC2626),
+                                Positioned(
+                                  bottom: 6,
+                                  right: 6,
+                                  child: Icon(
+                                    Icons.location_on,
+                                    size: 14,
+                                    color: Color(0xFFDC2626),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      '${ord.trackingCode} • ${ord.createdDateLabel}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        fontSize: 13,
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${ord.trackingCode} • ${ord.createdDateLabel}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 13,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 2,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isCancelledOrFailed
-                                          ? const Color(0xFFFEE2E2)
-                                          : const Color(0xFFFEF3C7),
-                                      borderRadius: BorderRadius.all(Radius.zero),
-                                    ),
-                                    child: Text(
-                                      isCancelledOrFailed
-                                          ? statusDisplay
-                                          : ord.ratingStars != null
-                                              ? '${ord.ratingStars}.0 ★'
-                                              : 'Chưa ĐG',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w800,
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 2,
+                                      ),
+                                      decoration: BoxDecoration(
                                         color: isCancelledOrFailed
-                                            ? AppColors.danger
-                                            : const Color(0xFFD97706),
+                                            ? const Color(0xFFFEE2E2)
+                                            : const Color(0xFFFEF3C7),
+                                        borderRadius: BorderRadius.all(Radius.zero),
+                                      ),
+                                      child: Text(
+                                        isCancelledOrFailed
+                                            ? statusDisplay
+                                            : ord.ratingStars != null
+                                                ? '${ord.ratingStars}.0 ★'
+                                                : 'Chưa ĐG',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: isCancelledOrFailed
+                                              ? AppColors.danger
+                                              : const Color(0xFFD97706),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                'Từ: ${ord.pickupAddress}\nĐến: ${ord.dropoffAddress}',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Color(0xFF4A4754),
+                                  ],
                                 ),
-                              ),
-                              const SizedBox(height: 6),
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      statusDisplay,
+                                const SizedBox(height: 4),
+                                Text(
+                                  'Từ: ${ord.pickupAddress}\nĐến: ${ord.dropoffAddress}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Color(0xFF4A4754),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        statusDisplay,
+                                        style: TextStyle(
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: isCancelledOrFailed
+                                              ? AppColors.danger
+                                              : const Color(0xFF14B866),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      isCancelledOrFailed
+                                          ? '0 đ'
+                                          : '+ ${CurrencyFormatter.formatVnd(driverNetFee)}',
                                       style: TextStyle(
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w700,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 14.5,
                                         color: isCancelledOrFailed
                                             ? AppColors.danger
                                             : const Color(0xFF14B866),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    isCancelledOrFailed
-                                        ? '0 đ'
-                                        : '+ ${CurrencyFormatter.formatVnd(driverNetFee)}',
-                                    style: TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 14.5,
-                                      color: isCancelledOrFailed
-                                          ? AppColors.danger
-                                          : const Color(0xFF14B866),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
+                                  ],
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   );
                 }),
@@ -684,6 +825,14 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
 
   /// UC20: Báo cáo sự cố trên đường (Khớp 100% anh_sua_lai/uc20_bao_cao_su_co.jpg)
   Widget _buildRoadIncidentReportView() {
+    final activeOrder = _store.activeOrderRecord ?? _store.orders.first;
+    final driverIncidents = _store.complaints
+        .where(
+          (c) =>
+              c.customerName.startsWith('Tài xế') ||
+              c.driverName == _store.activeDriverName,
+        )
+        .toList();
     final reasons = [
       'Hàng bị hỏng',
       'Khách không nhận hàng',
@@ -709,10 +858,10 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Báo cáo sự cố',
-                    style: TextStyle(
+                    'Báo cáo sự cố (${activeOrder.trackingCode})',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
@@ -727,6 +876,37 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_store.orders.length > 1) ...[
+                  const Text(
+                    'Chọn vận đơn gặp sự cố',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _store.orders.map((o) {
+                      final isCur = o.trackingCode == activeOrder.trackingCode;
+                      return ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '${o.trackingCode} (${o.status.displayName})',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: isCur ? Colors.white : const Color(0xFF15131E),
+                          ),
+                        ),
+                        selected: isCur,
+                        selectedColor: const Color(0xFF14B866),
+                        onSelected: (_) => _rebuildDriverUi(
+                          () => _store.selectDriverOrder(o.trackingCode),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 const Text(
                   'Chọn loại sự cố',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
@@ -893,39 +1073,86 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                         borderRadius: BorderRadius.all(Radius.zero),
                       ),
                     ),
-                    onPressed: () {
-                      final activeOrder =
-                          _store.activeOrderRecord ?? _store.orders.first;
-                      final rawDesc = _incidentNoteCtrl.text.trim().isEmpty
-                          ? 'Báo cáo sự cố trên lộ trình: $_incidentType'
-                          : _incidentNoteCtrl.text.trim();
-                      final gpsTag =
-                          '(${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})';
-                      _store.addIncidentOrComplaint(
-                        orderId: activeOrder.trackingCode,
-                        reporterName: 'Tài xế ${_store.activeDriverName}',
-                        issueType: _incidentType,
-                        description:
-                            '$rawDesc • Đính kèm $_attachedIncidentPhotos/4 ảnh minh chứng • GPS: $gpsTag',
-                      );
-                      _incidentNoteCtrl.clear();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Đã gửi báo cáo sự cố đơn ${activeOrder.trackingCode} ($_attachedIncidentPhotos/4 ảnh) kèm tọa độ GPS về Trung tâm Điều phối!',
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text(
-                      'Gửi báo cáo',
-                      style: TextStyle(
+                    onPressed: activeOrder.status == OrderStatus.delivered ||
+                            activeOrder.status == OrderStatus.cancelled
+                        ? null
+                        : () {
+                            final activeOrd =
+                                _store.activeOrderRecord ?? _store.orders.first;
+                            final rawDesc =
+                                _incidentNoteCtrl.text.trim().isEmpty
+                                    ? 'Báo cáo sự cố trên lộ trình: $_incidentType'
+                                    : _incidentNoteCtrl.text.trim();
+                            final gpsTag =
+                                '(${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})';
+                            _store.addIncidentOrComplaint(
+                              orderId: activeOrd.trackingCode,
+                              reporterName: 'Tài xế ${_store.activeDriverName}',
+                              issueType: _incidentType,
+                              description:
+                                  '$rawDesc • Đính kèm $_attachedIncidentPhotos/4 ảnh minh chứng • GPS: $gpsTag',
+                            );
+                            _incidentNoteCtrl.clear();
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Đã gửi báo cáo sự cố đơn ${activeOrd.trackingCode} ($_attachedIncidentPhotos/4 ảnh) kèm tọa độ GPS về Trung tâm Điều phối!',
+                                ),
+                              ),
+                            );
+                          },
+                    child: Text(
+                      activeOrder.status == OrderStatus.delivered ||
+                              activeOrder.status == OrderStatus.cancelled
+                          ? 'Đơn đã hoàn tất / Đã hủy (Không thể báo sự cố)'
+                          : 'Gửi báo cáo',
+                      style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 15,
                       ),
                     ),
                   ),
                 ),
+                if (driverIncidents.isNotEmpty) ...[
+                  const Divider(height: 24),
+                  const Text(
+                    'Lịch sử báo cáo sự cố & Phản hồi từ Trung tâm Điều phối',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
+                  ),
+                  const SizedBox(height: 8),
+                  ...driverIncidents.map(
+                    (inc) => Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF5F1E8),
+                        border: Border.all(color: const Color(0xFF15131E)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${inc.ticketCode} • Đơn ${inc.orderId} • ${inc.issueType} (${inc.status})',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          ...inc.replies.map(
+                            (r) => Padding(
+                              padding: const EdgeInsets.only(bottom: 2),
+                              child: Text(
+                                '• $r',
+                                style: const TextStyle(fontSize: 11.5),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -937,20 +1164,38 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
   /// UC21: Thống kê hoạt động (Dark Mode Analytics - Khớp 100% anh_sua_lai/uc21_thong_ke.jpg)
   Widget _buildDarkModeAnalyticsView() {
     final allOrders = _store.orders;
+    final now = DateTime.now();
+    final todayPrefix = now.day.toString().padLeft(2, '0');
+    int? daysSinceStatsOrder(ActiveOrderRecord o) {
+      if (o.createdDateLabel == 'Hôm nay' ||
+          o.createdDateLabel.startsWith(todayPrefix)) {
+        return 0;
+      }
+      if (o.createdDateLabel == 'Hôm qua') return 1;
+      final parts = o.createdDateLabel.split('/');
+      if (parts.length == 3) {
+        final d = int.tryParse(parts[0]);
+        final m = int.tryParse(parts[1]);
+        final y = int.tryParse(parts[2]);
+        if (d != null && m != null && y != null) {
+          return DateTime(now.year, now.month, now.day)
+              .difference(DateTime(y, m, d))
+              .inDays
+              .abs();
+        }
+      }
+      return null;
+    }
+
     final todayOrders =
-        allOrders.where((o) => o.createdDateLabel == 'Hôm nay').toList();
-    final weekOrders = allOrders
-        .where(
-          (o) =>
-              o.createdDateLabel == 'Hôm nay' ||
-              o.createdDateLabel == 'Hôm qua',
-        )
-        .toList();
+        allOrders.where((o) => daysSinceStatsOrder(o) == 0).toList();
+    final weekOrders = allOrders.where((o) {
+      final diff = daysSinceStatsOrder(o);
+      return diff != null && diff <= 7;
+    }).toList();
     final periodOrders = _statsPeriod == 'Hôm nay'
-        ? (todayOrders.isNotEmpty ? todayOrders : allOrders)
-        : (_statsPeriod == 'Tuần này'
-            ? (weekOrders.isNotEmpty ? weekOrders : allOrders)
-            : allOrders);
+        ? todayOrders
+        : (_statsPeriod == 'Tuần này' ? weekOrders : allOrders);
     final totalOrdersCount = periodOrders.length;
     final safeTotal = totalOrdersCount == 0 ? 1 : totalOrdersCount;
     final deliveredCount = periodOrders
@@ -981,9 +1226,22 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
             (_store.drivers.isNotEmpty ? _store.drivers.first.rating : 5.0));
 
     final dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+    int weekdayIndexOfOrder(ActiveOrderRecord o) {
+      final parts = o.createdDateLabel.split('/');
+      if (parts.length == 3) {
+        final d = int.tryParse(parts[0]);
+        final m = int.tryParse(parts[1]);
+        final y = int.tryParse(parts[2]);
+        if (d != null && m != null && y != null) {
+          return (DateTime(y, m, d).weekday - 1).clamp(0, 6);
+        }
+      }
+      return (DateTime.now().weekday - 1).clamp(0, 6);
+    }
+
     final dayCounts = List<int>.generate(7, (idx) {
       return periodOrders
-          .where((o) => o.trackingCode.hashCode.abs() % 7 == idx)
+          .where((o) => weekdayIndexOfOrder(o) == idx)
           .length;
     });
     final maxDayCount = dayCounts.fold<int>(1, (m, c) => c > m ? c : m);
@@ -1054,7 +1312,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'Số đơn hoàn thành / Tổng đơn DB',
+                        'Số đơn hoàn thành / Tổng cuốc xe',
                         style: TextStyle(color: Colors.white70, fontSize: 12),
                       ),
                       const SizedBox(height: 4),
@@ -1244,48 +1502,54 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
           const SizedBox(height: 8),
           ..._store.orders
               .where((o) => o.ratingStars != null)
-              .take(2)
               .map((ratedOrder) {
             final starsStr = '★' * (ratedOrder.ratingStars ?? 5);
-            return Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF15131E),
-                borderRadius: BorderRadius.all(Radius.zero),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Khách hàng ${ratedOrder.customerName} (${ratedOrder.trackingCode})',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12.5,
+            return InkWell(
+              onTap: () => _rebuildDriverUi(() {
+                _store.selectDriverOrder(ratedOrder.trackingCode);
+                _selectedScreenIndex = 9;
+              }),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15131E),
+                  borderRadius: BorderRadius.all(Radius.zero),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Khách hàng ${ratedOrder.customerName} (${ratedOrder.trackingCode})',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12.5,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        starsStr,
-                        style: const TextStyle(
-                          color: Color(0xFFF59E0B),
-                          fontSize: 12,
+                        const SizedBox(width: 6),
+                        Text(
+                          starsStr,
+                          style: const TextStyle(
+                            color: Color(0xFFF59E0B),
+                            fontSize: 12,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '"${ratedOrder.ratingComment ?? 'Giao nhanh, nhiệt tình, đóng gói nguyên vẹn!'}"',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                ],
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '"${ratedOrder.ratingComment ?? 'Giao nhanh, nhiệt tình, đóng gói nguyên vẹn!'}"',
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ],
+                ),
               ),
             );
           }),

@@ -169,7 +169,7 @@ class AppTheme {
         secondaryLabelStyle: TextStyle(
           fontSize: 11.5,
           fontWeight: FontWeight.w800,
-          color: AppColors.acid,
+          color: Colors.white,
         ),
       ),
       inputDecorationTheme: const InputDecorationTheme(

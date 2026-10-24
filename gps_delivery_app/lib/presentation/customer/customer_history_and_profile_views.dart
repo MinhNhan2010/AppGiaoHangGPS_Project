@@ -100,12 +100,21 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       );
                       return;
                     }
-                    final drvPhone = assignedDriverRecord?.phone ??
+                    final rawPhone = assignedDriverRecord?.phone ??
                         _store.activeDriverRecord?.phone ??
                         _store.activeDriverPhone;
+                    final isClosed =
+                        activeOrder.status == OrderStatus.delivered ||
+                            activeOrder.status == OrderStatus.cancelled;
+                    final maskedPhone = SecurityAndBarcodeUtils.maskPhoneNumber(
+                      rawPhone,
+                      shouldMask: isClosed,
+                    );
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text('Đang gọi tới tài xế $drvPhone...'),
+                        content: Text(
+                          'Đang kết nối cuộc gọi tới tài xế $maskedPhone...',
+                        ),
                       ),
                     );
                   },
@@ -118,6 +127,33 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_store.customerOrders.length > 1) ...[
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _store.customerOrders.map((ordItem) {
+                      final isCur =
+                          ordItem.trackingCode == activeOrder.trackingCode;
+                      return ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: isCur ? Colors.white : AppColors.ink,
+                          ),
+                        ),
+                        selected: isCur,
+                        selectedColor: const Color(0xFF5B33E6),
+                        onSelected: (_) => _rebuildCustomerUi(() {
+                          _store.selectCustomerOrder(ordItem.trackingCode);
+                        }),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 SizedBox(
                   height: 240,
                   child: ListView(
@@ -238,19 +274,6 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 const SizedBox(height: 8),
                 Row(
                   children: [
-                    IconButton(
-                      icon: const Icon(
-                        Icons.camera_alt_outlined,
-                        color: Color(0xFF5B33E6),
-                      ),
-                      onPressed: () {
-                        _store.sendChatMessage(
-                          activeOrder.trackingCode,
-                          '[Khách hàng đã gửi ảnh vị trí cổng nhận hàng]',
-                          isCustomer: true,
-                        );
-                      },
-                    ),
                     Expanded(
                       child: TextField(
                         controller: _chatInputCtrl,
@@ -334,6 +357,33 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   ),
                 ),
               ),
+              if (_store.customerOrders.length > 1) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: _store.customerOrders.map((ordItem) {
+                    final isCur =
+                        ordItem.trackingCode == targetOrder.trackingCode;
+                    return ChoiceChip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text(
+                        '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: isCur ? Colors.white : AppColors.ink,
+                        ),
+                      ),
+                      selected: isCur,
+                      selectedColor: const Color(0xFF5B33E6),
+                      onSelected: (_) => _rebuildCustomerUi(() {
+                        _store.selectCustomerOrder(ordItem.trackingCode);
+                      }),
+                    );
+                  }).toList(),
+                ),
+              ],
             ],
             const SizedBox(height: 12),
             const Text(
@@ -826,6 +876,33 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             padding: const EdgeInsets.all(18),
             child: Column(
               children: [
+                if (_store.customerOrders.length > 1) ...[
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: _store.customerOrders.map((ordItem) {
+                      final isCur =
+                          ordItem.trackingCode == activeOrder.trackingCode;
+                      return ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(
+                          '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: isCur ? Colors.white : AppColors.ink,
+                          ),
+                        ),
+                        selected: isCur,
+                        selectedColor: const Color(0xFF5B33E6),
+                        onSelected: (_) => _rebuildCustomerUi(() {
+                          _store.selectCustomerOrder(ordItem.trackingCode);
+                        }),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 const CircleAvatar(
                   radius: 32,
                   backgroundColor: Color(0xFFE9E9E4),
@@ -876,7 +953,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     ),
                     color: const Color(0xFFDCFCE7),
                     child: Text(
-                      'Đơn ${activeOrder.trackingCode} đã được đánh giá ${activeOrder.ratingStars}★ (Có thể cập nhật nhận xét)',
+                      activeOrder.ratingComment != null &&
+                              activeOrder.ratingComment!.isNotEmpty
+                          ? 'Đơn ${activeOrder.trackingCode} đã được đánh giá ${activeOrder.ratingStars}★: "${activeOrder.ratingComment}"'
+                          : 'Đơn ${activeOrder.trackingCode} đã được đánh giá ${activeOrder.ratingStars}★ (Có thể cập nhật nhận xét)',
                       style: const TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w800,
@@ -945,11 +1025,13 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   ),
                 ),
                 const SizedBox(height: 14),
-                const Align(
+                Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    'Tiền thưởng cho tài xế (Tip):',
-                    style: TextStyle(
+                    activeOrder.ratingStars != null
+                        ? 'Tiền thưởng cho tài xế (Đã chốt ở lần đánh giá đầu):'
+                        : 'Tiền thưởng cho tài xế (Tip):',
+                    style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 13.5,
                     ),
@@ -964,6 +1046,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     final label = tip == 0
                         ? 'Không'
                         : CurrencyFormatter.formatVnd(tip.toDouble());
+                    final alreadyRated = activeOrder.ratingStars != null;
                     return OutlinedButton(
                       style: OutlinedButton.styleFrom(
                         backgroundColor: selected
@@ -978,8 +1061,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                               : const Color(0xFF15131E),
                         ),
                       ),
-                      onPressed: () =>
-                          _rebuildCustomerUi(() => _selectedTipVnd = tip),
+                      onPressed: alreadyRated
+                          ? null
+                          : () => _rebuildCustomerUi(() => _selectedTipVnd = tip),
                       child: Text(
                         label,
                         style: const TextStyle(
@@ -1004,8 +1088,12 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     ),
                     onPressed: canRateOrder
                         ? () {
-                            final tipNote = _selectedTipVnd > 0
-                                ? ' [Tip: ${CurrencyFormatter.formatVnd(_selectedTipVnd.toDouble())}]'
+                            final isFirstRating =
+                                activeOrder.ratingStars == null;
+                            final effectiveTip =
+                                isFirstRating ? _selectedTipVnd : 0;
+                            final tipNote = effectiveTip > 0
+                                ? ' [Tip: ${CurrencyFormatter.formatVnd(effectiveTip.toDouble())}]'
                                 : '';
                             final chipTags = _selectedFeedbackChips.isNotEmpty
                                 ? '[${_selectedFeedbackChips.join(', ')}] '
@@ -1014,7 +1102,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                               activeOrder.trackingCode,
                               _ratingStars,
                               '$chipTags${_ratingCommentCtrl.text}$tipNote',
-                              tipVnd: _selectedTipVnd.toDouble(),
+                              tipVnd: effectiveTip.toDouble(),
                             );
                             _rebuildCustomerUi(() {
                               _ratingCommentCtrl.clear();
@@ -1024,7 +1112,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Đã gửi đánh giá $_ratingStars sao$tipNote cho tài xế!',
+                                  isFirstRating
+                                      ? 'Đã gửi đánh giá $_ratingStars sao$tipNote cho tài xế!'
+                                      : 'Đã cập nhật đánh giá $_ratingStars sao cho đơn ${activeOrder.trackingCode}!',
                                 ),
                               ),
                             );
@@ -1162,10 +1252,12 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 OutlinedButton.icon(
-                  onPressed: () => _rebuildCustomerUi(() {
-                    _customerComplaintPhotos =
-                        (_customerComplaintPhotos % 3) + 1;
-                  }),
+                  onPressed: _customerComplaintPhotos >= 3
+                      ? null
+                      : () => _rebuildCustomerUi(() {
+                            _customerComplaintPhotos =
+                                (_customerComplaintPhotos + 1).clamp(0, 3);
+                          }),
                   icon: const Icon(Icons.add_a_photo_outlined, size: 16),
                   label: Text(
                     'Đính kèm ảnh ($_customerComplaintPhotos/3)',
@@ -1184,6 +1276,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       'bang_chung_0$i.jpg',
                       style: const TextStyle(fontSize: 11),
                     ),
+                    onDeleted: () => _rebuildCustomerUi(() {
+                      _customerComplaintPhotos =
+                          (_customerComplaintPhotos - 1).clamp(0, 3);
+                    }),
                   ),
               ],
             ),
@@ -1301,34 +1397,65 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 const SizedBox(height: 12),
                 Stack(
                   children: [
-                    Container(
-                      width: 78,
-                      height: 78,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE9E9E4),
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.white, width: 3),
-                      ),
-                      child: const Icon(
-                        Icons.person_rounded,
-                        size: 46,
-                        color: Color(0xFF5B33E6),
-                      ),
+                    Builder(
+                      builder: (context) {
+                        const avatarThemes = [
+                          (Color(0xFFE9E9E4), Color(0xFF5B33E6), Icons.person_rounded),
+                          (Color(0xFFDCFCE7), Color(0xFF14B866), Icons.verified_user_rounded),
+                          (Color(0xFFFEF3C7), Color(0xFFD97706), Icons.workspace_premium_rounded),
+                          (Color(0xFFDBEAFE), Color(0xFF1D4ED8), Icons.face_retouching_natural_rounded),
+                        ];
+                        final theme = avatarThemes[_store.customerAvatarBadgeIndex % avatarThemes.length];
+                        return Container(
+                          width: 78,
+                          height: 78,
+                          decoration: BoxDecoration(
+                            color: theme.$1,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                          ),
+                          child: Icon(
+                            theme.$3,
+                            size: 46,
+                            color: theme.$2,
+                          ),
+                        );
+                      },
                     ),
                     Positioned(
                       right: 0,
                       bottom: 0,
-                      child: Container(
-                        padding: const EdgeInsets.all(5),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF5B33E6),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 1.5),
-                        ),
-                        child: const Icon(
-                          Icons.camera_alt_rounded,
-                          size: 13,
-                          color: Colors.white,
+                      child: InkWell(
+                        onTap: () {
+                          final nextIdx = (_store.customerAvatarBadgeIndex + 1) % 4;
+                          _store.updateCustomerProfile(
+                            fullName: _profileNameCtrl.text.trim(),
+                            phone: _profilePhoneCtrl.text.trim(),
+                            email: _profileEmailCtrl.text.trim(),
+                            defaultAddress: _profileAddressCtrl.text.trim(),
+                            gender: _profileGender,
+                            avatarBadgeIndex: nextIdx,
+                          );
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Đã đổi biểu tượng đại diện hồ sơ (#${nextIdx + 1})!',
+                              ),
+                            ),
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(5),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF5B33E6),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 1.5),
+                          ),
+                          child: const Icon(
+                            Icons.camera_alt_rounded,
+                            size: 13,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
                     ),
@@ -1526,21 +1653,19 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   contentPadding: EdgeInsets.zero,
                   leading: const CircleAvatar(
                     radius: 14,
-                    backgroundColor: Color(0xFFDBEAFE),
-                    child: Text(
-                      'f',
-                      style: TextStyle(
-                        color: Color(0xFF1D4ED8),
-                        fontWeight: FontWeight.w900,
-                      ),
+                    backgroundColor: Color(0xFFDCFCE7),
+                    child: Icon(
+                      Icons.shield_outlined,
+                      size: 15,
+                      color: Color(0xFF14B866),
                     ),
                   ),
-                  title: const Text('Facebook'),
+                  title: const Text('Xác thực OTP Bảo mật 2 lớp (Email / SMS)'),
                   trailing: Switch(
-                    value: _store.isCustomerFacebookLinked,
+                    value: _store.isCustomerTwoFactorEnabled,
                     onChanged: (v) {
                       _store.toggleCustomerSocialLink(
-                        provider: 'FACEBOOK',
+                        provider: 'TWO_FACTOR_OTP',
                         linked: v,
                       );
                     },
@@ -1572,11 +1697,12 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         phone: _profilePhoneCtrl.text.trim(),
                         email: _profileEmailCtrl.text.trim(),
                         defaultAddress: _profileAddressCtrl.text.trim(),
+                        gender: _profileGender,
                       );
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
+                        SnackBar(
                           content: Text(
-                            'Đã lưu thay đổi hồ sơ cá nhân thành công!',
+                            'Đã lưu thay đổi hồ sơ cá nhân (${_profileNameCtrl.text.trim()} • Giới tính: $_profileGender)!',
                           ),
                         ),
                       );
@@ -2196,7 +2322,23 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                           : Icons.shield_outlined;
 
                   return InkWell(
-                    onTap: () => _store.markNotificationAsRead(n.id),
+                    onTap: () {
+                      _store.markNotificationAsRead(n.id);
+                      final match =
+                          RegExp(r'#DH[0-9A-Za-z-]+').firstMatch(n.title);
+                      if (n.title.toLowerCase().contains('khiếu nại') ||
+                          n.title.contains('KN-')) {
+                        if (match != null) {
+                          _store.selectCustomerOrder(match.group(0)!);
+                        }
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 9);
+                      } else if (match != null) {
+                        _store.selectCustomerOrder(match.group(0)!);
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 4);
+                      } else if (n.category == 'Khuyến mãi') {
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 14);
+                      }
+                    },
                     child: Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),

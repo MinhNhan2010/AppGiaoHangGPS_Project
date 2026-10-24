@@ -389,7 +389,7 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
     );
     final platformCommission = (totalRevenue * 0.20).roundToDouble();
     final slaRate = totalOrders == 0
-        ? 95.8
+        ? 0.0
         : (deliveredCount * 100.0 / totalOrders);
 
     return Container(
@@ -408,10 +408,10 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
             spacing: 12,
             runSpacing: 10,
             children: [
-              const Column(
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     'Báo cáo thống kê hệ thống',
                     style: TextStyle(
                       fontSize: 18,
@@ -420,8 +420,8 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                     ),
                   ),
                   Text(
-                    'Kỳ báo cáo: 01/10/2026 - 31/10/2026 • Số liệu thống kê vận hành hệ thống',
-                    style: TextStyle(fontSize: 12, color: Color(0xFF4A4754)),
+                    'Kỳ báo cáo: Tháng ${DateTime.now().month}/${DateTime.now().year} • Số liệu thống kê vận hành hệ thống',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF4A4754)),
                   ),
                 ],
               ),
@@ -549,23 +549,39 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
 
               String pctStr(int count) =>
                   '${((count / safeTotal) * 100).round()}% ($count đơn)';
-              String slaFor(List<dynamic> list) {
-                if (list.isEmpty) return '100.0%';
+              String slaFor(List<ActiveOrderRecord> list) {
+                if (list.isEmpty) return '0.0%';
+                final closedOrActive = list
+                    .where((o) => o.status != OrderStatus.searching && o.status != OrderStatus.draft)
+                    .toList();
+                final denom = closedOrActive.isEmpty ? list.length : closedOrActive.length;
                 final ok = list
                     .where(
                       (o) =>
-                          o.status != OrderStatus.cancelled &&
-                          o.status != OrderStatus.failed &&
-                          o.status != OrderStatus.returning &&
+                          (o.status == OrderStatus.delivered ||
+                              o.status == OrderStatus.inTransit ||
+                              o.status == OrderStatus.accepted ||
+                              o.status == OrderStatus.arrivingPickup) &&
                           o.paymentStatus != 'RETURNED',
                     )
                     .length;
-                return '${((ok / list.length) * 100).toStringAsFixed(1)}%';
+                return '${((ok / denom) * 100).clamp(0.0, 100.0).toStringAsFixed(1)}%';
+              }
+
+              int weekBucketOfOrder(ActiveOrderRecord o) {
+                final parts = o.createdDateLabel.split('/');
+                if (parts.isNotEmpty) {
+                  final day = int.tryParse(parts[0]);
+                  if (day != null && day >= 1) {
+                    return ((day - 1) ~/ 7).clamp(0, 3);
+                  }
+                }
+                return ((DateTime.now().day - 1) ~/ 7).clamp(0, 3);
               }
 
               final wkCounts = List<double>.generate(4, (wIdx) {
                 final sum = validOrders
-                    .where((o) => o.trackingCode.hashCode.abs() % 4 == wIdx)
+                    .where((o) => weekBucketOfOrder(o) == wIdx)
                     .fold<double>(0, (s, o) => s + o.totalAmount);
                 return sum;
               });
@@ -575,7 +591,10 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                 final ratio = wkCounts[wIdx] <= 0
                     ? 0.25
                     : (wkCounts[wIdx] / maxWk).clamp(0.30, 1.0);
-                return ('Tuần ${wIdx + 1}', ratio);
+                final amtLabel = wkCounts[wIdx] <= 0
+                    ? '0đ'
+                    : '${(wkCounts[wIdx] / 1000).round()}k';
+                return ('Tuần ${wIdx + 1} ($amtLabel)', ratio);
               });
 
               return LayoutBuilder(
@@ -590,9 +609,9 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
-                          'Doanh thu theo tuần (Tháng 10/2026)',
-                          style: TextStyle(
+                        Text(
+                          'Doanh thu theo tuần (Tháng ${DateTime.now().month}/${DateTime.now().year})',
+                          style: const TextStyle(
                             fontWeight: FontWeight.w800,
                             fontSize: 14,
                           ),
@@ -729,6 +748,7 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
 
   /// UC28: Giải quyết Khiếu nại & Sự cố (Chuẩn uc28_khieu_nai_1791015159812.jpg)
   Widget _buildComplaintResolutionView() {
+    final canResolveComplaint = _store.hasAdminPermission('Khiếu nại: Xử lý');
     final safeIdx = _selectedComplaintIndex.clamp(
       0,
       _store.complaints.length - 1,
@@ -744,6 +764,14 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               'Trung tâm Giải quyết Khiếu nại & Sự cố',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (!canResolveComplaint)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '🔒 Vai trò hiện tại không có quyền "Khiếu nại: Xử lý" (Cấu hình tại mục Phân quyền RBAC).',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12),
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm),
             Wrap(
               spacing: 8,
@@ -764,6 +792,44 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               'Ticket đang chọn: ${activeTicket.ticketCode} (${activeTicket.orderId}) • Loại: ${activeTicket.issueType} • Trạng thái: ${activeTicket.status}',
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
+            Builder(
+              builder: (context) {
+                final linkedOrd = _store.orders
+                    .where((o) => o.trackingCode == activeTicket.orderId)
+                    .firstOrNull;
+                if (linkedOrd == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Text(
+                        'Đơn liên kết: ${linkedOrd.trackingCode} (${linkedOrd.status.displayName}) • Khách: ${linkedOrd.customerName} • TX: ${linkedOrd.assignedDriverName ?? "Chưa có TX"}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _store.selectCustomerOrder(linkedOrd.trackingCode);
+                          _store.selectDriverOrder(linkedOrd.trackingCode);
+                          _rebuildAdminUi(() => _selectedScreenIndex = 7);
+                        },
+                        icon: const Icon(Icons.local_shipping_outlined, size: 15),
+                        label: Text(
+                          'Điều phối đơn ${linkedOrd.trackingCode}',
+                          style: const TextStyle(fontSize: 11.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 6),
             ...activeTicket.replies.map(
               (r) => Padding(
@@ -774,45 +840,72 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
             const SizedBox(height: AppSpacing.sm),
             TextField(
               controller: _replyTicketCtrl,
+              enabled: canResolveComplaint,
               decoration: const InputDecoration(
                 labelText: 'Phản hồi của Quản trị viên / Phương án đền bù',
               ),
             ),
             const SizedBox(height: AppSpacing.sm),
-            Row(
+            Wrap(
+              spacing: 10,
+              runSpacing: 8,
               children: [
-                Expanded(
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.success,
-                    ),
-                    onPressed: () {
-                      if (_replyTicketCtrl.text.trim().isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Vui lòng nhập nội dung phản hồi / phương án đền bù trước khi đóng khiếu nại!',
+                OutlinedButton.icon(
+                  onPressed: canResolveComplaint
+                      ? () {
+                          final note = _replyTicketCtrl.text.trim().isNotEmpty
+                              ? _replyTicketCtrl.text.trim()
+                              : 'Đang xác minh lộ trình GPS & bằng chứng POD với Tài xế.';
+                          _store.replyComplaint(
+                            activeTicket.ticketCode,
+                            note,
+                            'Đang xử lý',
+                          );
+                          _replyTicketCtrl.clear();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Đã cập nhật tiến độ "Đang xử lý" cho ticket ${activeTicket.ticketCode}!',
+                              ),
                             ),
-                          ),
-                        );
-                        return;
-                      }
-                      _store.replyComplaint(
-                        activeTicket.ticketCode,
-                        _replyTicketCtrl.text,
-                        'Đã giải quyết',
-                      );
-                      _replyTicketCtrl.clear();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Đã phản hồi và đóng khiếu nại ${activeTicket.ticketCode} (${activeTicket.orderId})!',
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text('Phản hồi & Đóng khiếu nại'),
+                          );
+                        }
+                      : null,
+                  icon: const Icon(Icons.pending_actions_outlined, size: 16),
+                  label: const Text('Cập nhật: Đang xử lý'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
                   ),
+                  onPressed: canResolveComplaint
+                      ? () {
+                          if (_replyTicketCtrl.text.trim().isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Vui lòng nhập nội dung phản hồi / phương án đền bù trước khi đóng khiếu nại!',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          _store.replyComplaint(
+                            activeTicket.ticketCode,
+                            _replyTicketCtrl.text,
+                            'Đã giải quyết',
+                          );
+                          _replyTicketCtrl.clear();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Đã phản hồi và đóng khiếu nại ${activeTicket.ticketCode} (${activeTicket.orderId})!',
+                              ),
+                            ),
+                          );
+                        }
+                      : null,
+                  child: const Text('Phản hồi & Đóng khiếu nại'),
                 ),
               ],
             ),
@@ -927,6 +1020,14 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
   /// UC43: Quản lý & Điều phối Đơn hàng Thủ công (Chuẩn uc43_don_hang_1791094600371.jpg)
   Widget _buildManualOrderDispatchView() {
     final canEditOrder = _store.hasAdminPermission('Đơn: Sửa');
+    final eligibleDrivers = _store.drivers
+        .where((d) => d.approvalStatus == 'Đã duyệt' && d.isOnline)
+        .toList();
+    final safeDispDrvIdx = eligibleDrivers.isEmpty
+        ? 0
+        : _selectedDispatchDriverIndex.clamp(0, eligibleDrivers.length - 1);
+    final selectedDispatchDriver =
+        eligibleDrivers.isNotEmpty ? eligibleDrivers[safeDispDrvIdx] : null;
 
     return Card(
       child: Padding(
@@ -938,7 +1039,40 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               'Quản lý & Điều phối Đơn hàng Thủ công',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
-            const SizedBox(height: AppSpacing.sm),
+            const SizedBox(height: 8),
+            if (eligibleDrivers.isNotEmpty) ...[
+              const Text(
+                'Chọn Tài xế đích để gán / điều phối lại đơn hàng:',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: eligibleDrivers.asMap().entries.map((entry) {
+                  final idx = entry.key;
+                  final drv = entry.value;
+                  final isSel = idx == safeDispDrvIdx;
+                  return ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      '${drv.fullName} (${drv.licensePlate} • ★${drv.rating.toStringAsFixed(1)})',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: isSel ? Colors.white : AppColors.ink,
+                      ),
+                    ),
+                    selected: isSel,
+                    selectedColor: AppColors.violet,
+                    onSelected: (_) => _rebuildAdminUi(
+                      () => _selectedDispatchDriverIndex = idx,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+            ],
             ..._store.orders.map(
               (ord) => Container(
                 margin: const EdgeInsets.only(bottom: 10),
@@ -962,7 +1096,7 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Trạng thái: ${ord.paymentStatus == "RETURNED" ? "Đã hoàn kho" : ord.status.displayName} • Tài xế: ${ord.assignedDriverName ?? "Chưa có tài xế"}',
+                          'Trạng thái: ${ord.paymentStatus == "RETURNED" ? "Đã hoàn kho" : ord.status.displayName} • Tài xế: ${ord.assignedDriverName ?? "Chưa có tài xế"} (${ord.assignedDriverPlate ?? "--"})',
                           style: const TextStyle(
                             fontSize: 12,
                             color: AppColors.textSecondary,
@@ -970,46 +1104,103 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                         ),
                       ],
                     ),
-                    ElevatedButton(
-                      onPressed: canEditOrder &&
-                              ord.status != OrderStatus.delivered &&
-                              ord.status != OrderStatus.cancelled
-                          ? () {
-                              if (ord.status.canTransitionTo(
-                                OrderStatus.accepted,
-                              )) {
-                                _store.driverAcceptOrder(ord.trackingCode);
-                              } else {
-                                _store.driverAdvanceOrderStatus(
-                                  ord.trackingCode,
-                                );
-                              }
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Đã điều phối đơn ${ord.trackingCode} → Trạng thái: ${ord.paymentStatus == "RETURNED" ? "Đã hoàn kho" : ord.status.displayName} (${ord.assignedDriverName ?? _store.activeDriverName})',
-                                  ),
-                                ),
-                              );
-                            }
-                          : null,
-                      child: Text(
-                        ord.paymentStatus == 'RETURNED'
-                            ? 'Đã hoàn kho'
-                            : ord.status == OrderStatus.delivered
-                                ? 'Đã hoàn tất'
-                            : ord.status == OrderStatus.cancelled
-                                ? 'Đã hủy'
-                                : ord.status == OrderStatus.failed
-                                    ? 'Giao lại chuyến hàng'
-                                    : ord.status == OrderStatus.returning
-                                        ? 'Hoàn tất trả kho'
-                                        : ord.status.canTransitionTo(
-                                            OrderStatus.accepted,
-                                          )
-                                            ? 'Gán tài xế ngay'
-                                            : 'Chuyển bước giao hàng',
-                      ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (selectedDispatchDriver != null &&
+                            ord.status != OrderStatus.delivered &&
+                            ord.status != OrderStatus.cancelled)
+                          OutlinedButton.icon(
+                            onPressed: canEditOrder
+                                ? () {
+                                    final ok =
+                                        _store.adminAssignOrReassignDriver(
+                                      trackingCode: ord.trackingCode,
+                                      driver: selectedDispatchDriver,
+                                    );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          ok
+                                              ? 'Đã gán đơn ${ord.trackingCode} cho tài xế ${selectedDispatchDriver.fullName} (${selectedDispatchDriver.licensePlate})!'
+                                              : 'Không thể gán tài xế cho đơn ${ord.trackingCode}.',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                : null,
+                            icon: const Icon(
+                              Icons.person_pin_circle_outlined,
+                              size: 16,
+                            ),
+                            label: Text(
+                              'Gán: ${selectedDispatchDriver.fullName}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ElevatedButton(
+                          onPressed: canEditOrder &&
+                                  ord.status != OrderStatus.delivered &&
+                                  ord.status != OrderStatus.cancelled
+                              ? () {
+                                  if (ord.status == OrderStatus.inTransit) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        backgroundColor: AppColors.danger,
+                                        content: Text(
+                                          'Đơn ${ord.trackingCode} đang giao trên đường. Việc hoàn tất giao hàng bắt buộc Tài xế chụp ảnh POD và xác thực OTP 4 số của khách tại điểm giao (<= 100m)!',
+                                        ),
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  if (ord.status.canTransitionTo(
+                                    OrderStatus.accepted,
+                                  )) {
+                                    if (selectedDispatchDriver != null) {
+                                      _store.adminAssignOrReassignDriver(
+                                        trackingCode: ord.trackingCode,
+                                        driver: selectedDispatchDriver,
+                                      );
+                                    } else {
+                                      _store.driverAcceptOrder(ord.trackingCode);
+                                    }
+                                  } else {
+                                    _store.driverAdvanceOrderStatus(
+                                      ord.trackingCode,
+                                    );
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        'Đã điều phối đơn ${ord.trackingCode} → Trạng thái: ${ord.paymentStatus == "RETURNED" ? "Đã hoàn kho" : ord.status.displayName} (${ord.assignedDriverName ?? _store.activeDriverName})',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              : null,
+                          child: Text(
+                            ord.paymentStatus == 'RETURNED'
+                                ? 'Đã hoàn kho'
+                                : ord.status == OrderStatus.delivered
+                                    ? 'Đã hoàn tất'
+                                : ord.status == OrderStatus.cancelled
+                                    ? 'Đã hủy'
+                                    : ord.status == OrderStatus.failed
+                                        ? 'Giao lại chuyến hàng'
+                                        : ord.status == OrderStatus.returning
+                                            ? 'Hoàn tất trả kho'
+                                            : ord.status == OrderStatus.inTransit
+                                                ? 'Đang giao (Chờ POD & OTP)'
+                                                : ord.status.canTransitionTo(
+                                                    OrderStatus.accepted,
+                                                  )
+                                                    ? 'Gán tài xế ngay'
+                                                    : 'Chuyển bước lấy hàng',
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1023,6 +1214,7 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
 
   /// Quản lý Vùng hoạt động Geofencing Polygon (Tương tác chấm đỉnh trên bản đồ)
   Widget _buildGeofencePolygonZonesView() {
+    final canEditGeofence = _store.hasAdminPermission('Hệ thống: Cài đặt');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -1033,6 +1225,14 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               'Quản lý Vùng Hoạt động Geofencing Polygon',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (!canEditGeofence)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '🔒 Vai trò hiện tại không có quyền "Hệ thống: Cài đặt" để lưu/bật tắt vùng Geofence.',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12),
+                ),
+              ),
             const SizedBox(height: 6),
             const Text(
               'Chạm trực tiếp lên bản đồ bên dưới để thêm đỉnh đa giác (Polygon Vertex) mới:',
@@ -1071,7 +1271,8 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                       child: const Text('Xóa đỉnh'),
                     ),
                     ElevatedButton(
-                      onPressed: _draftPolygonOffsets.length >= 3
+                      onPressed: canEditGeofence &&
+                              _draftPolygonOffsets.length >= 3
                           ? () {
                               final zoneName = _newZoneNameCtrl.text
                                       .trim()
@@ -1088,8 +1289,10 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                                   .toList();
                               _store.addCustomGeofenceZone(
                                 zoneName: zoneName,
-                                zoneType: 'SURCHARGE_ZONE',
-                                surchargeRate: 20000,
+                                zoneType: _newZoneSurcharge > 0
+                                    ? 'SURCHARGE_ZONE'
+                                    : 'STANDARD_ZONE',
+                                surchargeRate: _newZoneSurcharge,
                                 vertices: vertices,
                               );
                               _rebuildAdminUi(() {
@@ -1128,6 +1331,33 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                 );
               },
             ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text(
+                  'Mức phụ phí vùng mới:',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+                ...[0.0, 10000.0, 15000.0, 20000.0, 30000.0].map((fee) {
+                  final selected = _newZoneSurcharge == fee;
+                  return ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      fee == 0
+                          ? '0đ (Tiêu chuẩn)'
+                          : '+${CurrencyFormatter.formatVnd(fee)}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    selected: selected,
+                    onSelected: (_) =>
+                        _rebuildAdminUi(() => _newZoneSurcharge = fee),
+                  );
+                }),
+              ],
+            ),
             const Divider(),
             ..._store.geofenceZones.map(
               (z) => SwitchListTile(
@@ -1140,7 +1370,9 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                   'Phụ phí vùng: ${CurrencyFormatter.formatVnd(z.surchargeRate)} • Số đỉnh Polygon: ${z.boundary.length}',
                 ),
                 value: z.isActive,
-                onChanged: (v) => _store.toggleGeofenceZone(z.id, v),
+                onChanged: canEditGeofence
+                    ? (v) => _store.toggleGeofenceZone(z.id, v)
+                    : null,
               ),
             ),
             const Divider(),
@@ -1221,6 +1453,7 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
 
   /// Gửi Thông báo Hệ thống Hàng loạt (Broadcast Push)
   Widget _buildBroadcastNotificationView() {
+    final canBroadcast = _store.hasAdminPermission('Hệ thống: Cài đặt');
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -1231,6 +1464,14 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               'Phát Thông báo Hệ thống Hàng loạt',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            if (!canBroadcast)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text(
+                  '🔒 Vai trò hiện tại không có quyền "Hệ thống: Cài đặt" để phát thông báo hàng loạt.',
+                  style: TextStyle(color: AppColors.danger, fontSize: 12),
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm),
             Wrap(
               spacing: 8,
@@ -1261,32 +1502,82 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.accent,
                 ),
-                onPressed: () {
-                  if (_broadcastTitleCtrl.text.trim().isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Vui lòng nhập tiêu đề & nội dung thông báo trước khi phát!',
-                        ),
-                      ),
-                    );
-                    return;
-                  }
-                  _store.broadcastSystemNotification(
-                    title: _broadcastTitleCtrl.text.trim(),
-                    targetGroup: _broadcastTarget,
-                  );
-                  _broadcastTitleCtrl.clear();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Đã phát thông báo tới nhóm: $_broadcastTarget!',
-                      ),
-                    ),
-                  );
-                },
+                onPressed: canBroadcast
+                    ? () {
+                        if (_broadcastTitleCtrl.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Vui lòng nhập tiêu đề & nội dung thông báo trước khi phát!',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        _store.broadcastSystemNotification(
+                          title: _broadcastTitleCtrl.text.trim(),
+                          targetGroup: _broadcastTarget,
+                        );
+                        _broadcastTitleCtrl.clear();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Đã phát thông báo tới nhóm: $_broadcastTarget!',
+                            ),
+                          ),
+                        );
+                      }
+                    : null,
                 icon: const Icon(Icons.campaign_outlined),
                 label: const Text('Gửi thông báo ngay (FCM Push)'),
+              ),
+            ),
+            const Divider(height: 24),
+            Text(
+              'Lịch sử Thông báo Hệ thống & Push đã phát (${_store.notifications.length})',
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
+            ),
+            const SizedBox(height: 8),
+            ..._store.notifications.map(
+              (n) => Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F1E8),
+                  border: Border.all(color: const Color(0xFF15131E)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.notifications_active_outlined,
+                      size: 18,
+                      color: AppColors.primary,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            n.title,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Nhóm nhận: ${n.targetGroup} • Phân loại: ${n.category} • ${n.timeAgo}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

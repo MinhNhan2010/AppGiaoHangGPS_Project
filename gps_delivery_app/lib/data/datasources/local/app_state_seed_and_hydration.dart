@@ -165,6 +165,9 @@ extension AppStateSeedAndHydration on AppStateStore {
         ),
       ]);
 
+    final seedNow = DateTime.now();
+    final todayDateLabel =
+        '${seedNow.day.toString().padLeft(2, '0')}/${seedNow.month.toString().padLeft(2, '0')}/${seedNow.year}';
     orders
       ..clear()
       ..addAll([
@@ -197,12 +200,12 @@ extension AppStateSeedAndHydration on AppStateStore {
           status: OrderStatus.inTransit,
           assignedDriverName: 'Nguyễn Văn Nam',
           assignedDriverPlate: '29-P1 123.45',
-          createdDateLabel: '26/10/2023',
+          createdDateLabel: todayDateLabel,
         ),
         ActiveOrderRecord(
           id: 'ORD-02',
           trackingCode: '#DH789101',
-          customerName: 'Trần Văn An',
+          customerName: 'Nguyễn Thu Hà',
           recipientName: 'Lê Văn B',
           recipientPhone: '0987654321',
           pickupAddress: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
@@ -231,12 +234,12 @@ extension AppStateSeedAndHydration on AppStateStore {
               'Đã chụp ảnh kiện hàng kèm Watermark GPS (10.7992, 106.6805)',
           ratingStars: 5,
           ratingComment: 'Tài xế thân thiện, giao hàng siêu tốc đúng giờ!',
-          createdDateLabel: '25/10/2023',
+          createdDateLabel: todayDateLabel,
         ),
         ActiveOrderRecord(
           id: 'ORD-03',
           trackingCode: '#DH556778',
-          customerName: 'Phạm Văn C',
+          customerName: 'Nguyễn Thu Hà',
           recipientName: 'Ngô Thị Mai',
           recipientPhone: '0923560677',
           pickupAddress: '45 Hai Bà Trưng, Quận 3, TP. HCM',
@@ -259,7 +262,7 @@ extension AppStateSeedAndHydration on AppStateStore {
           paymentMethod: 'Tiền mặt (COD)',
           paymentStatus: 'UNPAID',
           status: OrderStatus.searching,
-          createdDateLabel: '26/10/2023',
+          createdDateLabel: todayDateLabel,
         ),
       ]);
 
@@ -342,7 +345,7 @@ extension AppStateSeedAndHydration on AppStateStore {
           vehicleType: 'Xe máy',
           vehicleColor: 'Xanh đen',
           approvalStatus: 'Chờ duyệt',
-          isOnline: true,
+          isOnline: false,
           location: const GeoPoint(latitude: 10.7812, longitude: 106.7015),
           rating: 4.8,
           totalTrips: 215,
@@ -886,35 +889,52 @@ extension AppStateSeedAndHydration on AppStateStore {
       drivers
         ..clear()
         ..addAll(
-          drvRows.map(
-            (r) => DriverApplicantRecord(
-              id: r['id'].toString(),
+          drvRows.map((r) {
+            final idStr = r['id'].toString();
+            final rawStatus = (r['approval_status'] ?? 'Chờ duyệt').toString();
+            final normStatus = (idStr == 'DV10928' ||
+                    rawStatus == 'APPROVED' ||
+                    rawStatus == 'Đã duyệt')
+                ? 'Đã duyệt'
+                : (rawStatus == 'REJECTED' || rawStatus == 'Từ chối')
+                    ? 'Từ chối'
+                    : 'Chờ duyệt';
+            final rawOnline = (r['is_online'] as num?)?.toInt() == 1;
+            return DriverApplicantRecord(
+              id: idStr,
               fullName: r['full_name'].toString(),
               phone: r['phone'].toString(),
               citizenId: r['citizen_id'].toString(),
               licensePlate: r['license_plate'].toString(),
               vehicleType: r['vehicle_type'].toString(),
               vehicleColor: r['vehicle_color'].toString(),
-              approvalStatus: r['approval_status'].toString(),
-              isOnline: (r['is_online'] as num?)?.toInt() == 1,
+              approvalStatus: normStatus,
+              isOnline: idStr == 'DV10928'
+                  ? true
+                  : (normStatus == 'Đã duyệt' && rawOnline),
               location: GeoPoint(
                 latitude: (r['latitude'] as num).toDouble(),
                 longitude: (r['longitude'] as num).toDouble(),
               ),
               rating: (r['rating'] as num?)?.toDouble() ?? 4.9,
               totalTrips: (r['total_trips'] as num?)?.toInt() ?? 0,
-            ),
-          ),
+            );
+          }),
         );
       final firstDrvWallet =
           (drvRows.first['wallet_balance'] as num?)?.toDouble();
       if (firstDrvWallet != null && firstDrvWallet > 0) {
         driverWalletBalance = firstDrvWallet;
       }
-      isDriverOnline = drivers.first.isOnline;
-      activeDriverId = drivers.first.id;
-      activeDriverName = drivers.first.fullName;
-      activeDriverPhone = drivers.first.phone;
+      final defaultDrv = drivers
+              .where((d) => d.id == 'DV10928')
+              .firstOrNull ??
+          drivers.where((d) => d.approvalStatus == 'Đã duyệt').firstOrNull ??
+          drivers.first;
+      isDriverOnline = defaultDrv.isOnline;
+      activeDriverId = defaultDrv.id;
+      activeDriverName = defaultDrv.fullName;
+      activeDriverPhone = defaultDrv.phone;
     }
 
     final merRows = await _sqliteDb.queryRows('merchants');
@@ -1047,6 +1067,30 @@ extension AppStateSeedAndHydration on AppStateStore {
             o.recipientName == 'Nguyễn Thị Minh An' &&
             o.dropoffAddress.contains('Lê Trọng Tấn'),
       );
+      final migrateNow = DateTime.now();
+      final migratedTodayLabel =
+          '${migrateNow.day.toString().padLeft(2, '0')}/${migrateNow.month.toString().padLeft(2, '0')}/${migrateNow.year}';
+      for (final ord in loadedOrders) {
+        if ((ord.id == 'ORD-02' || ord.id == 'ORD-03') &&
+            (ord.customerName == 'Trần Văn An' ||
+                ord.customerName == 'Phạm Văn C')) {
+          ord.customerName = customerFullName;
+          await _sqliteDb.updateRows(
+            'orders',
+            {'customer_name': ord.customerName},
+            where: 'id = ?',
+            whereArgs: [ord.id],
+          );
+        }
+        if (ord.createdDateLabel.endsWith('/2023')) {
+          await _sqliteDb.updateRows(
+            'orders',
+            {'created_date_label': migratedTodayLabel},
+            where: 'id = ?',
+            whereArgs: [ord.id],
+          );
+        }
+      }
       orders
         ..clear()
         ..addAll(loadedOrders);

@@ -169,13 +169,7 @@ extension AppStateAuthAndGpsOps on AppStateStore {
     final existingHash =
         existingUser?.passwordHash ?? registeredUserPasswordHashes[normPhone];
     if (existingHash == null) {
-      final created = registerUserAccountWithRole(
-        phone: normPhone,
-        fullName: fullName ?? 'Người dùng $normPhone',
-        password: password.trim(),
-        role: role,
-      );
-      return created != null;
+      return false;
     }
     final matched = existingHash == passwordHash;
     if (matched) {
@@ -231,8 +225,9 @@ extension AppStateAuthAndGpsOps on AppStateStore {
             .replaceAll('BCRYPT-HASH-', '');
     final numericVal = int.parse(hashHex.substring(0, 8), radix: 16);
     final otp6 = (100000 + (numericVal % 900000)).toString();
+    final expiryMs = nowMs + 120000;
     activeOtpCodesByPhone[normKey] = otp6;
-    otpExpiryEpochMsByPhone[normKey] = nowMs + 120000;
+    otpExpiryEpochMsByPhone[normKey] = expiryMs;
     if (notify) {
       _notifyStoreChanged();
     }
@@ -270,11 +265,46 @@ extension AppStateAuthAndGpsOps on AppStateStore {
     return ok;
   }
 
+  /// Đặt lại mật khẩu mới cho tài khoản bằng mã xác thực OTP Số điện thoại hoặc Email
+  UserAccountRecord? resetPasswordWithOtp({
+    required String phoneOrEmail,
+    required String otpCode,
+    required String newPassword,
+  }) {
+    final pwd = newPassword.trim();
+    if (pwd.length < 6) return null;
+    final user = findUserByPhoneOrEmail(phoneOrEmail);
+    if (user == null || user.status == 'LOCKED') return null;
+    final verified = verifyOtpCode(phoneOrEmail, otpCode);
+    if (!verified) return null;
+
+    final normPhone = _normalizePhone(user.phone);
+    final newHash = SecurityAndBarcodeUtils.hashPasswordWithSalt(pwd, normPhone);
+    user.passwordHash = newHash;
+    registeredUserPasswordHashes[normPhone] = newHash;
+
+    _sqliteDb.updateRows(
+      'users',
+      {'password_hash': newHash},
+      where: 'id = ?',
+      whereArgs: [user.id],
+    );
+    applyAuthenticatedUserSession(user);
+    _persistMutation('PASSWORD_RESET_BY_OTP', {
+      'userId': user.id,
+      'phone': normPhone,
+    });
+    _notifyStoreChanged();
+    return user;
+  }
+
   void updateCustomerProfile({
     required String fullName,
     required String phone,
     required String email,
     required String defaultAddress,
+    String? gender,
+    int? avatarBadgeIndex,
   }) {
     final oldNameLower = customerFullName.trim().toLowerCase();
     final oldPhoneNorm = _normalizePhone(customerPhone);
@@ -287,6 +317,12 @@ extension AppStateAuthAndGpsOps on AppStateStore {
     }
     customerEmail = email.trim();
     customerDefaultAddress = defaultAddress.trim();
+    if (gender != null && gender.trim().isNotEmpty) {
+      customerGender = gender.trim();
+    }
+    if (avatarBadgeIndex != null) {
+      customerAvatarBadgeIndex = avatarBadgeIndex;
+    }
 
     final normPhone = _normalizePhone(customerPhone);
     if (customerFullName.trim().toLowerCase() != oldNameLower) {
@@ -374,6 +410,7 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       existing.vehicleType = vehicleType.trim();
       existing.licensePlate = licensePlate.trim();
       existing.approvalStatus = 'Chờ duyệt';
+      existing.isOnline = false;
       record = existing;
     } else {
       record = DriverApplicantRecord(
@@ -385,7 +422,7 @@ extension AppStateAuthAndGpsOps on AppStateStore {
         vehicleType: vehicleType.trim(),
         vehicleColor: vehicleColor,
         approvalStatus: 'Chờ duyệt',
-        isOnline: true,
+        isOnline: false,
         location: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
         rating: 5.0,
         totalTrips: 0,
@@ -397,6 +434,7 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       activeDriverId = record.id;
       activeDriverName = record.fullName;
       activeDriverPhone = record.phone;
+      isDriverOnline = record.isOnline;
     }
 
     _sqliteDb.upsertRow('drivers', {
@@ -480,9 +518,15 @@ extension AppStateAuthAndGpsOps on AppStateStore {
   }
 
   void setDriverOnlineStatus(bool online) {
-    isDriverOnline = online;
     final drv = drivers.where((d) => d.id == activeDriverId).firstOrNull ??
         drivers.firstOrNull;
+    if (online && drv != null && drv.approvalStatus != 'Đã duyệt') {
+      isDriverOnline = false;
+      drv.isOnline = false;
+      _notifyStoreChanged();
+      return;
+    }
+    isDriverOnline = online;
     if (drv != null) {
       drv.isOnline = online;
       _sqliteDb.updateRows(
@@ -643,6 +687,7 @@ extension AppStateAuthAndGpsOps on AppStateStore {
   CsvBatchParseResult parseAndCreateBulkOrdersFromCsv(
     String csvContentOrFilePath, {
     bool commitOrders = false,
+    String? customPickupAddress,
   }) {
     String rawContent = csvContentOrFilePath.trim();
     try {
@@ -725,7 +770,9 @@ extension AppStateAuthAndGpsOps on AppStateStore {
         validCount++;
         if (commitOrders) {
           final created = createNewOrder(
-            pickupAddress: merchantWarehouses.first.address,
+            pickupAddress: customPickupAddress?.trim().isNotEmpty == true
+                ? customPickupAddress!.trim()
+                : merchantWarehouses.first.address,
             dropoffAddress: address,
             recipientName: name,
             recipientPhone: phone,
@@ -770,15 +817,17 @@ extension AppStateAuthAndGpsOps on AppStateStore {
     final wasOffline = isOfflineMode;
     isOfflineMode = offline;
     if (offline) {
-      offlineQueueCount += 3;
       lastSyncStatusMessage =
-          'Đang lưu tạm $offlineQueueCount bản ghi vào SQLite local_sync_queue';
+          'Chế độ Ngoại tuyến (Offline): Các thao tác mới sẽ tự động lưu vào SQLite local_sync_queue ($offlineQueueCount bản ghi đang chờ)';
     } else {
       final drained = offlineQueueCount;
       offlineQueueCount = 0;
       if (wasOffline && drained > 0) {
         lastSyncStatusMessage =
             'Đã đồng bộ $drained gói tin SQLite lên PostGIS (Exponential Backoff: 1000ms)';
+      } else if (wasOffline) {
+        lastSyncStatusMessage =
+            'Đã khôi phục kết nối Trực tuyến (Online) — Hàng đợi SQLite đồng bộ hoàn tất';
       }
     }
     _persistMutation('TOGGLE_OFFLINE', {'isOffline': offline});
@@ -834,6 +883,24 @@ extension AppStateAuthAndGpsOps on AppStateStore {
   double distanceFromDriverToDropoffMeters() {
     final ord = activeOrderRecord ?? orders.first;
     return GeoMath.distanceMeters(activeDriverLocation, ord.dropoffLocation);
+  }
+
+  double distanceFromDriverToOrderDropoffMeters(ActiveOrderRecord ord) {
+    if (ord.status == OrderStatus.delivered &&
+        ord.paymentStatus != 'RETURNED') {
+      return 0.0;
+    }
+    if (activeOrderRecord?.trackingCode == ord.trackingCode &&
+        (ord.status == OrderStatus.inTransit ||
+            ord.status == OrderStatus.arrivingPickup ||
+            ord.status == OrderStatus.accepted)) {
+      final liveDist =
+          GeoMath.distanceMeters(activeDriverLocation, ord.dropoffLocation);
+      if (liveDist <= 50000) {
+        return liveDist;
+      }
+    }
+    return GeoMath.distanceMeters(ord.pickupLocation, ord.dropoffLocation);
   }
 
   Future<String> acquireRealHardwareGps() async {
@@ -1032,6 +1099,10 @@ extension AppStateAuthAndGpsOps on AppStateStore {
     required String smsWebhookUrl,
     required String googleClientId,
     required String googleClientSecret,
+    String? smsProvider,
+    String? smsApiKey,
+    String? smsApiSecret,
+    String? smsBrandname,
   }) async {
     EnvConfig.configureAuthProvidersRuntime(
       smtpHost: smtpHost,
@@ -1039,6 +1110,10 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       smtpSenderEmail: smtpSenderEmail,
       smtpAppPassword: smtpAppPassword,
       smsWebhookUrl: smsWebhookUrl,
+      smsProvider: smsProvider,
+      smsApiKey: smsApiKey,
+      smsApiSecret: smsApiSecret,
+      smsBrandname: smsBrandname,
       googleClientId: googleClientId,
       googleClientSecret: googleClientSecret,
     );
@@ -1051,6 +1126,10 @@ extension AppStateAuthAndGpsOps on AppStateStore {
         'smtpSenderEmail': EnvConfig.smtpSenderEmail,
         'smtpAppPassword': EnvConfig.smtpAppPassword,
         'smsWebhookUrl': EnvConfig.smsWebhookUrl,
+        'smsProvider': EnvConfig.smsProvider,
+        'smsApiKey': EnvConfig.smsApiKey,
+        'smsApiSecret': EnvConfig.smsApiSecret,
+        'smsBrandname': EnvConfig.smsBrandname,
         'googleClientId': EnvConfig.googleClientId,
         'googleClientSecret': EnvConfig.googleClientSecret,
       },
@@ -1069,6 +1148,10 @@ extension AppStateAuthAndGpsOps on AppStateStore {
         smtpSenderEmail: cfg['smtpSenderEmail']?.toString(),
         smtpAppPassword: cfg['smtpAppPassword']?.toString(),
         smsWebhookUrl: cfg['smsWebhookUrl']?.toString(),
+        smsProvider: cfg['smsProvider']?.toString(),
+        smsApiKey: cfg['smsApiKey']?.toString(),
+        smsApiSecret: cfg['smsApiSecret']?.toString(),
+        smsBrandname: cfg['smsBrandname']?.toString(),
         googleClientId: cfg['googleClientId']?.toString(),
         googleClientSecret: cfg['googleClientSecret']?.toString(),
       );

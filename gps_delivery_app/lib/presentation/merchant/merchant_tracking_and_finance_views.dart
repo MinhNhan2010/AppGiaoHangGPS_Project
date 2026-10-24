@@ -197,6 +197,16 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                     ? _store.orders[safeFocusIdx]
                     : filtered.first)
                 : _store.orders[safeFocusIdx];
+            final focusedRoutePoints =
+                _store.activeOrderRecord?.trackingCode ==
+                            focusedOrd.trackingCode &&
+                        _store.activeRoutePolyline.length >= 2
+                    ? _store.activeRoutePolyline
+                    : SmartDispatchEngine.generateRoutePolyline(
+                        focusedOrd.pickupLocation,
+                        focusedOrd.dropoffLocation,
+                        segments: 10,
+                      );
             final colRight = Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -222,15 +232,35 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                     speedKmh: _store.currentSpeedKmh,
                     onToggle3d: _store.toggleMap3d,
                     progressFraction: _store.routeProgressStep / 10.0,
-                    routePoints: <GeoPoint>[
-                      focusedOrd.pickupLocation,
-                      focusedOrd.dropoffLocation,
-                    ],
+                    routePoints: focusedRoutePoints,
                     pickupLabel: 'Lấy: ${focusedOrd.pickupAddress}',
                     dropoffLabel: 'Giao: ${focusedOrd.dropoffAddress}',
                     nextTurnInstruction:
                         'Giám sát trực tiếp ${filtered.length} vận đơn • Đang chọn: ${focusedOrd.trackingCode} (${focusedOrd.status.displayName})',
                     roadName: '${focusedOrd.pickupAddress} → ${focusedOrd.dropoffAddress}',
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          _store.selectDriverOrder(focusedOrd.trackingCode);
+                          final msg =
+                              await _store.syncLiveOsrmRouteForActiveOrder();
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(msg)),
+                          );
+                        },
+                        icon: const Icon(Icons.alt_route_rounded, size: 15),
+                        label: const Text(
+                          'Đồng bộ lộ trình OSRM',
+                          style: TextStyle(fontSize: 11.5),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   Container(
@@ -582,6 +612,19 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                       fontSize: 14,
                     ),
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    ord.status == OrderStatus.failed
+                        ? 'Đơn ${ord.trackingCode} đang ở trạng thái Giao thất bại. Vui lòng chọn Giao lại hoặc Hoàn hàng về kho:'
+                        : 'Chỉ kích hoạt khi vận đơn ${ord.trackingCode} chuyển sang trạng thái Giao thất bại (hiện tại: ${ord.status.displayName}).',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: ord.status == OrderStatus.failed
+                          ? AppColors.danger
+                          : AppColors.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 10),
                   Wrap(
                     spacing: 10,
@@ -591,8 +634,7 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFFFF5E83),
                         ),
-                        onPressed: ord.status == OrderStatus.delivered ||
-                                ord.status == OrderStatus.cancelled
+                        onPressed: ord.status != OrderStatus.failed
                             ? null
                             : () {
                                 final ok = _store.requeueOrReturnOrder(
@@ -613,9 +655,7 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                         label: const Text('Yêu cầu Giao lại'),
                       ),
                       OutlinedButton.icon(
-                        onPressed: ord.status == OrderStatus.delivered ||
-                                ord.status == OrderStatus.cancelled ||
-                                ord.status == OrderStatus.returning
+                        onPressed: ord.status != OrderStatus.failed
                             ? null
                             : () {
                                 final ok = _store.requeueOrReturnOrder(
@@ -669,6 +709,21 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
 
   /// UC37: Đối soát công nợ tiền thu hộ COD (Chuẩn uc37_doi_soat_v2)
   Widget _buildCodReconciliationView() {
+    double shipDeductedFromMerchantCod(ActiveOrderRecord o) {
+      if (o.codAmount <= 0) return 0.0;
+      final isRecipientOrPrepaid = o.paymentMethod == 'Người nhận trả phí' ||
+          o.paymentMethod.contains('MoMo') ||
+          o.paymentMethod.contains('VNPay') ||
+          o.paymentMethod.contains('ZaloPay');
+      return isRecipientOrPrepaid ? 0.0 : o.totalAmount;
+    }
+
+    double codHandlingFeeOf(ActiveOrderRecord o) {
+      return o.codAmount > 2000000
+          ? (o.codAmount * 0.005).roundToDouble()
+          : 0.0;
+    }
+
     final deliveredCodOrders = _store.orders.where(
       (o) =>
           o.status == OrderStatus.delivered &&
@@ -680,9 +735,14 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
     );
     final totalShipFee = deliveredCodOrders.fold<double>(
       0,
-      (sum, o) => sum + o.totalAmount,
+      (sum, o) => sum + shipDeductedFromMerchantCod(o),
     );
-    final netCod = (totalCod - totalShipFee).clamp(0.0, double.infinity);
+    final totalCodHandlingFee = deliveredCodOrders.fold<double>(
+      0,
+      (sum, o) => sum + codHandlingFeeOf(o),
+    );
+    final netCod = (totalCod - totalShipFee - totalCodHandlingFee)
+        .clamp(0.0, double.infinity);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -710,11 +770,23 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                 ),
                 onPressed: () {
                   final csvLines = <String>[
-                    'ma_don,nguoi_nhan,tien_cod_vnd,phi_giao_vnd,thuc_nhan_vnd,trang_thai',
-                    ..._store.orders.map(
-                      (o) =>
-                          '${o.trackingCode},${o.recipientName},${o.codAmount.toStringAsFixed(0)},${o.totalAmount.toStringAsFixed(0)},${(o.codAmount - o.totalAmount).clamp(0.0, double.infinity).toStringAsFixed(0)},${o.status.displayName}',
-                    ),
+                    'ma_don,nguoi_nhan,tien_cod_vnd,phi_giao_vnd,phi_cod_vnd,thuc_nhan_vnd,trang_thai',
+                    ..._store.orders.map((o) {
+                      final isVoided = o.status == OrderStatus.cancelled ||
+                          o.status == OrderStatus.failed ||
+                          o.status == OrderStatus.returning ||
+                          o.paymentStatus == 'RETURNED';
+                      final isSettled =
+                          o.status == OrderStatus.delivered && !isVoided;
+                      final codFee = isVoided ? 0.0 : codHandlingFeeOf(o);
+                      final shipDeduct =
+                          isVoided ? 0.0 : shipDeductedFromMerchantCod(o);
+                      final netVal = !isSettled
+                          ? 0.0
+                          : (o.codAmount - shipDeduct - codFee)
+                              .clamp(0.0, double.infinity);
+                      return '${o.trackingCode},${o.recipientName},${o.codAmount.toStringAsFixed(0)},${shipDeduct.toStringAsFixed(0)},${codFee.toStringAsFixed(0)},${netVal.toStringAsFixed(0)},${o.status.displayName}';
+                    }),
                   ];
                   final path = _store.exportReportFileToDisk(
                     fileName: 'Doi_Soat_COD.csv',
@@ -792,11 +864,17 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                 final isVoided = o.status == OrderStatus.cancelled ||
                     o.status == OrderStatus.failed ||
                     isReturnedToWarehouse;
-                final net = isVoided
-                    ? 0.0
-                    : (o.codAmount - o.totalAmount).clamp(0.0, double.infinity);
                 final done =
                     o.status == OrderStatus.delivered && !isReturnedToWarehouse;
+                final codHandlingFee =
+                    isVoided ? 0.0 : codHandlingFeeOf(o);
+                final shipDeduct =
+                    isVoided ? 0.0 : shipDeductedFromMerchantCod(o);
+                final expectedNet = isVoided
+                    ? 0.0
+                    : (o.codAmount - shipDeduct - codHandlingFee)
+                        .clamp(0.0, double.infinity);
+                final net = done ? expectedNet : 0.0;
                 return DataRow(
                   cells: [
                     DataCell(
@@ -815,18 +893,32 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                     ),
                     DataCell(
                       Text(
-                        isVoided
-                            ? '0 đ'
-                            : '-${CurrencyFormatter.formatVnd(o.totalAmount)}',
+                        isVoided || shipDeduct == 0
+                            ? '0 đ (${o.paymentMethod})'
+                            : '-${CurrencyFormatter.formatVnd(shipDeduct)}',
                       ),
                     ),
-                    const DataCell(Text('0đ')),
                     DataCell(
                       Text(
-                        CurrencyFormatter.formatVnd(net),
+                        codHandlingFee > 0
+                            ? '-${CurrencyFormatter.formatVnd(codHandlingFee)}'
+                            : '0 đ (Miễn phí)',
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        done
+                            ? CurrencyFormatter.formatVnd(net)
+                            : isVoided
+                                ? '0 đ'
+                                : '0 đ (Dự kiến: ${CurrencyFormatter.formatVnd(expectedNet)})',
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
-                          color: isVoided ? AppColors.danger : AppColors.success,
+                          color: isVoided
+                              ? AppColors.danger
+                              : done
+                                  ? AppColors.success
+                                  : AppColors.textSecondary,
                         ),
                       ),
                     ),
@@ -1124,9 +1216,22 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
       (sum, o) => sum + o.totalAmount,
     );
     final dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+    int weekdayIndexOfMerchantOrder(ActiveOrderRecord o) {
+      final parts = o.createdDateLabel.split('/');
+      if (parts.length == 3) {
+        final d = int.tryParse(parts[0]);
+        final m = int.tryParse(parts[1]);
+        final y = int.tryParse(parts[2]);
+        if (d != null && m != null && y != null) {
+          return (DateTime(y, m, d).weekday - 1).clamp(0, 6);
+        }
+      }
+      return (DateTime.now().weekday - 1).clamp(0, 6);
+    }
+
     final dayCounts = List<int>.generate(7, (idx) {
       return _store.orders
-          .where((o) => o.trackingCode.hashCode.abs() % 7 == idx)
+          .where((o) => weekdayIndexOfMerchantOrder(o) == idx)
           .length;
     });
     final maxDay = dayCounts.fold<int>(1, (m, c) => c > m ? c : m);
@@ -1153,9 +1258,9 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
             spacing: 12,
             runSpacing: 8,
             children: [
-              const Text(
-                'Báo cáo & Thống kê Cửa hàng (Tháng 10/2026)',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              Text(
+                'Báo cáo & Thống kê Cửa hàng (Tháng ${DateTime.now().month}/${DateTime.now().year})',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
               ),
               ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
@@ -1170,7 +1275,7 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                       'Tong COD: ${totalCod.toStringAsFixed(0)} VND\n'
                       'Tong phi ship: ${totalShip.toStringAsFixed(0)} VND\n';
                   final path = _store.exportReportFileToDisk(
-                    fileName: 'Bao_Cao_Shop_T10.csv',
+                    fileName: 'Bao_Cao_Shop_T${DateTime.now().month}.csv',
                     content: reportContent,
                   );
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -1253,9 +1358,9 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Biểu đồ Số đơn gửi theo ngày (Tháng 10)',
-                      style: TextStyle(
+                    Text(
+                      'Biểu đồ Số đơn gửi theo ngày (Tháng ${DateTime.now().month})',
+                      style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 13.5,
                       ),
@@ -1572,20 +1677,42 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8,
+                        runSpacing: 6,
                         children: [
-                          Expanded(
-                            child: Text(
-                              '#${c.ticketCode} - Đơn ${c.orderId}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13.5,
-                              ),
+                          Text(
+                            '#${c.ticketCode} - Đơn ${c.orderId}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13.5,
                             ),
                           ),
-                          const SizedBox(width: 8),
+                          ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(
+                              'Theo dõi ${c.orderId}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            onPressed: () {
+                              final ordIdx = _store.orders.indexWhere(
+                                (o) => o.trackingCode == c.orderId,
+                              );
+                              _rebuildMerchantUi(() {
+                                if (ordIdx != -1) {
+                                  _selectedWaybillOrderIndex = ordIdx;
+                                }
+                                _selectedScreenIndex = 5;
+                              });
+                            },
+                          ),
                           Chip(
+                            visualDensity: VisualDensity.compact,
                             label: Text(
                               c.status,
                               style: const TextStyle(fontSize: 11),
@@ -1608,12 +1735,17 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                       ),
                       if (c.replies.length > 1) ...[
                         const Divider(),
-                        Text(
-                          'Phản hồi Admin: ${c.replies.last}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.success,
+                        ...c.replies.skip(1).map(
+                          (rep) => Padding(
+                            padding: const EdgeInsets.only(bottom: 3),
+                            child: Text(
+                              '• $rep',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.success,
+                              ),
+                            ),
                           ),
                         ),
                       ],

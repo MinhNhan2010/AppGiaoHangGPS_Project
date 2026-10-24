@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../core/auth/real_auth_delivery_service.dart';
 import '../../core/config/env_config.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/enums/user_role.dart';
 import '../admin/admin_subsystem_views.dart';
@@ -31,9 +33,11 @@ class _ArchitectureDashboardScreenState
   final TextEditingController _emailCtrl = TextEditingController();
   final TextEditingController _fullNameCtrl = TextEditingController();
   final TextEditingController _passwordCtrl = TextEditingController();
+  final TextEditingController _newPasswordCtrl = TextEditingController();
   final TextEditingController _otpCtrl = TextEditingController();
 
   late final AnimationController _login3dController;
+  Timer? _otpCountdownTimer;
   double _loginParallaxX = 0.0;
   double _loginParallaxY = 0.0;
 
@@ -44,6 +48,7 @@ class _ArchitectureDashboardScreenState
   OtpDeliveryReceipt? _lastOtpReceipt;
   bool _isRegisterMode = false;
   bool _usePasswordLogin = false;
+  bool _isForgotPasswordMode = false;
   bool _obscurePassword = true;
   String? _authErrorMessage;
 
@@ -72,15 +77,34 @@ class _ArchitectureDashboardScreenState
     if (mounted) setState(() {});
   }
 
+  void _startOtpCountdownTimer() {
+    _otpCountdownTimer?.cancel();
+    if (_isAutomatedTestBinding) return;
+    _otpCountdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || !_otpSent) {
+        timer.cancel();
+        return;
+      }
+      final remain = _store.getRemainingOtpSeconds(_phoneCtrl.text);
+      setState(() {});
+      if (remain <= 0) {
+        timer.cancel();
+      }
+    });
+  }
+
   @override
   void dispose() {
+    _otpCountdownTimer?.cancel();
     RealAuthDeliveryService.instance.stopGoogleOAuthServer();
+    RealAuthDeliveryService.instance.stopMobileQrAuthServer();
     _login3dController.dispose();
     _store.removeListener(_onStoreUpdated);
     _phoneCtrl.dispose();
     _emailCtrl.dispose();
     _fullNameCtrl.dispose();
     _passwordCtrl.dispose();
+    _newPasswordCtrl.dispose();
     _otpCtrl.dispose();
     super.dispose();
   }
@@ -130,6 +154,7 @@ class _ArchitectureDashboardScreenState
       _authErrorMessage = null;
       _isLoggedIn = true;
       _otpSent = false;
+      _isForgotPasswordMode = false;
     });
   }
 
@@ -181,15 +206,17 @@ class _ArchitectureDashboardScreenState
       final digits = rawInput.replaceAll(RegExp(r'[^0-9]'), '');
       if (digits.length < 9) {
         setState(() {
-          _authErrorMessage = 'Vui lòng nhập số điện thoại hợp lệ (từ 9 chữ số).';
+          _authErrorMessage =
+              'Vui lòng nhập Số điện thoại hợp lệ (từ 9 chữ số).';
         });
         return;
       }
       final rawEmail = _emailCtrl.text.trim();
-      if (rawEmail.isEmpty || !rawEmail.contains('@') || !rawEmail.contains('.')) {
+      if (rawEmail.isNotEmpty &&
+          (!rawEmail.contains('@') || !rawEmail.contains('.'))) {
         setState(() {
           _authErrorMessage =
-              'Vui lòng nhập địa chỉ Email hợp lệ để nhận mã xác thực OTP.';
+              'Địa chỉ Email không hợp lệ (hoặc để trống nếu nhận OTP qua Số điện thoại).';
         });
         return;
       }
@@ -200,7 +227,7 @@ class _ArchitectureDashboardScreenState
         return;
       }
       final existingUser = _store.findUserByPhoneOrEmail(rawInput) ??
-          _store.findUserByPhoneOrEmail(rawEmail);
+          (rawEmail.isNotEmpty ? _store.findUserByPhoneOrEmail(rawEmail) : null);
       if (existingUser != null) {
         setState(() {
           _authErrorMessage =
@@ -210,17 +237,59 @@ class _ArchitectureDashboardScreenState
       }
     }
 
-    final otp = _store.generateOtpForPhone(rawInput);
     final registerEmail = _emailCtrl.text.trim();
-    final existingAccount = _store.findUserByPhoneOrEmail(rawInput);
+    if (_isRegisterMode &&
+        registerEmail.isEmpty &&
+        !EnvConfig.isExternalSmsGatewayConfigured &&
+        !_isAutomatedTestBinding) {
+      final created = _store.registerUserAccountWithRole(
+        phone: rawInput,
+        fullName: _fullNameCtrl.text.trim(),
+        password: _passwordCtrl.text.trim(),
+        role: SubsystemRole.customer,
+      );
+      if (created == null) {
+        setState(() {
+          _authErrorMessage = 'Không thể tạo tài khoản. Vui lòng thử lại.';
+        });
+        return;
+      }
+      context.read<SystemArchitectureCubit>().selectRole(created.role);
+      setState(() {
+        _authErrorMessage = null;
+        _isLoggedIn = true;
+        _otpSent = false;
+      });
+      return;
+    }
+
+    final otp = _store.generateOtpForPhone(rawInput);
     final String deliveryDestination;
-    if (_isRegisterMode && registerEmail.contains('@')) {
-      deliveryDestination = registerEmail;
-    } else if (!rawInput.contains('@') &&
-        !EnvConfig.isSmsWebhookConfigured &&
-        existingAccount != null &&
-        existingAccount.email.contains('@')) {
-      deliveryDestination = existingAccount.email;
+    if (isEmailInput) {
+      deliveryDestination = rawInput;
+    } else if (_isRegisterMode &&
+        registerEmail.isNotEmpty &&
+        registerEmail.contains('@')) {
+      if (EnvConfig.isExternalSmsGatewayConfigured) {
+        deliveryDestination = rawInput;
+        if (!_isAutomatedTestBinding && EnvConfig.isSmtpConfigured) {
+          RealAuthDeliveryService.instance.deliverOtpChallenge(
+            destination: registerEmail,
+            otpCode: otp,
+          );
+        }
+      } else {
+        deliveryDestination = registerEmail;
+      }
+    } else if (!_isRegisterMode && !EnvConfig.isExternalSmsGatewayConfigured) {
+      final existingUser = _store.findUserByPhoneOrEmail(rawInput);
+      final linkedEmail = existingUser?.email.trim() ?? '';
+      if (linkedEmail.contains('@') &&
+          !linkedEmail.endsWith('@giaohanggps.vn')) {
+        deliveryDestination = linkedEmail;
+      } else {
+        deliveryDestination = rawInput;
+      }
     } else {
       deliveryDestination = rawInput;
     }
@@ -232,6 +301,7 @@ class _ArchitectureDashboardScreenState
       _lastOtpReceipt = null;
       _otpCtrl.clear();
     });
+    _startOtpCountdownTimer();
 
     if (_isAutomatedTestBinding) {
       setState(() {
@@ -258,9 +328,60 @@ class _ArchitectureDashboardScreenState
         });
   }
 
-  void _handleVerifyOtpAndAuthenticate(BuildContext context) {
+  Future<void> _handleVerifyOtpAndAuthenticate(BuildContext context) async {
     final rawInput = _phoneCtrl.text.trim();
     final inputOtp = _otpCtrl.text.trim();
+    final cubit = context.read<SystemArchitectureCubit>();
+
+    if (!_isAutomatedTestBinding &&
+        _lastOtpReceipt?.channel == 'TWILIO_VERIFY_V2' &&
+        inputOtp.length == 6) {
+      final twilioOk = await RealAuthDeliveryService.instance
+          .verifyTwilioVerifyV2Code(
+            phoneNumber: rawInput,
+            otpCode: inputOtp,
+          );
+      if (twilioOk) {
+        final normKey = EnvConfig.formatVietnamPhoneNational(rawInput);
+        _store.activeOtpCodesByPhone[normKey] = inputOtp;
+        _store.otpExpiryEpochMsByPhone[normKey] =
+            DateTime.now().millisecondsSinceEpoch + 60000;
+      }
+      if (!mounted) return;
+    }
+
+    if (_isForgotPasswordMode) {
+      final newPwd = _newPasswordCtrl.text.trim();
+      if (newPwd.length < 6) {
+        setState(() {
+          _authErrorMessage =
+              'Vui lòng nhập mật khẩu mới tối thiểu 6 ký tự.';
+        });
+        return;
+      }
+      final updatedUser = _store.resetPasswordWithOtp(
+        phoneOrEmail: rawInput,
+        otpCode: inputOtp,
+        newPassword: newPwd,
+      );
+      if (updatedUser == null) {
+        setState(() {
+          _authErrorMessage =
+              'Mã xác thực OTP không chính xác hoặc đã hết hiệu lực (120s).';
+        });
+        return;
+      }
+      _otpCountdownTimer?.cancel();
+      cubit.selectRole(updatedUser.role);
+      setState(() {
+        _authErrorMessage = null;
+        _isForgotPasswordMode = false;
+        _usePasswordLogin = false;
+        _isLoggedIn = true;
+        _otpSent = false;
+      });
+      return;
+    }
 
     final verified = _store.verifyOtpCode(rawInput, inputOtp);
     if (!verified) {
@@ -298,7 +419,8 @@ class _ArchitectureDashboardScreenState
       return;
     }
 
-    context.read<SystemArchitectureCubit>().selectRole(user.role);
+    _otpCountdownTimer?.cancel();
+    cubit.selectRole(user.role);
     setState(() {
       _authErrorMessage = null;
       _isLoggedIn = true;
@@ -642,6 +764,7 @@ class _ArchitectureDashboardScreenState
                   child: GestureDetector(
                     onTap: () => setState(() {
                       _isRegisterMode = false;
+                      _isForgotPasswordMode = false;
                       _otpSent = false;
                       _authErrorMessage = null;
                     }),
@@ -670,6 +793,7 @@ class _ArchitectureDashboardScreenState
                     onTap: () => setState(() {
                       _isRegisterMode = true;
                       _usePasswordLogin = false;
+                      _isForgotPasswordMode = false;
                       _otpSent = false;
                       _authErrorMessage = null;
                     }),
@@ -697,7 +821,11 @@ class _ArchitectureDashboardScreenState
           ),
           const SizedBox(height: 14),
           Text(
-            _isRegisterMode ? 'Tạo tài khoản mới' : 'Đăng nhập hệ thống',
+            _isRegisterMode
+                ? 'Tạo tài khoản mới'
+                : (_isForgotPasswordMode
+                    ? 'Khôi phục mật khẩu bằng OTP'
+                    : 'Đăng nhập hệ thống'),
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 21,
@@ -709,10 +837,12 @@ class _ArchitectureDashboardScreenState
           const SizedBox(height: 4),
           Text(
             _isRegisterMode
-                ? 'Điền thông tin cá nhân để bắt đầu đặt đơn giao hàng'
-                : (_usePasswordLogin
-                    ? 'Nhập Số điện thoại / Email và mật khẩu đã đăng ký'
-                    : 'Nhập Số điện thoại hoặc Email để nhận mã xác thực OTP'),
+                ? 'Nhập Số điện thoại, Họ tên và Mật khẩu để tạo tài khoản'
+                : (_isForgotPasswordMode
+                    ? 'Nhập Số điện thoại hoặc Email để nhận mã OTP đặt lại mật khẩu'
+                    : (_usePasswordLogin
+                        ? 'Nhập Số điện thoại / Email và mật khẩu đã đăng ký'
+                        : 'Nhập Số điện thoại hoặc Email để nhận mã xác thực OTP')),
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 12,
@@ -731,17 +861,18 @@ class _ArchitectureDashboardScreenState
                       child: Text(
                         'Mã OTP',
                         textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
                       ),
                     ),
-                    selected: !_usePasswordLogin,
+                    selected: !_usePasswordLogin && !_isForgotPasswordMode,
                     selectedColor: AppColors.acid,
-                    labelStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.ink,
-                    ),
                     onSelected: (_) => setState(() {
                       _usePasswordLogin = false;
+                      _isForgotPasswordMode = false;
                       _authErrorMessage = null;
                     }),
                   ),
@@ -754,17 +885,18 @@ class _ArchitectureDashboardScreenState
                       child: Text(
                         'Mật khẩu',
                         textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
                       ),
                     ),
-                    selected: _usePasswordLogin,
+                    selected: _usePasswordLogin && !_isForgotPasswordMode,
                     selectedColor: AppColors.acid,
-                    labelStyle: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.ink,
-                    ),
                     onSelected: (_) => setState(() {
                       _usePasswordLogin = true;
+                      _isForgotPasswordMode = false;
                       _otpSent = false;
                       _authErrorMessage = null;
                     }),
@@ -831,8 +963,8 @@ class _ArchitectureDashboardScreenState
                 });
               },
               decoration: const InputDecoration(
-                hintText: 'Ví dụ: ban@gmail.com',
-                labelText: 'Địa chỉ Email (nhận mã OTP)',
+                hintText: 'Không bắt buộc (Ví dụ: ban@gmail.com)',
+                labelText: 'Địa chỉ Email (Tùy chọn)',
                 prefixIcon: Icon(
                   Icons.email_outlined,
                   color: AppColors.violet,
@@ -870,51 +1002,123 @@ class _ArchitectureDashboardScreenState
               ),
             ),
           ],
+          if (!_isRegisterMode && _usePasswordLogin) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: GestureDetector(
+                onTap: () => setState(() {
+                  _isForgotPasswordMode = true;
+                  _usePasswordLogin = false;
+                  _otpSent = false;
+                  _authErrorMessage = null;
+                }),
+                child: const Text(
+                  'Quên mật khẩu? Lấy mã OTP qua Số điện thoại',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.violet,
+                    decoration: TextDecoration.underline,
+                  ),
+                ),
+              ),
+            ),
+          ],
           if (_otpSent && !_usePasswordLogin) ...[
             const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              decoration: BoxDecoration(
-                color: AppColors.acid.withValues(alpha: 0.35),
-                border: Border.all(color: AppColors.ink, width: 1.0),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.mark_email_read_outlined,
-                    size: 15,
-                    color: AppColors.ink,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _isDeliveringOtp
-                          ? 'Đang gửi mã xác thực OTP...'
-                          : (_lastOtpReceipt?.message ??
-                              'Mã xác thực OTP đã được gửi đi.'),
-                      style: const TextStyle(
-                        fontSize: 11.2,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.ink,
+            Builder(
+              builder: (context) {
+                final remainSec = _store.getRemainingOtpSeconds(_phoneCtrl.text);
+                final isPhoneOtp = !_phoneCtrl.text.trim().contains('@');
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.acid.withValues(alpha: 0.35),
+                        border: Border.all(color: AppColors.ink, width: 1.0),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                isPhoneOtp
+                                    ? Icons.sms_outlined
+                                    : Icons.mark_email_read_outlined,
+                                size: 15,
+                                color: AppColors.ink,
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  _isDeliveringOtp
+                                      ? 'Đang gửi mã xác thực OTP thật...'
+                                      : (_lastOtpReceipt?.message ??
+                                          'Mã xác thực OTP đã được gửi đi.'),
+                                  style: const TextStyle(
+                                    fontSize: 11.0,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.ink,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 5),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                color: remainSec > 0
+                                    ? AppColors.ink
+                                    : AppColors.danger,
+                                child: Text(
+                                  remainSec > 0
+                                      ? 'Hiệu lực: ${remainSec}s'
+                                      : 'Đã hết hạn (0s)',
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    fontFamily: 'Consolas',
+                                  ),
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: _handleSendOtp,
+                                child: const Text(
+                                  'Gửi lại mã',
+                                  style: TextStyle(
+                                    fontSize: 11.2,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppColors.violet,
+                                    decoration: TextDecoration.underline,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: _handleSendOtp,
-                    child: const Text(
-                      'Gửi lại',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w900,
-                        color: AppColors.violet,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 10),
             TextField(
@@ -931,6 +1135,22 @@ class _ArchitectureDashboardScreenState
                 ),
               ),
             ),
+            if (_isForgotPasswordMode) ...[
+              const SizedBox(height: 10),
+              TextField(
+                controller: _newPasswordCtrl,
+                obscureText: _obscurePassword,
+                onChanged: (_) => setState(() => _authErrorMessage = null),
+                decoration: const InputDecoration(
+                  hintText: 'Tối thiểu 6 ký tự',
+                  labelText: 'Mật khẩu mới',
+                  prefixIcon: Icon(
+                    Icons.lock_reset_rounded,
+                    color: AppColors.violet,
+                  ),
+                ),
+              ),
+            ],
           ],
           if (_authErrorMessage != null) ...[
             const SizedBox(height: 8),
@@ -978,7 +1198,9 @@ class _ArchitectureDashboardScreenState
                 ),
               ),
               onPressed: () {
-                if (!_isRegisterMode && _usePasswordLogin) {
+                if (!_isRegisterMode &&
+                    _usePasswordLogin &&
+                    !_isForgotPasswordMode) {
                   _handlePasswordLogin(context);
                 } else if (!_otpSent) {
                   _handleSendOtp();
@@ -987,13 +1209,22 @@ class _ArchitectureDashboardScreenState
                 }
               },
               child: Text(
-                (!_isRegisterMode && _usePasswordLogin)
+                (!_isRegisterMode &&
+                        _usePasswordLogin &&
+                        !_isForgotPasswordMode)
                     ? 'Đăng nhập'
                     : (_otpSent
                         ? (_isRegisterMode
                             ? 'Xác nhận OTP & Tạo tài khoản'
-                            : 'Xác nhận OTP & Đăng nhập')
-                        : 'Gửi mã OTP'),
+                            : (_isForgotPasswordMode
+                                ? 'Đổi mật khẩu & Đăng nhập'
+                                : 'Xác nhận OTP & Đăng nhập'))
+                        : (_isRegisterMode &&
+                                _emailCtrl.text.trim().isEmpty &&
+                                !EnvConfig.isExternalSmsGatewayConfigured &&
+                                !_isAutomatedTestBinding
+                            ? 'Tạo tài khoản'
+                            : 'Gửi mã OTP')),
                 style: const TextStyle(
                   fontSize: 15.5,
                   fontWeight: FontWeight.w900,
@@ -1021,6 +1252,47 @@ class _ArchitectureDashboardScreenState
             ],
           ),
           const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.ink,
+                backgroundColor: AppColors.acid.withValues(alpha: 0.45),
+                side: const BorderSide(
+                  color: AppColors.ink,
+                  width: 1.5,
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                ),
+              ),
+              onPressed: () => _showMobileQrPhoneAuthDialog(context),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.qr_code_scanner_rounded,
+                    size: 18,
+                    color: AppColors.ink,
+                  ),
+                  SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'Đăng nhập bằng mã QR',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13.0,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
@@ -1079,6 +1351,327 @@ class _ArchitectureDashboardScreenState
         ],
       ),
     );
+  }
+
+  Future<void> _showMobileQrPhoneAuthDialog(BuildContext context) async {
+    final cubit = context.read<SystemArchitectureCubit>();
+    final initialPhone = _phoneCtrl.text.trim();
+
+    if (!mounted) return;
+    setState(() {
+      _authErrorMessage = null;
+    });
+
+    bool isDialogOpen = true;
+    String scanStatusText = 'Đang chờ quét mã QR...';
+    bool isDeviceConnected = false;
+    String? public4gHttpsUrl;
+    void Function(void Function())? dialogSetState;
+
+    final session = await RealAuthDeliveryService.instance
+        .startMobileQrAuthSession(
+      initialPhone: initialPhone,
+      onAuthenticateMobileRequest: ({
+        required String mode,
+        required String phoneOrEmail,
+        required String password,
+        required String deviceToken,
+        required String fullName,
+      }) {
+        final trimmedId = phoneOrEmail.trim();
+        if (trimmedId.isEmpty) {
+          return const MobileQrAuthVerificationResult(
+            ok: false,
+            error: 'Vui lòng nhập Số điện thoại hoặc Email.',
+          );
+        }
+
+        if (mode == 'TOKEN') {
+          final existing = _store.findUserByPhoneOrEmail(trimmedId);
+          if (existing == null) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              tokenExpired: true,
+              error: 'Tài khoản không tồn tại trên hệ thống.',
+            );
+          }
+          if (existing.status == 'LOCKED') {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Tài khoản này hiện đang bị khóa tạm thời.',
+            );
+          }
+          final expectedToken = SecurityAndBarcodeUtils.generatePaymentSignature(
+            orderCode: existing.phone,
+            amount: 2026,
+            method: existing.passwordHash,
+          );
+          if (deviceToken.trim() != expectedToken) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              tokenExpired: true,
+              error:
+                  'Phiên đăng nhập đã hết hiệu lực. Vui lòng nhập lại mật khẩu.',
+            );
+          }
+          _store.applyAuthenticatedUserSession(existing);
+          return MobileQrAuthVerificationResult(
+            ok: true,
+            phone: existing.phone,
+            fullName: existing.fullName,
+            roleTitle: existing.role.title,
+            deviceToken: expectedToken,
+          );
+        }
+
+        if (mode == 'REGISTER') {
+          final normPhone = EnvConfig.formatVietnamPhoneNational(trimmedId);
+          if (!RegExp(r'^0(3|5|7|8|9)[0-9]{8}$').hasMatch(normPhone)) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Số điện thoại không hợp lệ (cần 10 chữ số).',
+            );
+          }
+          if (fullName.trim().isEmpty) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Vui lòng nhập Họ và tên.',
+            );
+          }
+          if (password.trim().length < 6) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Mật khẩu phải có từ 6 ký tự trở lên.',
+            );
+          }
+          if (_store.findUserByPhoneOrEmail(normPhone) != null) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Số điện thoại này đã được đăng ký.',
+            );
+          }
+          final created = _store.registerUserAccountWithRole(
+            phone: normPhone,
+            fullName: fullName.trim(),
+            password: password.trim(),
+            role: SubsystemRole.customer,
+          );
+          if (created == null) {
+            return const MobileQrAuthVerificationResult(
+              ok: false,
+              error: 'Không thể tạo tài khoản. Vui lòng thử lại.',
+            );
+          }
+          final issuedToken = SecurityAndBarcodeUtils.generatePaymentSignature(
+            orderCode: created.phone,
+            amount: 2026,
+            method: created.passwordHash,
+          );
+          return MobileQrAuthVerificationResult(
+            ok: true,
+            phone: created.phone,
+            fullName: created.fullName,
+            roleTitle: created.role.title,
+            deviceToken: issuedToken,
+          );
+        }
+
+        final existing = _store.findUserByPhoneOrEmail(trimmedId);
+        if (existing == null) {
+          return const MobileQrAuthVerificationResult(
+            ok: false,
+            error: 'Tài khoản chưa tồn tại.',
+          );
+        }
+        if (existing.status == 'LOCKED') {
+          return const MobileQrAuthVerificationResult(
+            ok: false,
+            error: 'Tài khoản này hiện đang bị khóa tạm thời.',
+          );
+        }
+        final authed = _store.authenticateWithPassword(
+          phoneOrEmail: trimmedId,
+          password: password.trim(),
+        );
+        if (authed == null) {
+          return const MobileQrAuthVerificationResult(
+            ok: false,
+            error: 'Mật khẩu không chính xác.',
+          );
+        }
+        final issuedToken = SecurityAndBarcodeUtils.generatePaymentSignature(
+          orderCode: authed.phone,
+          amount: 2026,
+          method: authed.passwordHash,
+        );
+        return MobileQrAuthVerificationResult(
+          ok: true,
+          phone: authed.phone,
+          fullName: authed.fullName,
+          roleTitle: authed.role.title,
+          deviceToken: issuedToken,
+        );
+      },
+      onEvent: (event) {
+        if (!mounted) return;
+        if (event.status == 'TUNNEL_READY') {
+          public4gHttpsUrl = event.deviceUserAgent;
+          dialogSetState?.call(() {});
+          return;
+        }
+        if (event.status == 'SCANNED') {
+          isDeviceConnected = true;
+          scanStatusText =
+              'Đã quét mã QR — Vui lòng xác nhận trên điện thoại';
+          dialogSetState?.call(() {});
+          return;
+        }
+        if (event.status == 'CONFIRMED') {
+          final confirmedPhone =
+              EnvConfig.formatVietnamPhoneNational(event.phoneNumber);
+          if (isDialogOpen && Navigator.of(context).canPop()) {
+            isDialogOpen = false;
+            Navigator.of(context).pop();
+          }
+          RealAuthDeliveryService.instance.stopMobileQrAuthServer();
+
+          final user = _store.findUserByPhoneOrEmail(confirmedPhone);
+          if (user != null) {
+            _otpCountdownTimer?.cancel();
+            cubit.selectRole(user.role);
+            setState(() {
+              _phoneCtrl.text = user.phone;
+              _authErrorMessage = null;
+              _isLoggedIn = true;
+              _otpSent = false;
+              _isForgotPasswordMode = false;
+            });
+          }
+        }
+      },
+    );
+
+    if (!context.mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            dialogSetState = setModalState;
+            final activeQrPayload =
+                (public4gHttpsUrl != null && public4gHttpsUrl!.isNotEmpty)
+                    ? public4gHttpsUrl!
+                    : session.buildVerifyUrl(session.lanIp);
+
+            return AlertDialog(
+              backgroundColor: AppColors.paper,
+              shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+                side: BorderSide(color: AppColors.ink, width: 2.0),
+              ),
+              title: const Row(
+                children: [
+                  Icon(
+                    Icons.qr_code_scanner_rounded,
+                    color: AppColors.violet,
+                    size: 20,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Đăng nhập bằng mã QR',
+                      style: TextStyle(
+                        fontSize: 15.0,
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: 340,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'Mở Camera điện thoại hoặc Zalo để quét mã QR',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.0,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: AppColors.ink, width: 2.0),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: AppColors.ink,
+                            offset: Offset(4, 4),
+                            blurRadius: 0,
+                          ),
+                        ],
+                      ),
+                      child: QrMatrixPainterWidget(
+                        payload: activeQrPayload,
+                        size: 206,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDeviceConnected
+                            ? AppColors.acid.withValues(alpha: 0.55)
+                            : AppColors.surface,
+                        border: Border.all(color: AppColors.ink, width: 1.2),
+                      ),
+                      child: Text(
+                        scanStatusText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    isDialogOpen = false;
+                    RealAuthDeliveryService.instance.stopMobileQrAuthServer();
+                    Navigator.of(dialogCtx).pop();
+                  },
+                  child: const Text(
+                    'Đóng',
+                    style: TextStyle(
+                      color: AppColors.ink,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    isDialogOpen = false;
   }
 
   Widget _buildPostLoginStudioTopBar(
@@ -1163,15 +1756,17 @@ class _ArchitectureDashboardScreenState
                     borderRadius: BorderRadius.zero,
                     side: BorderSide(color: AppColors.ink, width: 1.2),
                   ),
-                  label: const Text('Giao diện Khách hàng'),
+                  label: const Text(
+                    'Giao diện Khách hàng',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
                   selected: activeRole == SubsystemRole.customer,
                   selectedColor: AppColors.acid,
                   backgroundColor: AppColors.paper,
-                  labelStyle: const TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w900,
-                    color: AppColors.ink,
-                  ),
                   onSelected: (_) => cubit.selectRole(SubsystemRole.customer),
                 ),
                 ChoiceChip(
@@ -1180,17 +1775,19 @@ class _ArchitectureDashboardScreenState
                     borderRadius: BorderRadius.zero,
                     side: BorderSide(color: AppColors.ink, width: 1.2),
                   ),
-                  label: Text(partnerLabel),
+                  label: Text(
+                    partnerLabel,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w900,
+                      color: activeRole == approvedRole
+                          ? Colors.white
+                          : AppColors.ink,
+                    ),
+                  ),
                   selected: activeRole == approvedRole,
                   selectedColor: AppColors.violet,
                   backgroundColor: AppColors.paper,
-                  labelStyle: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w900,
-                    color: activeRole == approvedRole
-                        ? Colors.white
-                        : AppColors.ink,
-                  ),
                   onSelected: (_) => cubit.selectRole(approvedRole),
                 ),
               ],

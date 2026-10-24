@@ -57,8 +57,10 @@ class AppStateStore extends ChangeNotifier {
   String customerPhone = '0912345678';
   String customerEmail = 'thu.ha@gmail.com';
   String customerDefaultAddress = '123 Đường Lê Lợi, Quận 1, TP. HCM';
+  String customerGender = 'Nữ';
+  int customerAvatarBadgeIndex = 0;
   bool isCustomerGoogleLinked = true;
-  bool isCustomerFacebookLinked = false;
+  bool isCustomerTwoFactorEnabled = true;
   String? selectedCustomerOrderCode;
 
   String activeDriverId = 'DV10928';
@@ -134,6 +136,8 @@ class AppStateStore extends ChangeNotifier {
       'customerFullName': customerFullName,
       'customerPhone': customerPhone,
       'customerEmail': customerEmail,
+      'customerGender': customerGender,
+      'customerAvatarBadgeIndex': customerAvatarBadgeIndex,
       'baseFareConfig': baseFareConfig,
       'pricePerKmConfig': pricePerKmConfig,
       'peakHourSurchargeConfig': peakHourSurchargeConfig,
@@ -173,6 +177,10 @@ class AppStateStore extends ChangeNotifier {
           decoded['customerFullName']?.toString() ?? customerFullName;
       customerPhone = decoded['customerPhone']?.toString() ?? customerPhone;
       customerEmail = decoded['customerEmail']?.toString() ?? customerEmail;
+      customerGender = decoded['customerGender']?.toString() ?? customerGender;
+      customerAvatarBadgeIndex =
+          (decoded['customerAvatarBadgeIndex'] as num?)?.toInt() ??
+              customerAvatarBadgeIndex;
       final sigs = decoded['processedPaymentSignatures'];
       if (sigs is List) {
         processedPaymentSignatures
@@ -187,6 +195,11 @@ class AppStateStore extends ChangeNotifier {
   }
 
   void _persistMutation(String actionType, Map<String, dynamic> payload) {
+    if (isOfflineMode && actionType != 'TOGGLE_OFFLINE') {
+      offlineQueueCount += 1;
+      lastSyncStatusMessage =
+          'Đang lưu tạm $offlineQueueCount bản ghi vào SQLite local_sync_queue';
+    }
     saveStateSnapshotToDisk(actionType: actionType, actionPayload: payload);
     if (EnvConfig.isSupabaseConfigured && !isOfflineMode) {
       final table = payload['table']?.toString();
@@ -203,6 +216,9 @@ class AppStateStore extends ChangeNotifier {
     final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.startsWith('84') && digits.length >= 10) {
       return '0${digits.substring(2)}';
+    }
+    if (!digits.startsWith('0') && digits.length == 9) {
+      return '0$digits';
     }
     return digits;
   }
@@ -361,11 +377,36 @@ class AppStateStore extends ChangeNotifier {
   List<NotificationRecord> get customerNotifications {
     final myCodes = customerOrders.map((o) => o.trackingCode).toSet();
     return notifications.where((n) {
-      if (n.category == 'Đơn hàng') {
+      if (n.targetGroup == 'Tài xế' || n.targetGroup == 'Cửa hàng B2B') {
+        return false;
+      }
+      if (n.category == 'Đơn hàng' && n.title.contains('#DH')) {
         return myCodes.any((code) => n.title.contains(code));
       }
       return true;
     }).toList();
+  }
+
+  /// Danh sách thông báo dành cho tài xế
+  List<NotificationRecord> get driverNotifications {
+    return notifications
+        .where(
+          (n) =>
+              n.targetGroup == 'Tất cả người dùng' ||
+              n.targetGroup == 'Tài xế',
+        )
+        .toList();
+  }
+
+  /// Danh sách thông báo dành cho cửa hàng B2B
+  List<NotificationRecord> get merchantNotifications {
+    return notifications
+        .where(
+          (n) =>
+              n.targetGroup == 'Tất cả người dùng' ||
+              n.targetGroup == 'Cửa hàng B2B',
+        )
+        .toList();
   }
 
   void _notifyStoreChanged() => notifyListeners();

@@ -45,6 +45,9 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   String _userRoleFilter = 'ALL';
   int _selectedComplaintIndex = 0;
   int _selectedKycDriverIndex = 0;
+  int _selectedKycMerchantIndex = 0;
+  bool _selectedKycIsMerchant = false;
+  int _selectedDispatchDriverIndex = 0;
 
   // Kiểm tra điểm Geofence & Vẽ Polygon trực tiếp trên bản đồ
   final TextEditingController _testLatCtrl =
@@ -54,6 +57,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   final TextEditingController _newZoneNameCtrl = TextEditingController(
     text: 'Vùng Phụ phí Khu Công nghệ cao Q.9',
   );
+  double _newZoneSurcharge = 20000;
   final List<Offset> _draftPolygonOffsets = [
     const Offset(0.25, 0.45),
     const Offset(0.55, 0.42),
@@ -498,6 +502,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 children: [
                   IconButton(
                     visualDensity: VisualDensity.compact,
+                    tooltip: 'Gửi Thông báo Đẩy (UC45)',
                     onPressed: () => setState(() => _selectedScreenIndex = 10),
                     icon: const Icon(
                       Icons.notifications_none_rounded,
@@ -506,55 +511,77 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                   ),
                   if (_store.notifications.any((n) => !n.isRead))
                     Positioned(
-                      right: 8,
-                      top: 8,
+                      right: 4,
+                      top: 4,
                       child: Container(
-                        width: 8,
-                        height: 8,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
                         color: AppColors.pink,
+                        child: Text(
+                          '${_store.notifications.where((n) => !n.isRead).length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
                     ),
                 ],
               ),
               const SizedBox(width: 6),
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.acid,
-                  border: Border.all(color: AppColors.ink, width: 1.2),
-                ),
-                child: const Icon(Icons.person, color: AppColors.ink, size: 18),
-              ),
-              if (showProfileText) ...[
-                const SizedBox(width: 10),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 190),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Admin',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w900,
-                          fontSize: 13,
-                          color: AppColors.ink,
-                        ),
+              InkWell(
+                onTap: () => setState(() => _selectedScreenIndex = 11),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: AppColors.acid,
+                        border: Border.all(color: AppColors.ink, width: 1.2),
                       ),
-                      Text(
-                        '${_store.users.where((u) => u.role == SubsystemRole.admin).firstOrNull?.fullName ?? 'Quản trị viên'} (${_store.currentAdminRoleName})',
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textSecondary,
-                          fontFamily: 'Consolas',
+                      child: const Icon(
+                        Icons.person,
+                        color: AppColors.ink,
+                        size: 18,
+                      ),
+                    ),
+                    if (showProfileText) ...[
+                      const SizedBox(width: 10),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 190),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Admin',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 13,
+                                color: AppColors.ink,
+                              ),
+                            ),
+                            Text(
+                              '${(_store.activeAuthenticatedUser?.role == SubsystemRole.admin ? _store.activeAuthenticatedUser?.fullName : null) ?? _store.users.where((u) => u.role == SubsystemRole.admin).firstOrNull?.fullName ?? 'Quản trị viên'} (${_store.currentAdminRoleName})',
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                                fontFamily: 'Consolas',
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
-                  ),
+                  ],
                 ),
-              ],
+              ),
               if (widget.onLogout != null) ...[
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
@@ -659,19 +686,23 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
 
 class _MiniSparklinePainter extends CustomPainter {
   final Color color;
+  final List<double> yFactors;
 
-  const _MiniSparklinePainter({required this.color});
+  const _MiniSparklinePainter({
+    required this.color,
+    this.yFactors = const [0.85, 0.65, 0.35, 0.58, 0.12, 0.25],
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final pts = <Offset>[
-      Offset(0, size.height * 0.85),
-      Offset(size.width * 0.22, size.height * 0.65),
-      Offset(size.width * 0.42, size.height * 0.35),
-      Offset(size.width * 0.60, size.height * 0.58),
-      Offset(size.width * 0.82, size.height * 0.12),
-      Offset(size.width, size.height * 0.25),
-    ];
+    final safeFactors = yFactors.length >= 2
+        ? yFactors
+        : const [0.85, 0.65, 0.35, 0.58, 0.12, 0.25];
+    final pts = List<Offset>.generate(safeFactors.length, (i) {
+      final x = size.width * (i / (safeFactors.length - 1));
+      final y = size.height * safeFactors[i].clamp(0.06, 0.94);
+      return Offset(x, y);
+    });
 
     final path = Path()..moveTo(pts.first.dx, pts.first.dy);
     for (var i = 1; i < pts.length; i++) {
@@ -710,7 +741,8 @@ class _MiniSparklinePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _MiniSparklinePainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.yFactors != yFactors;
 }
 
 class _GoMauRevenueLineChartPainter extends CustomPainter {

@@ -467,6 +467,81 @@ void main() {
       expect(dualCsv.rows[1].codAmount, closeTo(450000, 1.0));
       expect(dualCsv.rows[1].serviceType, equals(DeliveryServiceType.express30m));
 
+      final otp4 = SecurityAndBarcodeUtils.generateOrderDeliveryOtp4('#DH123456');
+      expect(RegExp(r'^[0-9]{4}$').hasMatch(otp4), isTrue);
+      expect(
+        SecurityAndBarcodeUtils.generateOrderDeliveryOtp4('#DH123456'),
+        equals(otp4),
+      );
+
+      final reassignTarget = store.createNewOrder(
+        pickupAddress: '123 Lê Lợi, Q.1, TP.HCM',
+        dropoffAddress: '456 Nguyễn Huệ, Q.1, TP.HCM',
+        recipientName: 'Khách Điều Phối Lại',
+        recipientPhone: '0912345678',
+        packageDescription: 'Điện tử & Hàng dễ vỡ',
+        weightKg: 2.0,
+        dimensionsCm: '20x15x10 cm',
+        serviceType: DeliveryServiceType.standard,
+        codAmount: 0,
+        paymentMethod: 'Ví MoMo',
+      );
+      final targetDriver = store.drivers.first;
+      final assignOk = store.adminAssignOrReassignDriver(
+        trackingCode: reassignTarget.trackingCode,
+        driver: targetDriver,
+      );
+      expect(assignOk, isTrue);
+      expect(reassignTarget.assignedDriverName, equals(targetDriver.fullName));
+      expect(
+        store.distanceFromDriverToOrderDropoffMeters(reassignTarget),
+        greaterThanOrEqualTo(0.0),
+      );
+
+      // 9. Hàng đợi Offline chỉ tăng khi có thao tác thật & Bồi thường khiếu nại chỉ áp dụng đúng loại sự cố hàng hóa/COD
+      store.toggleOfflineSimulation(false);
+      expect(store.offlineQueueCount, equals(0));
+      store.toggleOfflineSimulation(true);
+      expect(store.offlineQueueCount, equals(0));
+      store.addIncidentOrComplaint(
+        orderId: reassignTarget.trackingCode,
+        reporterName: 'Tài xế Nguyễn Văn Nam',
+        issueType: 'Kẹt xe nghiêm trọng / Khác',
+        description: 'Ùn tắc nút giao Ngã Tư Sở',
+      );
+      expect(store.offlineQueueCount, equals(1));
+      store.toggleOfflineSimulation(false);
+      expect(store.offlineQueueCount, equals(0));
+
+      final trafficTicket = store.complaints.first.ticketCode;
+      final codBeforeTrafficResolve = store.merchantCodBalance;
+      store.replyComplaint(
+        trafficTicket,
+        'Đã ghi nhận và điều chỉnh ETA',
+        'Đã giải quyết',
+      );
+      expect(store.merchantCodBalance, closeTo(codBeforeTrafficResolve, 0.1));
+
+      // 10. Chặn tự động đăng ký ảo khi đang ở chế độ Đăng nhập (isRegister: false), chặn tự khóa Admin & chặn gán đơn cho tài xế chưa duyệt KYC
+      expect(
+        store.authenticateOrRegisterAccount(
+          phone: '0999888111',
+          password: 'PasswordKhongTonTai',
+          isRegister: false,
+        ),
+        isFalse,
+      );
+      expect(store.toggleUserAccountStatus('USR-04'), isFalse);
+      final unapprovedDriver = store.drivers
+          .firstWhere((d) => d.approvalStatus != 'Đã duyệt');
+      expect(
+        store.adminAssignOrReassignDriver(
+          trackingCode: reassignTarget.trackingCode,
+          driver: unapprovedDriver,
+        ),
+        isFalse,
+      );
+
       store.selectDriverOrder('#DH123456');
       store.stepDriverAlongRoute(snapToDropoff: true);
     },
@@ -511,8 +586,27 @@ void main() {
       final otp6 = store.generateOtpForPhone('0988776655');
       expect(otp6.length, equals(6));
       expect(store.getRemainingOtpSeconds('0988776655'), greaterThan(100));
+      expect(
+        EnvConfig.formatVietnamPhoneE164('0988776655'),
+        equals('+84988776655'),
+      );
       expect(store.verifyOtpCode('0988776655', '000000'), isFalse);
       expect(store.verifyOtpCode('0988776655', otp6), isTrue);
+
+      final resetOtp = store.generateOtpForPhone('+84988776655');
+      final resetUser = store.resetPasswordWithOtp(
+        phoneOrEmail: '0988776655',
+        otpCode: resetOtp,
+        newPassword: 'MatKhauMoi2026',
+      );
+      expect(resetUser, isNotNull);
+      expect(
+        store.authenticateWithPassword(
+          phoneOrEmail: '0988776655',
+          password: 'MatKhauMoi2026',
+        ),
+        isNotNull,
+      );
 
       // 3. Chuỗi EMVCo Napas247 VietQR kèm CRC-16/CCITT-FALSE và khóa chống thu trùng Idempotency
       final emvQr = SecurityAndBarcodeUtils.generateEmvVietQrPayload(
@@ -631,16 +725,11 @@ void main() {
       expect(pendingMer.approvalStatus, equals('Đã duyệt'));
       expect(store.findUserByPhone('0955443322')!.role, equals(SubsystemRole.merchant));
 
-      // 6. Xác minh tồn tại thực tế của 4 tệp biểu tượng 3D AI và 4 tệp Hoạt ảnh SVG 3D chuyển động
+      // 6. Xác minh tồn tại thực tế của 4 tệp biểu tượng 3D AI đã tinh gọn trong assets/icons_3d
       for (final style in Icon3dStyle.values) {
         final iconFile = File(style.assetPath);
         expect(iconFile.existsSync(), isTrue);
         expect(iconFile.lengthSync(), greaterThan(100000));
-
-        final animSvgFile = File(style.animatedSvgPath);
-        expect(animSvgFile.existsSync(), isTrue);
-        final svgContent = animSvgFile.readAsStringSync();
-        expect(svgContent.contains('<animate'), isTrue);
       }
     },
   );
