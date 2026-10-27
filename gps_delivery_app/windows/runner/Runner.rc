@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.giaohanggps" "\0"
-            VALUE "FileDescription", "gps_delivery_app" "\0"
+            VALUE "FileDescription", "Giao Hang Sieu Toc (GHST)" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "gps_delivery_app" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.giaohanggps. All rights reserved." "\0"
             VALUE "OriginalFilename", "gps_delivery_app.exe" "\0"
-            VALUE "ProductName", "gps_delivery_app" "\0"
+            VALUE "ProductName", "Giao Hang Sieu Toc (GHST)" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

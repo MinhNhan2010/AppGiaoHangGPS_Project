@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_windows/webview_windows.dart';
@@ -39,18 +40,31 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
     _initEmbeddedWebView();
   }
 
+  bool get _isWindowsNative =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+  bool get _isMobileNative =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   Future<void> _initEmbeddedWebView() async {
     try {
-      if (Platform.isWindows) {
+      if (_isWindowsNative) {
         final ctrl = WebviewController();
         _winController = ctrl;
         await ctrl.initialize();
+        if (!mounted) {
+          await ctrl.dispose();
+          return;
+        }
         await ctrl.setBackgroundColor(Colors.white);
         await ctrl.setPopupWindowPolicy(WebviewPopupWindowPolicy.sameWindow);
         await ctrl.setUserAgent(
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
           '(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         );
+        if (!mounted) return;
 
         _winUrlSub = ctrl.url.listen((url) {
           if (!mounted) return;
@@ -74,12 +88,13 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
           });
         });
 
+        if (!mounted) return;
         await ctrl.loadUrl(widget.initialAuthUrl);
         if (!mounted) return;
         setState(() {
           _isInitialized = true;
         });
-      } else {
+      } else if (_isMobileNative) {
         final ctrl = WebViewController()
           ..setJavaScriptMode(JavaScriptMode.unrestricted)
           ..setBackgroundColor(Colors.white)
@@ -120,12 +135,25 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
         setState(() {
           _isInitialized = true;
         });
+      } else {
+        await RealAuthDeliveryService.instance.launchUrlInSystemBrowser(
+          widget.initialAuthUrl,
+        );
+        if (!mounted) return;
+        setState(() {
+          _isLoadingPage = false;
+          _initError =
+              'Đã mở trang xác thực Google OAuth 2.0 trên trình duyệt hệ thống. '
+              'Sau khi chọn tài khoản, phiên đăng nhập sẽ tự động đồng bộ về ứng dụng.';
+        });
       }
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        _isLoadingPage = false;
         _initError =
-            'Không thể khởi tạo trình duyệt nhúng trong ứng dụng: $e';
+            'Không thể khởi tạo trình duyệt nhúng trong ứng dụng ($e). '
+            'Bạn có thể tiếp tục xác thực trực tiếp qua trình duyệt hệ thống.';
       });
     }
   }
@@ -143,7 +171,7 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
       _isLoadingPage = true;
       _initError = null;
     });
-    if (Platform.isWindows && _winController != null) {
+    if (_isWindowsNative && _winController != null) {
       await _winController!.reload();
     } else if (_mobileController != null) {
       await _mobileController!.reload();
@@ -301,8 +329,8 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(
-                Icons.error_outline_rounded,
-                color: AppColors.pink,
+                Icons.open_in_browser_rounded,
+                color: AppColors.violet,
                 size: 42,
               ),
               const SizedBox(height: 12),
@@ -314,6 +342,16 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
                   fontWeight: FontWeight.w700,
                   color: AppColors.ink,
                 ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  RealAuthDeliveryService.instance.launchUrlInSystemBrowser(
+                    widget.initialAuthUrl,
+                  );
+                },
+                icon: const Icon(Icons.launch_rounded, size: 18),
+                label: const Text('Mở xác thực trên trình duyệt hệ thống'),
               ),
             ],
           ),
@@ -344,7 +382,7 @@ class _InAppGoogleOAuthDialogState extends State<InAppGoogleOAuthDialog> {
     return Stack(
       children: [
         Positioned.fill(
-          child: Platform.isWindows
+          child: _isWindowsNative
               ? Webview(_winController!)
               : WebViewWidget(controller: _mobileController!),
         ),

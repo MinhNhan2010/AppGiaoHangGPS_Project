@@ -7,7 +7,6 @@ enum Icon3dStyle {
   /// Xe máy giao hàng Hỏa tốc 3D Studio kèm chùm đèn pha Volumetric, xung năng lượng GPS & nghiêng ôm cua 3D
   scooterExpress(
     assetPath: 'assets/icons_3d/scooter_express_3d.png',
-    animatedSvgPath: 'assets/icons_3d/scooter_express_3d.svg',
     primaryColor: AppColors.accent,
     secondaryColor: AppColors.primary,
     glowColor: AppColors.routeRibbonFill,
@@ -18,7 +17,6 @@ enum Icon3dStyle {
   /// Kiện hàng 3D Studio kèm màn tia Laser Volumetric quét mã vạch Barcode & hào quang Khiên Bảo Hiểm
   parcelBox(
     assetPath: 'assets/icons_3d/parcel_box_3d.png',
-    animatedSvgPath: 'assets/icons_3d/parcel_box_3d.svg',
     primaryColor: AppColors.primary,
     secondaryColor: AppColors.accent,
     glowColor: AppColors.success,
@@ -29,7 +27,6 @@ enum Icon3dStyle {
   /// Ghim định vị GPS 3D Studio kèm sóng Radar Volumetric quét xoay 360 độ trên mặt phẳng bản đồ Isometric
   gpsPinRadar(
     assetPath: 'assets/icons_3d/gps_pin_radar_3d.png',
-    animatedSvgPath: 'assets/icons_3d/gps_pin_radar_3d.svg',
     primaryColor: AppColors.routeRibbonFill,
     secondaryColor: AppColors.primary,
     glowColor: AppColors.accent,
@@ -40,7 +37,6 @@ enum Icon3dStyle {
   /// Ví da ký quỹ & Khiên khóa vàng 3D Studio kèm hạt ánh kim lấp lánh và dải phản quang quét mặt khiên
   walletVault(
     assetPath: 'assets/icons_3d/wallet_vault_3d.png',
-    animatedSvgPath: 'assets/icons_3d/wallet_vault_3d.svg',
     primaryColor: AppColors.success,
     secondaryColor: AppColors.primary,
     glowColor: AppColors.warning,
@@ -49,7 +45,6 @@ enum Icon3dStyle {
   );
 
   final String assetPath;
-  final String animatedSvgPath;
   final Color primaryColor;
   final Color secondaryColor;
   final Color glowColor;
@@ -58,7 +53,6 @@ enum Icon3dStyle {
 
   const Icon3dStyle({
     required this.assetPath,
-    required this.animatedSvgPath,
     required this.primaryColor,
     required this.secondaryColor,
     required this.glowColor,
@@ -73,6 +67,7 @@ class Animated3dIconBadge extends StatefulWidget {
   final double size;
   final bool showRadarPulse;
   final bool isSelected;
+  final bool animateIdle;
   final bool forceContinuousInTest;
   final VoidCallback? onTap;
 
@@ -82,6 +77,7 @@ class Animated3dIconBadge extends StatefulWidget {
     this.size = 76,
     this.showRadarPulse = true,
     this.isSelected = false,
+    this.animateIdle = true,
     this.forceContinuousInTest = false,
     this.onTap,
   });
@@ -110,15 +106,32 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2600),
-    );
+      value: widget.animateIdle ? 0.0 : 0.25,
+    )..addListener(_decayTapImpulse);
     _startAnimationLoop();
   }
 
+  void _decayTapImpulse() {
+    if (_tapImpulse > 0.001) {
+      _tapImpulse = (_tapImpulse * 0.92).clamp(0.0, 1.0);
+    } else if (_tapImpulse != 0.0) {
+      _tapImpulse = 0.0;
+    }
+  }
+
   void _startAnimationLoop() {
-    if (!_isAutomatedTestBinding || widget.forceContinuousInTest) {
-      _controller.repeat();
-    } else {
+    if (widget.forceContinuousInTest ||
+        (!_isAutomatedTestBinding && widget.animateIdle)) {
+      if (!_controller.isAnimating) {
+        _controller.repeat();
+      }
+    } else if (_isAutomatedTestBinding && widget.animateIdle) {
       _controller.forward(from: 0.0);
+    } else {
+      if (_controller.isAnimating) {
+        _controller.stop();
+      }
+      _controller.value = 0.25;
     }
   }
 
@@ -126,14 +139,18 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
   void didUpdateWidget(covariant Animated3dIconBadge oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.forceContinuousInTest != widget.forceContinuousInTest ||
-        oldWidget.style != widget.style ||
-        oldWidget.isSelected != widget.isSelected) {
+        oldWidget.animateIdle != widget.animateIdle) {
       _startAnimationLoop();
+    } else if ((widget.forceContinuousInTest ||
+            (!_isAutomatedTestBinding && widget.animateIdle)) &&
+        !_controller.isAnimating) {
+      _controller.repeat();
     }
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_decayTapImpulse);
     _controller.dispose();
     super.dispose();
   }
@@ -143,9 +160,15 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
     if (half <= 0) return;
     final normX = ((localPosition.dx - half) / half).clamp(-1.0, 1.0);
     final normY = ((localPosition.dy - half) / half).clamp(-1.0, 1.0);
+    final nextTiltY = normX * 0.40;
+    final nextTiltX = -normY * 0.40;
+    if ((nextTiltY - _pointerTiltY).abs() < 0.015 &&
+        (nextTiltX - _pointerTiltX).abs() < 0.015) {
+      return;
+    }
     setState(() {
-      _pointerTiltY = normX * 0.40;
-      _pointerTiltX = -normY * 0.40;
+      _pointerTiltY = nextTiltY;
+      _pointerTiltX = nextTiltX;
     });
   }
 
@@ -153,7 +176,8 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
     setState(() {
       _tapImpulse = 1.0;
     });
-    if (_isAutomatedTestBinding && !widget.forceContinuousInTest) {
+    if ((_isAutomatedTestBinding && !widget.forceContinuousInTest) ||
+        !widget.animateIdle) {
       _controller.forward(from: 0.0);
     }
     widget.onTap?.call();
@@ -161,15 +185,25 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
 
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      onHover: (event) => _updateTiltFromLocalOffset(event.localPosition),
-      onExit: (_) {
-        setState(() {
-          _pointerTiltX = -0.08;
-          _pointerTiltY = 0.12;
-        });
-      },
-      child: GestureDetector(
+    final effectiveSize =
+        (!widget.size.isFinite || widget.size <= 0) ? 0.0 : widget.size;
+    if (effectiveSize == 0.0) {
+      return const SizedBox.shrink();
+    }
+    final dpr = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 3.0);
+    final targetCachePx = (effectiveSize * dpr * 1.2).round().clamp(64, 256);
+    return RepaintBoundary(
+      child: MouseRegion(
+        onHover: (event) => _updateTiltFromLocalOffset(event.localPosition),
+        onExit: (_) {
+          if (_pointerTiltX != -0.08 || _pointerTiltY != 0.12) {
+            setState(() {
+              _pointerTiltX = -0.08;
+              _pointerTiltY = 0.12;
+            });
+          }
+        },
+        child: GestureDetector(
         onPanUpdate: (details) =>
             _updateTiltFromLocalOffset(details.localPosition),
         onTap: _trigger3dPulseWave,
@@ -178,11 +212,6 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
           builder: (context, _) {
             final phase = _controller.value;
             final fullAngle = phase * math.pi * 2.0;
-            if (_tapImpulse > 0.001) {
-              _tapImpulse = (_tapImpulse * 0.92).clamp(0.0, 1.0);
-            } else {
-              _tapImpulse = 0.0;
-            }
 
             // Tính toán chuyển động vật lý 3D đặc trưng riêng cho từng mô hình 3D Studio
             final motion = _computePhysical3dMotion(
@@ -220,8 +249,8 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
             );
 
             return SizedBox(
-              width: widget.size,
-              height: widget.size + 16,
+              width: effectiveSize,
+              height: effectiveSize + 16,
               child: Stack(
                 alignment: Alignment.center,
                 children: [
@@ -231,7 +260,6 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                       painter: _Holographic3dPedestalPainter(
                         progress: phase,
                         primaryColor: widget.style.primaryColor,
-                        secondaryColor: widget.style.secondaryColor,
                         glowColor: widget.style.glowColor,
                         isSelected: widget.isSelected,
                         showRadarPulse: widget.showRadarPulse,
@@ -247,7 +275,7 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                       scaleX: shadowScale,
                       scaleY: shadowScale * 0.36,
                       child: Container(
-                        width: widget.size * 0.74,
+                        width: effectiveSize * 0.74,
                         height: 16,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
@@ -307,7 +335,9 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
                               child: Image.asset(
                                 widget.style.assetPath,
                                 fit: BoxFit.cover,
-                                filterQuality: FilterQuality.high,
+                                cacheWidth: targetCachePx,
+                                cacheHeight: targetCachePx,
+                                filterQuality: FilterQuality.medium,
                                 errorBuilder: (_, _, _) {
                                   return DecoratedBox(
                                     decoration: BoxDecoration(
@@ -347,6 +377,7 @@ class _Animated3dIconBadgeState extends State<Animated3dIconBadge>
             );
           },
         ),
+      ),
       ),
     );
   }
@@ -426,7 +457,6 @@ class _Physical3dMotion {
 class _Holographic3dPedestalPainter extends CustomPainter {
   final double progress;
   final Color primaryColor;
-  final Color secondaryColor;
   final Color glowColor;
   final bool isSelected;
   final bool showRadarPulse;
@@ -436,7 +466,6 @@ class _Holographic3dPedestalPainter extends CustomPainter {
   const _Holographic3dPedestalPainter({
     required this.progress,
     required this.primaryColor,
-    required this.secondaryColor,
     required this.glowColor,
     required this.isSelected,
     required this.showRadarPulse,
@@ -446,6 +475,12 @@ class _Holographic3dPedestalPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty ||
+        !size.width.isFinite ||
+        !size.height.isFinite ||
+        !progress.isFinite) {
+      return;
+    }
     final center = Offset(size.width / 2, size.height / 2 - 2);
     final maxRadius = size.width * 0.50;
     final angle = progress * math.pi * 2.0;
@@ -539,8 +574,10 @@ class _Holographic3dPedestalPainter extends CustomPainter {
   bool shouldRepaint(covariant _Holographic3dPedestalPainter oldDelegate) {
     return oldDelegate.progress != progress ||
         oldDelegate.isSelected != isSelected ||
+        oldDelegate.showRadarPulse != showRadarPulse ||
         oldDelegate.tiltX != tiltX ||
         oldDelegate.tiltY != tiltY ||
+        oldDelegate.primaryColor != primaryColor ||
         oldDelegate.glowColor != glowColor;
   }
 }
@@ -562,6 +599,12 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.isEmpty ||
+        !size.width.isFinite ||
+        !size.height.isFinite ||
+        !phase.isFinite) {
+      return;
+    }
     switch (style) {
       case Icon3dStyle.scooterExpress:
         _paintScooterVolumetricVfx(canvas, size);
@@ -915,6 +958,7 @@ class _Photorealistic3dVfxOverlayPainter extends CustomPainter {
   }
 
   Offset _samplePolyline(List<Offset> points, double t) {
+    if (points.isEmpty) return Offset.zero;
     if (points.length < 2) return points.first;
     final totalSegments = points.length - 1;
     final scaled = (t.clamp(0.0, 1.0)) * totalSegments;

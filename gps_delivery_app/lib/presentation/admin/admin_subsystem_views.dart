@@ -1,10 +1,14 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+
 import '../../core/config/env_config.dart';
+import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/geo_math.dart';
+import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
 import '../../domain/enums/order_status.dart';
@@ -22,11 +26,7 @@ class AdminSubsystemEntry extends StatefulWidget {
   final int? forcedScreenIndex;
   final VoidCallback? onLogout;
 
-  const AdminSubsystemEntry({
-    super.key,
-    this.forcedScreenIndex,
-    this.onLogout,
-  });
+  const AdminSubsystemEntry({super.key, this.forcedScreenIndex, this.onLogout});
 
   @override
   State<AdminSubsystemEntry> createState() => _AdminSubsystemEntryState();
@@ -50,34 +50,24 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
   int _selectedDispatchDriverIndex = 0;
 
   // Kiểm tra điểm Geofence & Vẽ Polygon trực tiếp trên bản đồ
-  final TextEditingController _testLatCtrl =
-      TextEditingController(text: '10.7520');
-  final TextEditingController _testLngCtrl =
-      TextEditingController(text: '106.6720');
-  final TextEditingController _newZoneNameCtrl = TextEditingController(
-    text: 'Vùng Phụ phí Khu Công nghệ cao Q.9',
-  );
+  final TextEditingController _testLatCtrl = TextEditingController();
+  final TextEditingController _testLngCtrl = TextEditingController();
+  final TextEditingController _newZoneNameCtrl = TextEditingController();
+  String _newZoneType = 'SURCHARGE_ZONE';
   double _newZoneSurcharge = 20000;
-  final List<Offset> _draftPolygonOffsets = [
-    const Offset(0.25, 0.45),
-    const Offset(0.55, 0.42),
-    const Offset(0.60, 0.72),
-    const Offset(0.28, 0.75),
-  ];
+  String? _focusedFleetDriverId;
+  final List<GeoPoint> _draftPolygonGeoPoints = <GeoPoint>[];
+  bool _geofenceTapTestMode = false;
   String _geofenceCheckResult =
-      'Nhấn Kiểm tra để xác định vùng Geofence bằng thuật toán Ray-Casting';
+      'Nhập tọa độ hoặc chọn chế độ Kiểm tra điểm rồi chạm lên bản đồ để xác định vùng hoạt động.';
 
   // Gửi thông báo Broadcast
-  final TextEditingController _broadcastTitleCtrl = TextEditingController(
-    text: 'Bảo trì nâng cấp cụm máy chủ định vị PostGIS lúc 02:00 sáng mai',
-  );
+  final TextEditingController _broadcastTitleCtrl = TextEditingController();
   String _broadcastTarget = 'Tất cả người dùng';
 
-  // Chọn nhóm quyền RBAC & Cấu hình Cloud Supabase PostGIS
+  // Chọn nhóm quyền RBAC & Cấu hình Cloud Supabase
   int _selectedRbacRoleIndex = 0;
-  final TextEditingController _supabaseUrlCtrl = TextEditingController(
-    text: 'https://your-project.supabase.co',
-  );
+  final TextEditingController _supabaseUrlCtrl = TextEditingController();
   final TextEditingController _supabaseAnonKeyCtrl = TextEditingController();
 
   static const List<String> _screenTitles = [
@@ -91,21 +81,27 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     'Tài chính & Rút tiền',
     'Điều phối Đơn hàng',
     'Vùng Geofence',
-    'Thông báo Push',
+    'Thông báo hệ thống',
     'Phân quyền RBAC',
+    'Vận hành thương mại',
   ];
 
   @override
   void initState() {
     super.initState();
     if (widget.forcedScreenIndex != null) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(
+        0,
+        _screenTitles.length - 1,
+      );
     }
-    _baseFareCtrl =
-        TextEditingController(text: _store.baseFareConfig.toStringAsFixed(0));
-    _perKmCtrl =
-        TextEditingController(text: _store.pricePerKmConfig.toStringAsFixed(0));
-    if (EnvConfig.supabaseUrl.isNotEmpty) {
+    _baseFareCtrl = TextEditingController(
+      text: _store.baseFareConfig.toStringAsFixed(0),
+    );
+    _perKmCtrl = TextEditingController(
+      text: _store.pricePerKmConfig.toStringAsFixed(0),
+    );
+    if (EnvConfig.isSupabaseConfigured) {
       _supabaseUrlCtrl.text = EnvConfig.supabaseUrl;
     }
     if (EnvConfig.supabaseAnonKey.isNotEmpty) {
@@ -119,7 +115,10 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     super.didUpdateWidget(oldWidget);
     if (widget.forcedScreenIndex != null &&
         widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(
+        0,
+        _screenTitles.length - 1,
+      );
     }
   }
 
@@ -177,8 +176,14 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 860;
         if (isWide) {
-          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 290.0);
-          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(
+            210.0,
+            290.0,
+          );
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(
+            16.0,
+            32.0,
+          );
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -187,7 +192,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildAdminWhiteTopBar(),
+                    _buildAdminWhiteTopBar(showLogout: false),
                     Expanded(
                       child: SingleChildScrollView(
                         padding: EdgeInsets.all(contentPadding),
@@ -232,9 +237,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
       width: sidebarWidth,
       decoration: const BoxDecoration(
         color: AppColors.techBg,
-        border: Border(
-          right: BorderSide(color: AppColors.ink, width: 1.6),
-        ),
+        border: Border(right: BorderSide(color: AppColors.ink, width: 1.6)),
       ),
       child: Material(
         type: MaterialType.transparency,
@@ -242,86 +245,85 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 22, 16, 20),
-              child: Row(
-                children: [
-                  Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: AppColors.acid,
-                      border: Border.all(color: AppColors.techBg),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 22, 16, 20),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppColors.acid,
+                        border: Border.all(color: AppColors.techBg),
+                      ),
+                      child: const Icon(
+                        Icons.hexagon_outlined,
+                        color: AppColors.techBg,
+                        size: 24,
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.hexagon_outlined,
-                      color: AppColors.techBg,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'GO-MAU',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w900,
-                            fontSize: 16.5,
-                            letterSpacing: -0.5,
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'GO-MAU',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 16.5,
+                              letterSpacing: -0.5,
+                            ),
                           ),
-                        ),
-                        Text(
-                          'ADMIN STUDIO',
-                          style: TextStyle(
-                            color: AppColors.acid,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w800,
-                            fontFamily: 'Consolas',
-                            letterSpacing: 1.0,
+                          Text(
+                            'QUẢN TRỊ HỆ THỐNG',
+                            style: TextStyle(
+                              color: AppColors.acid,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.6,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                ],
-              ),
-            ),
-            ...topGroupIndices.map(_buildSidebarItem),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              child: Divider(color: AppColors.techLine, height: 1),
-            ),
-            ...bottomGroupIndices.map(_buildSidebarItem),
-            const SizedBox(height: 16),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 18),
-              child: Divider(color: AppColors.techLine, height: 1),
-            ),
-            ListTile(
-              dense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-              leading: const Icon(
-                Icons.logout_rounded,
-                color: AppColors.pink,
-                size: 19,
-              ),
-              title: const Text(
-                'Đăng xuất',
-                style: TextStyle(
-                  color: AppColors.pink,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800,
+                  ],
                 ),
               ),
-              onTap: widget.onLogout,
-            ),
-            const SizedBox(height: 12),
-          ],
+              ...topGroupIndices.map(_buildSidebarItem),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                child: Divider(color: AppColors.techLine, height: 1),
+              ),
+              ...bottomGroupIndices.map(_buildSidebarItem),
+              const SizedBox(height: 16),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 18),
+                child: Divider(color: AppColors.techLine, height: 1),
+              ),
+              ListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                leading: const Icon(
+                  Icons.logout_rounded,
+                  color: AppColors.pink,
+                  size: 19,
+                ),
+                title: const Text(
+                  'Đăng xuất',
+                  style: TextStyle(
+                    color: AppColors.pink,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                onTap: widget.onLogout,
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -334,13 +336,14 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
       Icons.person_pin_circle_outlined, // 2: Tài xế
       Icons.location_on_outlined, // 3: Giám sát GPS
       Icons.paid_outlined, // 4: Giá cước
-      Icons.percent_rounded, // 5: Khuyến mãi
+      Icons.analytics_outlined, // 5: Báo cáo thống kê
       Icons.chat_bubble_outline_rounded, // 6: Khiếu nại
       Icons.credit_card_rounded, // 7: Tài chính
       Icons.shopping_cart_outlined, // 8: Đơn hàng
       Icons.layers_outlined, // 9: Vùng Geofence
       Icons.notifications_active_outlined, // 10: Thông báo Push
       Icons.settings_outlined, // 11: Cài đặt
+      Icons.sync_lock_outlined, // 12: Vận hành thương mại
     ];
     final safeIcon = icons[index];
     return Padding(
@@ -384,10 +387,9 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
     );
   }
 
-  Widget _buildAdminWhiteTopBar() {
+  Widget _buildAdminWhiteTopBar({bool showLogout = true}) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showSearch = constraints.maxWidth >= 900;
         final showProfileText = constraints.maxWidth >= 640;
         final compact = constraints.maxWidth < 520;
         return Container(
@@ -421,115 +423,6 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                     letterSpacing: -0.6,
                   ),
                 ),
-              ),
-              if (showSearch) ...[
-                const SizedBox(width: 12),
-                PopupMenuButton<int>(
-                  tooltip: 'Chuyển nhanh đến màn hình Quản trị',
-                  onSelected: (idx) => setState(() => _selectedScreenIndex = idx),
-                  itemBuilder: (context) => List.generate(
-                    _screenTitles.length,
-                    (idx) => PopupMenuItem<int>(
-                      value: idx,
-                      child: Row(
-                        children: [
-                          Icon(
-                            idx == _selectedScreenIndex
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.arrow_right_rounded,
-                            size: 16,
-                            color: idx == _selectedScreenIndex
-                                ? AppColors.violet
-                                : AppColors.ink,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              _screenTitles[idx],
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: idx == _selectedScreenIndex
-                                    ? FontWeight.w800
-                                    : FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  child: Container(
-                    width: 210,
-                    height: 38,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: BoxDecoration(
-                      color: AppColors.paper,
-                      border: Border.all(color: AppColors.ink, width: 1.2),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(
-                          Icons.search_rounded,
-                          size: 18,
-                          color: AppColors.ink,
-                        ),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Tìm nhanh màn hình...',
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: AppColors.textSecondary,
-                              fontSize: 11.5,
-                              fontFamily: 'Consolas',
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        Icon(
-                          Icons.unfold_more_rounded,
-                          size: 16,
-                          color: AppColors.ink,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(width: 6),
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Gửi Thông báo Đẩy (UC45)',
-                    onPressed: () => setState(() => _selectedScreenIndex = 10),
-                    icon: const Icon(
-                      Icons.notifications_none_rounded,
-                      color: AppColors.ink,
-                    ),
-                  ),
-                  if (_store.notifications.any((n) => !n.isRead))
-                    Positioned(
-                      right: 4,
-                      top: 4,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5,
-                          vertical: 1,
-                        ),
-                        color: AppColors.pink,
-                        child: Text(
-                          '${_store.notifications.where((n) => !n.isRead).length}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
               ),
               const SizedBox(width: 6),
               InkWell(
@@ -572,7 +465,6 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: AppColors.textSecondary,
-                                fontFamily: 'Consolas',
                               ),
                             ),
                           ],
@@ -582,7 +474,7 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
                   ],
                 ),
               ),
-              if (widget.onLogout != null) ...[
+              if (showLogout && widget.onLogout != null) ...[
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
@@ -673,6 +565,8 @@ class _AdminSubsystemEntryState extends State<AdminSubsystemEntry> {
         return _buildBroadcastNotificationView();
       case 11:
         return _buildRbacPermissionMatrixView();
+      case 12:
+        return _buildCommercialOperationsView();
       default:
         return _buildSystemOverviewDashboard();
     }
@@ -854,5 +748,3 @@ class _GoMauOrderDonutPainter extends CustomPainter {
       oldDelegate.cancelledRatio != cancelledRatio ||
       oldDelegate.otherRatio != otherRatio;
 }
-
-

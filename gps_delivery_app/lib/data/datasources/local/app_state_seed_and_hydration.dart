@@ -1,538 +1,14 @@
 part of 'app_state_store.dart';
 
 extension AppStateSeedAndHydration on AppStateStore {
-  void _populateInitialRelationalRecordsInMemory() {
-    users
-      ..clear()
-      ..addAll([
-        UserAccountRecord(
-          id: 'USR-01',
-          phone: '0912345678',
-          email: 'thu.ha@gmail.com',
-          passwordHash: SecurityAndBarcodeUtils.hashPasswordWithSalt(
-            '12345678',
-            '0912345678',
-          ),
-          fullName: 'Nguyễn Thu Hà',
-          role: SubsystemRole.customer,
-          defaultAddress: '123 Đường Lê Lợi, Quận 1, TP. HCM',
-          defaultLocation: const GeoPoint(
-            latitude: 10.7745,
-            longitude: 106.7035,
-          ),
-          createdAt: '2026-10-01',
-        ),
-        UserAccountRecord(
-          id: 'USR-02',
-          phone: '0987654321',
-          email: 'nam.driver@giaohanggps.vn',
-          passwordHash: SecurityAndBarcodeUtils.hashPasswordWithSalt(
-            '12345678',
-            '0987654321',
-          ),
-          fullName: 'Nguyễn Văn Nam',
-          role: SubsystemRole.driver,
-          defaultAddress: 'Quận 1, TP. HCM',
-          defaultLocation: const GeoPoint(
-            latitude: 10.7769,
-            longitude: 106.6953,
-          ),
-          createdAt: '2026-10-01',
-        ),
-        UserAccountRecord(
-          id: 'USR-03',
-          phone: '0909112233',
-          email: 'contact@gomsuviet.vn',
-          passwordHash: SecurityAndBarcodeUtils.hashPasswordWithSalt(
-            '12345678',
-            '0909112233',
-          ),
-          fullName: 'Cửa hàng Gốm Sứ Việt',
-          role: SubsystemRole.merchant,
-          defaultAddress: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
-          defaultLocation: const GeoPoint(
-            latitude: 10.7769,
-            longitude: 106.6953,
-          ),
-          createdAt: '2026-10-01',
-        ),
-        UserAccountRecord(
-          id: 'USR-04',
-          phone: '0900999999',
-          email: 'admin@gomau.vn',
-          passwordHash: SecurityAndBarcodeUtils.hashPasswordWithSalt(
-            '12345678',
-            '0900999999',
-          ),
-          fullName: 'Quản trị viên Hệ thống',
-          role: SubsystemRole.admin,
-          defaultAddress: 'Trung tâm Điều hành GO-MAU',
-          defaultLocation: const GeoPoint(
-            latitude: 10.7769,
-            longitude: 106.7009,
-          ),
-          createdAt: '2026-10-01',
-        ),
-      ]);
-
-    savedAddresses
-      ..clear()
-      ..addAll(const [
-        SavedAddressRecord(
-          id: 'ADDR-01',
-          label: 'Nhà',
-          fullAddress: '12 Nguyễn Huệ, P. Bến Nghé, Q.1, TP. HCM',
-          location: GeoPoint(latitude: 10.7745, longitude: 106.7035),
-        ),
-        SavedAddressRecord(
-          id: 'ADDR-02',
-          label: 'Cơ quan',
-          fullAddress:
-              'Bitexco Financial Tower, 45 Lê Lợi, P. Bến Nghé, Q.1, TP. HCM',
-          location: GeoPoint(latitude: 10.7716, longitude: 106.7044),
-        ),
-        SavedAddressRecord(
-          id: 'ADDR-03',
-          label: 'Khác',
-          fullAddress: '18A/24 Nguyễn Thị Minh Khai, P. Đa Kao, Q.1, TP. HCM',
-          location: GeoPoint(latitude: 10.7882, longitude: 106.7012),
-        ),
-      ]);
-
-    merchantWarehouses
-      ..clear()
-      ..addAll(const [
-        PickupWarehouseRecord(
-          id: 'WH-01',
-          name: 'Kho chính',
-          address: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
-          location: GeoPoint(latitude: 10.7769, longitude: 106.6953),
-        ),
-        PickupWarehouseRecord(
-          id: 'WH-02',
-          name: 'Chi nhánh Q.3',
-          address: '456 Đường Nguyễn Đình Chiểu, Phường 6, Quận 3, TP. HCM',
-          location: GeoPoint(latitude: 10.7752, longitude: 106.6869),
-        ),
-      ]);
-
-    vouchers
-      ..clear()
-      ..addAll([
-        VoucherRecord(
-          code: 'PROMO20K',
-          title: 'GIẢM 20.000Đ PHÍ VẬN CHUYỂN',
-          discountLabel: '20.000đ',
-          discountValue: 20000,
-          isPercentage: false,
-          maxDiscount: 20000,
-          minOrderValue: 50000,
-          expiryDate: '31/12/2026',
-          status: 'Đang hoạt động',
-        ),
-        VoucherRecord(
-          code: 'GHN-SUMMER24',
-          title: 'GIẢM 20% ĐƠN ĐẦU TIÊN',
-          discountLabel: '20%',
-          discountValue: 20,
-          isPercentage: true,
-          maxDiscount: 50000,
-          minOrderValue: 500000,
-          expiryDate: '31/12/2026',
-          status: 'Đang hoạt động',
-        ),
-        VoucherRecord(
-          code: 'GHN-OFF50K',
-          title: 'MIỄN PHÍ GIAO HÀNG TỐI ĐA 30K',
-          discountLabel: '30.000đ',
-          discountValue: 30000,
-          isPercentage: false,
-          maxDiscount: 30000,
-          minOrderValue: 300000,
-          expiryDate: '15/11/2026',
-          status: 'Đang hoạt động',
-        ),
-        VoucherRecord(
-          code: 'GHN-BACKTOSCHOOL',
-          title: 'GIẢM 10% PHÍ GIAO HÀNG',
-          discountLabel: '10%',
-          discountValue: 10,
-          isPercentage: true,
-          maxDiscount: 25000,
-          minOrderValue: 200000,
-          expiryDate: '30/11/2026',
-          status: 'Đang hoạt động',
-        ),
-      ]);
-
-    final seedNow = DateTime.now();
-    final todayDateLabel =
-        '${seedNow.day.toString().padLeft(2, '0')}/${seedNow.month.toString().padLeft(2, '0')}/${seedNow.year}';
-    orders
-      ..clear()
-      ..addAll([
-        ActiveOrderRecord(
-          id: 'ORD-01',
-          trackingCode: '#DH123456',
-          customerName: 'Nguyễn Thu Hà',
-          recipientName: 'Nguyễn Thị Minh An',
-          recipientPhone: '0912345678',
-          pickupAddress: '145 Phố Huế, Hai Bà Trưng, Hà Nội',
-          dropoffAddress:
-              'Số 15, Ngõ 100, Đường Lê Trọng Tấn, Quận Thanh Xuân, Hà Nội',
-          pickupLocation:
-              const GeoPoint(latitude: 21.0145, longitude: 105.8512),
-          dropoffLocation:
-              const GeoPoint(latitude: 20.9951, longitude: 105.8286),
-          serviceType: DeliveryServiceType.express30m,
-          packageDescription: '2x Áo thun Polo (Size M, Xanh)',
-          weightKg: 1.8,
-          dimensionsCm: '30 x 20 x 10 cm',
-          distanceMeters: 14500,
-          durationSeconds: 2700,
-          deliveryFee: 138250,
-          surchargeFee: 20000,
-          discountAmount: 20000,
-          codAmount: 1500000,
-          totalAmount: 138250,
-          paymentMethod: 'Tiền mặt (COD)',
-          paymentStatus: 'UNPAID',
-          status: OrderStatus.inTransit,
-          assignedDriverName: 'Nguyễn Văn Nam',
-          assignedDriverPlate: '29-P1 123.45',
-          createdDateLabel: todayDateLabel,
-        ),
-        ActiveOrderRecord(
-          id: 'ORD-02',
-          trackingCode: '#DH789101',
-          customerName: 'Nguyễn Thu Hà',
-          recipientName: 'Lê Văn B',
-          recipientPhone: '0987654321',
-          pickupAddress: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
-          dropoffAddress: '456 Đường Nguyễn Huệ, Quận Phú Nhuận, TP. HCM',
-          pickupLocation:
-              const GeoPoint(latitude: 10.7731, longitude: 106.6983),
-          dropoffLocation:
-              const GeoPoint(latitude: 10.7992, longitude: 106.6805),
-          serviceType: DeliveryServiceType.standard,
-          packageDescription: 'Gốm sứ cao cấp (3 kiện)',
-          weightKg: 2.5,
-          dimensionsCm: '35 x 25 x 15 cm',
-          distanceMeters: 12000,
-          durationSeconds: 2100,
-          deliveryFee: 85000,
-          surchargeFee: 10000,
-          discountAmount: 0,
-          codAmount: 750000,
-          totalAmount: 95000,
-          paymentMethod: 'Ví MoMo',
-          paymentStatus: 'PAID',
-          status: OrderStatus.delivered,
-          assignedDriverName: 'Nguyễn Văn Nam',
-          assignedDriverPlate: '29-P1 123.45',
-          podImageNote:
-              'Đã chụp ảnh kiện hàng kèm Watermark GPS (10.7992, 106.6805)',
-          ratingStars: 5,
-          ratingComment: 'Tài xế thân thiện, giao hàng siêu tốc đúng giờ!',
-          createdDateLabel: todayDateLabel,
-        ),
-        ActiveOrderRecord(
-          id: 'ORD-03',
-          trackingCode: '#DH556778',
-          customerName: 'Nguyễn Thu Hà',
-          recipientName: 'Ngô Thị Mai',
-          recipientPhone: '0923560677',
-          pickupAddress: '45 Hai Bà Trưng, Quận 3, TP. HCM',
-          dropoffAddress: '77 Võ Văn Tần, Quận 3, TP. HCM',
-          pickupLocation:
-              const GeoPoint(latitude: 10.7821, longitude: 106.6951),
-          dropoffLocation:
-              const GeoPoint(latitude: 10.7761, longitude: 106.6894),
-          serviceType: DeliveryServiceType.saving,
-          packageDescription: 'Tài liệu doanh nghiệp',
-          weightKg: 0.8,
-          dimensionsCm: '25 x 18 x 5 cm',
-          distanceMeters: 3500,
-          durationSeconds: 900,
-          deliveryFee: 45000,
-          surchargeFee: 0,
-          discountAmount: 0,
-          codAmount: 210000,
-          totalAmount: 45000,
-          paymentMethod: 'Tiền mặt (COD)',
-          paymentStatus: 'UNPAID',
-          status: OrderStatus.searching,
-          createdDateLabel: todayDateLabel,
-        ),
-      ]);
-
-    chatMessages
-      ..clear()
-      ..addAll(const [
-        ChatMessageRecord(
-          id: 'MSG-01',
-          orderId: '#DH123456',
-          senderName: 'Nguyễn Thu Hà',
-          isCustomer: true,
-          text: 'Anh đến chưa ạ? Mình đang đợi ở sảnh.',
-          timeLabel: '10:32',
-        ),
-        ChatMessageRecord(
-          id: 'MSG-02',
-          orderId: '#DH123456',
-          senderName: 'Nguyễn Văn Nam',
-          isCustomer: false,
-          text:
-              'Dạ, chào bạn. Anh đang đi đến điểm đón rồi nhé. Còn 5 phút nữa nhé.',
-          timeLabel: '10:32',
-        ),
-        ChatMessageRecord(
-          id: 'MSG-03',
-          orderId: '#DH123456',
-          senderName: 'Nguyễn Thu Hà',
-          isCustomer: true,
-          text: 'Vâng ạ, mình đợi. Xe anh màu gì thế ạ?',
-          timeLabel: '10:33',
-        ),
-      ]);
-
-    notifications
-      ..clear()
-      ..addAll([
-        NotificationRecord(
-          id: 'NOTI-01',
-          category: 'Đơn hàng',
-          title: 'Đơn hàng #DH789101 đã giao thành công',
-          timeAgo: '5 phút trước',
-        ),
-        NotificationRecord(
-          id: 'NOTI-02',
-          category: 'Đơn hàng',
-          title: 'Tài xế Nguyễn Văn Nam đang vận chuyển đơn #DH123456',
-          timeAgo: '1 giờ trước',
-        ),
-        NotificationRecord(
-          id: 'NOTI-03',
-          category: 'Khuyến mãi',
-          title: 'Mã PROMO20K giảm 20.000đ phí giao hàng hôm nay',
-          timeAgo: '3 giờ trước',
-        ),
-      ]);
-
-    drivers
-      ..clear()
-      ..addAll([
-        DriverApplicantRecord(
-          id: 'DV10928',
-          fullName: 'Nguyễn Văn Nam',
-          phone: '0987654321',
-          citizenId: '001095012345',
-          licensePlate: '29A-123.45',
-          vehicleType: 'Xe máy',
-          vehicleColor: 'Đỏ',
-          approvalStatus: 'Đã duyệt',
-          isOnline: true,
-          location: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
-          rating: 4.9,
-          totalTrips: 320,
-        ),
-        DriverApplicantRecord(
-          id: 'DV10929',
-          fullName: 'Trần Văn Hùng',
-          phone: '0938112233',
-          citizenId: '079092054321',
-          licensePlate: '59-P2 678.90',
-          vehicleType: 'Xe máy',
-          vehicleColor: 'Xanh đen',
-          approvalStatus: 'Chờ duyệt',
-          isOnline: false,
-          location: const GeoPoint(latitude: 10.7812, longitude: 106.7015),
-          rating: 4.8,
-          totalTrips: 215,
-        ),
-        DriverApplicantRecord(
-          id: 'DV10930',
-          fullName: 'Lê Thị Mai',
-          phone: '0945667788',
-          citizenId: '079196098765',
-          licensePlate: '59-X1 456.78',
-          vehicleType: 'Xe tải 500kg',
-          vehicleColor: 'Trắng',
-          approvalStatus: 'Chờ duyệt',
-          isOnline: false,
-          location: const GeoPoint(latitude: 10.7689, longitude: 106.6910),
-          rating: 4.7,
-          totalTrips: 140,
-        ),
-      ]);
-
-    merchantApplicants
-      ..clear()
-      ..addAll([
-        MerchantApplicantRecord(
-          id: 'MER-01',
-          ownerPhone: '0909112233',
-          storeName: 'Cửa hàng Gốm Sứ Việt',
-          businessType: 'Hộ kinh doanh cá thể',
-          taxCode: '0101234567-001',
-          representativeName: 'Nguyễn Văn A',
-          openHours: '08:00 - 21:00',
-          bankName: 'VPBank',
-          bankAccount: '123456789',
-          approvalStatus: 'Đã duyệt',
-        ),
-        MerchantApplicantRecord(
-          id: 'MER-02',
-          ownerPhone: '0977889900',
-          storeName: 'Thời trang Thiết kế Lụa Việt',
-          businessType: 'Công ty TNHH',
-          taxCode: '0316549871',
-          representativeName: 'Phạm Hoàng Yến',
-          openHours: '08:30 - 22:00',
-          bankName: 'Techcombank',
-          bankAccount: '190388991122',
-          approvalStatus: 'Chờ duyệt',
-        ),
-      ]);
-
-    complaints
-      ..clear()
-      ..addAll([
-        ComplaintTicketRecord(
-          ticketCode: 'KN-001',
-          orderId: '#DH123456',
-          customerName: 'Nguyễn Thu Hà',
-          driverName: 'Nguyễn Văn Nam',
-          issueType: 'Giao hàng chậm',
-          description:
-              'Giao hàng trễ hơn 2 tiếng so với dự kiến. Khách hàng đã phải chờ đợi quá lâu.',
-          status: 'Mới',
-          replies: [
-            'Nguyễn Thu Hà (10:30): Hôm nay tôi đã nhận hàng quá muộn, trễ 2 tiếng so với hẹn.',
-            'Admin (10:45): Chào bạn, chúng tôi đã ghi nhận khiếu nại và đang kiểm tra lộ trình GPS của tài xế.',
-          ],
-        ),
-        ComplaintTicketRecord(
-          ticketCode: 'KN-002',
-          orderId: '#DH789101',
-          customerName: 'Trần Văn An',
-          driverName: 'Nguyễn Văn Nam',
-          issueType: 'Hàng hư hỏng',
-          description: 'Móp góc hộp carton bên ngoài khi vận chuyển.',
-          status: 'Đang xử lý',
-          replies: [
-            'Trần Văn An (09:15): Kiện hàng gốm sứ bị móp nhẹ ở góc hộp.',
-          ],
-        ),
-        ComplaintTicketRecord(
-          ticketCode: 'KN-003',
-          orderId: '#DH556778',
-          customerName: 'Phạm Văn C',
-          driverName: 'Trần Văn Hùng',
-          issueType: 'Thiếu hàng',
-          description: 'Shop gửi 3 kiện nhưng người nhận mới nhận 2 kiện.',
-          status: 'Đã giải quyết',
-          replies: [
-            'Admin: Đã đối chiếu phiếu giao hàng và hoàn tất giao bổ sung kiện thứ 3.',
-          ],
-        ),
-      ]);
-
-    withdrawalRequests
-      ..clear()
-      ..addAll([
-        WithdrawalRequestRecord(
-          id: 'WD-01',
-          ownerName: 'Nguyễn Văn Nam',
-          ownerRole: 'Tài xế',
-          amount: 5000000,
-          bankName: 'Vietcombank',
-          accountMasked: '007100****889',
-          requestDate: '24/10/2023',
-          status: 'Chờ duyệt',
-        ),
-        WithdrawalRequestRecord(
-          id: 'WD-02',
-          ownerName: 'Trần Văn Hùng',
-          ownerRole: 'Tài xế',
-          amount: 3000000,
-          bankName: 'BIDV',
-          accountMasked: '314100****221',
-          requestDate: '24/10/2023',
-          status: 'Chờ duyệt',
-        ),
-        WithdrawalRequestRecord(
-          id: 'WD-03',
-          ownerName: 'Cửa hàng Gốm Sứ Việt',
-          ownerRole: 'Cửa hàng (COD)',
-          amount: 2100000,
-          bankName: 'VPBank - 789',
-          accountMasked: '123456****789',
-          requestDate: '15/10/2023 10:30',
-          status: 'Chờ duyệt',
-        ),
-        WithdrawalRequestRecord(
-          id: 'WD-04',
-          ownerName: 'Cửa hàng Gốm Sứ Việt',
-          ownerRole: 'Cửa hàng (COD)',
-          amount: 1850000,
-          bankName: 'VPBank - 789',
-          accountMasked: '123456****789',
-          requestDate: '12/10/2023 14:15',
-          status: 'Đã duyệt',
-        ),
-      ]);
-
-    geofenceZones
-      ..clear()
-      ..addAll([
-        GeofenceZoneRecord(
-          id: 'GEO-01',
-          zoneName: 'Vùng trung tâm (Quận 1 & Quận 3)',
-          zoneType: 'CENTER_ZONE',
-          surchargeRate: 0,
-          isActive: true,
-          boundary: const [
-            GeoPoint(latitude: 10.765, longitude: 106.685),
-            GeoPoint(latitude: 10.765, longitude: 106.710),
-            GeoPoint(latitude: 10.790, longitude: 106.710),
-            GeoPoint(latitude: 10.790, longitude: 106.685),
-          ],
-        ),
-        GeofenceZoneRecord(
-          id: 'GEO-02',
-          zoneName: 'Vùng phụ phí cao (Giờ cao điểm / Khu ngập)',
-          zoneType: 'SURCHARGE_ZONE',
-          surchargeRate: 25000,
-          isActive: true,
-          boundary: const [
-            GeoPoint(latitude: 10.740, longitude: 106.660),
-            GeoPoint(latitude: 10.740, longitude: 106.685),
-            GeoPoint(latitude: 10.765, longitude: 106.685),
-            GeoPoint(latitude: 10.765, longitude: 106.660),
-          ],
-        ),
-        GeofenceZoneRecord(
-          id: 'GEO-03',
-          zoneName: 'Vùng hạn chế (Cấm tải giờ cao điểm)',
-          zoneType: 'RESTRICTED_ZONE',
-          surchargeRate: 0,
-          isActive: true,
-          boundary: const [
-            GeoPoint(latitude: 10.730, longitude: 106.710),
-            GeoPoint(latitude: 10.730, longitude: 106.740),
-            GeoPoint(latitude: 10.755, longitude: 106.740),
-            GeoPoint(latitude: 10.755, longitude: 106.710),
-          ],
-        ),
-      ]);
-
+  void _initializeDefaultRoles() {
     rbacRoles
       ..clear()
       ..addAll([
         RbacRoleRecord(
           roleName: 'Super Admin',
           permissions: {
+            'User: Khóa/Mở': true,
             'Đơn: Xem': true,
             'Đơn: Tạo': true,
             'Đơn: Sửa': true,
@@ -541,6 +17,7 @@ extension AppStateSeedAndHydration on AppStateStore {
             'Tài xế: Phê duyệt': true,
             'Tài xế: Chỉnh sửa': true,
             'Tài xế: Đình chỉ': true,
+            'Khiếu nại: Xử lý': true,
             'Tài chính: Báo cáo': true,
             'Tài chính: Giao dịch': true,
             'Tài chính: Thanh toán': true,
@@ -552,6 +29,7 @@ extension AppStateSeedAndHydration on AppStateStore {
         RbacRoleRecord(
           roleName: 'Điều phối viên',
           permissions: {
+            'User: Khóa/Mở': false,
             'Đơn: Xem': true,
             'Đơn: Tạo': true,
             'Đơn: Sửa': true,
@@ -560,6 +38,7 @@ extension AppStateSeedAndHydration on AppStateStore {
             'Tài xế: Phê duyệt': true,
             'Tài xế: Chỉnh sửa': true,
             'Tài xế: Đình chỉ': false,
+            'Khiếu nại: Xử lý': true,
             'Tài chính: Báo cáo': false,
             'Tài chính: Giao dịch': false,
             'Tài chính: Thanh toán': false,
@@ -571,6 +50,7 @@ extension AppStateSeedAndHydration on AppStateStore {
         RbacRoleRecord(
           roleName: 'Kế toán',
           permissions: {
+            'User: Khóa/Mở': false,
             'Đơn: Xem': false,
             'Đơn: Tạo': false,
             'Đơn: Sửa': false,
@@ -579,6 +59,7 @@ extension AppStateSeedAndHydration on AppStateStore {
             'Tài xế: Phê duyệt': false,
             'Tài xế: Chỉnh sửa': false,
             'Tài xế: Đình chỉ': false,
+            'Khiếu nại: Xử lý': false,
             'Tài chính: Báo cáo': true,
             'Tài chính: Giao dịch': true,
             'Tài chính: Thanh toán': true,
@@ -590,6 +71,7 @@ extension AppStateSeedAndHydration on AppStateStore {
         RbacRoleRecord(
           roleName: 'Hỗ trợ CSKH',
           permissions: {
+            'User: Khóa/Mở': false,
             'Đơn: Xem': true,
             'Đơn: Tạo': true,
             'Đơn: Sửa': false,
@@ -598,10 +80,11 @@ extension AppStateSeedAndHydration on AppStateStore {
             'Tài xế: Phê duyệt': false,
             'Tài xế: Chỉnh sửa': false,
             'Tài xế: Đình chỉ': false,
+            'Khiếu nại: Xử lý': true,
             'Tài chính: Báo cáo': true,
             'Tài chính: Giao dịch': false,
             'Tài chính: Thanh toán': false,
-            'Hệ thống: Cài đặt': true,
+            'Hệ thống: Cài đặt': false,
             'Hệ thống: Bảo mật': false,
             'Hệ thống: Nhật ký': false,
           },
@@ -610,231 +93,89 @@ extension AppStateSeedAndHydration on AppStateStore {
   }
 
   /// Khởi tạo và nạp toàn bộ 16 bảng quan hệ từ CSDL SQLite thực tế (`gps_delivery_production.db`)
-  Future<void> initializeDatabase() async {
+  Future<void> initializeDatabase() {
+    if (_initializingDbFuture != null) return _initializingDbFuture!;
+    final future = _runInitializeDatabase();
+    _initializingDbFuture = future.whenComplete(() {
+      _initializingDbFuture = null;
+    });
+    return _initializingDbFuture!;
+  }
+
+  Future<void> _runInitializeDatabase() async {
     try {
-      final userCount = await _sqliteDb.countRows('users');
-      if (userCount == 0) {
-        await _seedInitialDatabaseTables();
+      await removeLegacyDemoRecords();
+      if (await _sqliteDb.countRows('admin_roles_permissions') == 0) {
+        for (final role in rbacRoles) {
+          await _sqliteDb.upsertRow('admin_roles_permissions', {
+            'id': role.roleName,
+            'role_name': role.roleName,
+            'permissions_json': jsonEncode(role.permissions),
+            'updated_at': DateTime.now().toIso8601String(),
+          });
+        }
       }
       await _loadAllTablesFromSqlite();
+      await _sqliteDb.clearStaleSnapshotEntries();
+      if (!isOfflineMode) {
+        await drainOfflineSyncQueue();
+      }
       offlineQueueCount = await _sqliteDb.getPendingQueueCount();
       isDatabaseReady = true;
       lastSyncStatusMessage =
-          'CSDL SQLite (${_sqliteDb.databaseFilePath}) • ${orders.length} đơn, ${users.length} người dùng, ${drivers.length} tài xế';
+          'Đã tải dữ liệu trên thiết bị';
       _notifyStoreChanged();
     } catch (_) {
       // Giữ trạng thái trong bộ nhớ nếu môi trường test không cho phép mở tệp
     }
   }
 
-  Future<void> _seedInitialDatabaseTables() async {
-    final nowIso = DateTime.now().toIso8601String();
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-
-    for (final u in users) {
-      await _sqliteDb.upsertRow('users', {
-        'id': u.id,
-        'phone': _normalizePhone(u.phone),
-        'email': u.email,
-        'password_hash': u.passwordHash,
-        'full_name': u.fullName,
-        'role': u.roleDbCode,
-        'default_address': u.defaultAddress,
-        'default_lat': u.defaultLocation.latitude,
-        'default_lng': u.defaultLocation.longitude,
-        'status': u.status,
-        'created_at': u.createdAt,
-      });
-    }
-
-    for (final a in savedAddresses) {
-      await _sqliteDb.upsertRow('user_addresses', {
-        'id': a.id,
-        'user_phone': _normalizePhone(customerPhone),
-        'label': a.label,
-        'full_address': a.fullAddress,
-        'latitude': a.location.latitude,
-        'longitude': a.location.longitude,
-        'created_at': nowIso,
-      });
-    }
-
-    for (final d in drivers) {
-      await _sqliteDb.upsertRow('drivers', {
-        'id': d.id,
-        'phone': _normalizePhone(d.phone),
-        'full_name': d.fullName,
-        'citizen_id': d.citizenId,
-        'license_plate': d.licensePlate,
-        'vehicle_type': d.vehicleType,
-        'vehicle_color': d.vehicleColor,
-        'approval_status': d.approvalStatus,
-        'is_online': d.isOnline ? 1 : 0,
-        'latitude': d.location.latitude,
-        'longitude': d.location.longitude,
-        'rating': d.rating,
-        'total_trips': d.totalTrips,
-        'wallet_balance': driverWalletBalance,
-        'created_at': nowIso,
-      });
-    }
-
-    for (final m in merchantApplicants) {
-      await _sqliteDb.upsertRow('merchants', {
-        'id': m.id,
-        'owner_phone': _normalizePhone(m.ownerPhone),
-        'store_name': m.storeName,
-        'business_type': m.businessType,
-        'tax_code': m.taxCode,
-        'representative_name': m.representativeName,
-        'open_hours': m.openHours,
-        'bank_name': m.bankName,
-        'bank_account': m.bankAccount,
-        'cod_balance': merchantCodBalance,
-        'approval_status': m.approvalStatus,
-        'created_at': nowIso,
-      });
-    }
-
-    for (final w in merchantWarehouses) {
-      await _sqliteDb.upsertRow('merchant_pickup_points', {
-        'id': w.id,
-        'merchant_id': 'MER-01',
-        'warehouse_name': w.name,
-        'full_address': w.address,
-        'latitude': w.location.latitude,
-        'longitude': w.location.longitude,
-        'created_at': nowIso,
-      });
-    }
-
-    await _sqliteDb.upsertRow('pricing_configs', {
-      'id': 'PRC-01',
-      'service_type': 'STANDARD_V2',
-      'base_fare': baseFareConfig,
-      'price_per_km': pricePerKmConfig,
-      'peak_hour_surcharge': peakHourSurchargeConfig,
-      'bad_weather_surcharge': badWeatherSurchargeConfig,
-      'is_peak_enabled': isPeakSurchargeActive ? 1 : 0,
-      'is_weather_enabled': isWeatherSurchargeActive ? 1 : 0,
-      'updated_at': nowIso,
-    });
-
-    for (final v in vouchers) {
-      await _sqliteDb.upsertRow('vouchers', {
-        'code': v.code,
-        'title': v.title,
-        'discount_label': v.discountLabel,
-        'discount_value': v.discountValue,
-        'is_percentage': v.isPercentage ? 1 : 0,
-        'max_discount': v.maxDiscount,
-        'min_order_value': v.minOrderValue,
-        'expiry_date': v.expiryDate,
-        'status': v.status,
-      });
-    }
-
-    for (var i = 0; i < orders.length; i++) {
-      await _sqliteDb.upsertRow(
-        'orders',
-        orders[i].toSqlRow(nowMs - i * 60000),
-      );
-    }
-
-    for (final z in geofenceZones) {
-      await _sqliteDb.upsertRow('geofence_zones', {
-        'id': z.id,
-        'zone_name': z.zoneName,
-        'zone_type': z.zoneType,
-        'surcharge_rate': z.surchargeRate,
-        'is_active': z.isActive ? 1 : 0,
-        'boundary_json': jsonEncode(
-          z.boundary
-              .map((pt) => {'lat': pt.latitude, 'lng': pt.longitude})
-              .toList(),
-        ),
-      });
-    }
-
-    for (var i = 0; i < rbacRoles.length; i++) {
-      final r = rbacRoles[i];
-      await _sqliteDb.upsertRow('admin_roles_permissions', {
-        'id': 'RBAC-0${i + 1}',
-        'role_name': r.roleName,
-        'permissions_json': jsonEncode(r.permissions),
-        'updated_at': nowIso,
-      });
-    }
-
-    for (var i = 0; i < withdrawalRequests.length; i++) {
-      final w = withdrawalRequests[i];
-      await _sqliteDb.upsertRow('wallets_and_transactions', {
-        'id': w.id,
-        'owner_name': w.ownerName,
-        'owner_role': w.ownerRole,
-        'amount': w.amount,
-        'bank_name': w.bankName,
-        'account_masked': w.accountMasked,
-        'request_date': w.requestDate,
-        'status': w.status,
-        'created_at_ms': nowMs - i * 60000,
-      });
-    }
-
-    for (var i = 0; i < complaints.length; i++) {
-      final c = complaints[i];
-      await _sqliteDb.upsertRow('incidents_and_complaints', {
-        'ticket_code': c.ticketCode,
-        'order_id': c.orderId,
-        'customer_name': c.customerName,
-        'driver_name': c.driverName,
-        'issue_type': c.issueType,
-        'description': c.description,
-        'status': c.status,
-        'replies_json': jsonEncode(c.replies),
-        'created_at_ms': nowMs - i * 60000,
-      });
-    }
-
-    for (var i = 0; i < chatMessages.length; i++) {
-      final m = chatMessages[i];
-      await _sqliteDb.upsertRow('chat_messages_and_notifications', {
-        'id': m.id,
-        'record_type': 'CHAT',
-        'order_id': m.orderId,
-        'sender_name': m.senderName,
-        'is_customer': m.isCustomer ? 1 : 0,
-        'category': 'CHAT_MESSAGE',
-        'title': m.senderName,
-        'content': m.text,
-        'target_group': 'INDIVIDUAL',
-        'time_label': m.timeLabel,
-        'is_read': 1,
-        'created_at_ms': nowMs - (chatMessages.length - i) * 1000,
-      });
-    }
-
-    for (var i = 0; i < notifications.length; i++) {
-      final n = notifications[i];
-      await _sqliteDb.upsertRow('chat_messages_and_notifications', {
-        'id': n.id,
-        'record_type': 'NOTIFICATION',
-        'order_id': null,
-        'sender_name': 'Hệ thống',
-        'is_customer': 0,
-        'category': n.category,
-        'title': n.title,
-        'content': n.title,
-        'target_group': n.targetGroup,
-        'time_label': n.timeAgo,
-        'is_read': n.isRead ? 1 : 0,
-        'created_at_ms': nowMs - i * 60000,
-      });
-    }
+  Future<void> reloadFromSqlite() async {
+    await _loadAllTablesFromSqlite();
+    offlineQueueCount = await _sqliteDb.getPendingQueueCount();
+    _notifyStoreChanged();
   }
 
   Future<void> _loadAllTablesFromSqlite() async {
+    userPreferencesByPhone.clear();
+    registeredUserPasswordHashes.clear();
+    final entityRows = await _sqliteDb.queryRows('local_relational_entities');
+    final driverMeta = <String, Map<String, dynamic>>{};
+    final merchantMeta = <String, Map<String, dynamic>>{};
+    final warehouseMeta = <String, Map<String, dynamic>>{};
+    final withdrawalMeta = <String, Map<String, dynamic>>{};
+    final voucherMeta = <String, Map<String, dynamic>>{};
+    final codRecMeta = <String, Map<String, dynamic>>{};
+    final complaintMeta = <String, Map<String, dynamic>>{};
+    for (final er in entityRows) {
+      try {
+        final tName = er['table_name'].toString();
+        final rId = er['record_id'].toString();
+        final decoded =
+            jsonDecode(er['payload_json'].toString()) as Map<String, dynamic>;
+        switch (tName) {
+          case 'driver_meta':
+            driverMeta[rId] = decoded;
+          case 'merchant_meta':
+            merchantMeta[rId] = decoded;
+          case 'warehouse_meta':
+            warehouseMeta[rId] = decoded;
+          case 'withdrawal_meta':
+            withdrawalMeta[rId] = decoded;
+          case 'voucher_meta':
+            voucherMeta[rId] = decoded;
+          case 'cod_reconciliation_meta':
+            codRecMeta[rId] = decoded;
+          case 'complaint_meta':
+            complaintMeta[rId] = decoded;
+          case 'user_preferences':
+            userPreferencesByPhone[rId] = decoded;
+        }
+      } catch (_) {}
+    }
+
     final userRows = await _sqliteDb.queryRows('users');
+    users.clear();
     if (userRows.isNotEmpty) {
       users
         ..clear()
@@ -865,6 +206,7 @@ extension AppStateSeedAndHydration on AppStateStore {
     }
 
     final addrRows = await _sqliteDb.queryRows('user_addresses');
+    savedAddresses.clear();
     if (addrRows.isNotEmpty) {
       savedAddresses
         ..clear()
@@ -872,7 +214,7 @@ extension AppStateSeedAndHydration on AppStateStore {
           addrRows.map(
             (r) => SavedAddressRecord(
               id: r['id'].toString(),
-              userPhone: (r['user_phone'] ?? '0912345678').toString(),
+              userPhone: (r['user_phone'] ?? '').toString(),
               label: r['label'].toString(),
               fullAddress: r['full_address'].toString(),
               location: GeoPoint(
@@ -885,6 +227,10 @@ extension AppStateSeedAndHydration on AppStateStore {
     }
 
     final drvRows = await _sqliteDb.queryRows('drivers');
+    drivers.clear();
+    isDriverOnline = false;
+    driverWalletBalance = 0;
+    activeDriverId = activeDriverName = activeDriverPhone = '';
     if (drvRows.isNotEmpty) {
       drivers
         ..clear()
@@ -892,14 +238,35 @@ extension AppStateSeedAndHydration on AppStateStore {
           drvRows.map((r) {
             final idStr = r['id'].toString();
             final rawStatus = (r['approval_status'] ?? 'Chờ duyệt').toString();
-            final normStatus = (idStr == 'DV10928' ||
-                    rawStatus == 'APPROVED' ||
-                    rawStatus == 'Đã duyệt')
-                ? 'Đã duyệt'
-                : (rawStatus == 'REJECTED' || rawStatus == 'Từ chối')
-                    ? 'Từ chối'
-                    : 'Chờ duyệt';
+            final normStatus =
+                (rawStatus == 'SUSPENDED' || rawStatus == 'Đình chỉ')
+                    ? 'Đình chỉ'
+                    : (rawStatus == 'REJECTED' || rawStatus == 'Từ chối')
+                        ? 'Từ chối'
+                        : (rawStatus == 'APPROVED' ||
+                                rawStatus == 'Đã duyệt')
+                            ? 'Đã duyệt'
+                            : 'Chờ duyệt';
             final rawOnline = (r['is_online'] as num?)?.toInt() == 1;
+            final meta = driverMeta[idStr];
+            List<String>? parsedDocs;
+            final colDocsJson = r['attached_kyc_docs_json']?.toString();
+            if (colDocsJson != null && colDocsJson.trim().startsWith('[')) {
+              try {
+                parsedDocs = (jsonDecode(colDocsJson) as List<dynamic>)
+                    .map((e) => e.toString())
+                    .toList();
+              } catch (_) {}
+            } else if (meta?['attachedKycDocs'] is List) {
+              parsedDocs = (meta!['attachedKycDocs'] as List)
+                  .map((e) => e.toString())
+                  .toList();
+            }
+            final walletVal = (r['wallet_balance'] as num?)?.toDouble() ??
+                0.0;
+            final colBank = r['bank_name']?.toString();
+            final colAcct = r['bank_account']?.toString();
+            final colRej = (r['rejected_count'] as num?)?.toInt();
             return DriverApplicantRecord(
               id: idStr,
               fullName: r['full_name'].toString(),
@@ -909,49 +276,85 @@ extension AppStateSeedAndHydration on AppStateStore {
               vehicleType: r['vehicle_type'].toString(),
               vehicleColor: r['vehicle_color'].toString(),
               approvalStatus: normStatus,
-              isOnline: idStr == 'DV10928'
-                  ? true
-                  : (normStatus == 'Đã duyệt' && rawOnline),
+              isOnline: normStatus == 'Đã duyệt' &&
+                  walletVal >= 200000 &&
+                  rawOnline,
               location: GeoPoint(
                 latitude: (r['latitude'] as num).toDouble(),
                 longitude: (r['longitude'] as num).toDouble(),
               ),
-              rating: (r['rating'] as num?)?.toDouble() ?? 4.9,
+              rating: (r['rating'] as num?)?.toDouble() ?? 0.0,
               totalTrips: (r['total_trips'] as num?)?.toInt() ?? 0,
+              rejectedCount: (colRej != null && colRej > 0)
+                  ? colRej
+                  : ((meta?['rejectedCount'] as num?)?.toInt() ??
+                      colRej ??
+                      0),
+              walletBalance: walletVal,
+              bankName: colBank ?? meta?['bankName']?.toString() ?? '',
+              bankAccount: colAcct ?? meta?['bankAccount']?.toString() ?? '',
+              attachedKycDocs: parsedDocs,
             );
           }),
         );
-      final firstDrvWallet =
-          (drvRows.first['wallet_balance'] as num?)?.toDouble();
-      if (firstDrvWallet != null && firstDrvWallet > 0) {
-        driverWalletBalance = firstDrvWallet;
-      }
-      final defaultDrv = drivers
-              .where((d) => d.id == 'DV10928')
-              .firstOrNull ??
-          drivers.where((d) => d.approvalStatus == 'Đã duyệt').firstOrNull ??
-          drivers.first;
+      final defaultDrv = drivers.first;
       isDriverOnline = defaultDrv.isOnline;
       activeDriverId = defaultDrv.id;
       activeDriverName = defaultDrv.fullName;
       activeDriverPhone = defaultDrv.phone;
+      driverWalletBalance = defaultDrv.walletBalance;
+    }
+
+    verifiedDriverLocations.clear();
+    for (final fix in await _sqliteDb.getEntityRecords('verified_driver_locations')) {
+      final id = fix['id']?.toString();
+      final lat = fix['latitude'];
+      final lon = fix['longitude'];
+      if (id != null && lat is num && lon is num &&
+          drivers.any((driver) => driver.id == id)) {
+        verifiedDriverLocations[id] = GeoPoint(
+          latitude: lat.toDouble(), longitude: lon.toDouble());
+      }
     }
 
     final merRows = await _sqliteDb.queryRows('merchants');
+    merchantApplicants.clear();
+    merchantStoreName = merchantBusinessType = merchantTaxCode = '';
+    merchantRepresentative = merchantOpenHours = '';
+    merchantBankName = merchantBankAccount = '';
+    merchantCodBalance = 0;
     if (merRows.isNotEmpty) {
       merchantApplicants
         ..clear()
         ..addAll(
           merRows.map((r) {
+            final merId = r['id'].toString();
             final rawStatus = (r['approval_status'] ?? 'Chờ duyệt').toString();
             final normStatus =
-                (rawStatus == 'APPROVED' || rawStatus == 'Đã duyệt')
-                    ? 'Đã duyệt'
-                    : (rawStatus == 'REJECTED' || rawStatus == 'Từ chối')
-                        ? 'Từ chối'
-                        : 'Chờ duyệt';
+                (rawStatus == 'SUSPENDED' || rawStatus == 'Đình chỉ')
+                    ? 'Đình chỉ'
+                    : (rawStatus == 'APPROVED' || rawStatus == 'Đã duyệt')
+                        ? 'Đã duyệt'
+                        : (rawStatus == 'REJECTED' || rawStatus == 'Từ chối')
+                            ? 'Từ chối'
+                            : 'Chờ duyệt';
+            final meta = merchantMeta[merId];
+            List<String>? parsedDocs;
+            final colDocsJson = r['attached_kyc_docs_json']?.toString();
+            if (colDocsJson != null && colDocsJson.trim().startsWith('[')) {
+              try {
+                parsedDocs = (jsonDecode(colDocsJson) as List<dynamic>)
+                    .map((e) => e.toString())
+                    .toList();
+              } catch (_) {}
+            } else if (meta?['attachedKycDocs'] is List) {
+              parsedDocs = (meta!['attachedKycDocs'] as List)
+                  .map((e) => e.toString())
+                  .toList();
+            }
+            final colWebhook = r['webhook_url']?.toString() ?? '';
             return MerchantApplicantRecord(
-              id: r['id'].toString(),
+              id: merId,
               ownerPhone: (r['owner_phone'] ?? '').toString(),
               storeName: r['store_name'].toString(),
               businessType: r['business_type'].toString(),
@@ -961,38 +364,108 @@ extension AppStateSeedAndHydration on AppStateStore {
               bankName: r['bank_name'].toString(),
               bankAccount: r['bank_account'].toString(),
               approvalStatus: normStatus,
+              codBalance: (r['cod_balance'] as num?)?.toDouble() ??
+                  0.0,
+              webhookUrl: colWebhook.isNotEmpty
+                  ? colWebhook
+                  : (meta?['webhookUrl']?.toString() ?? ''),
+              attachedKycDocs: parsedDocs,
             );
           }),
         );
-      final m = merRows.first;
-      merchantStoreName = m['store_name'].toString();
-      merchantBusinessType = m['business_type'].toString();
-      merchantTaxCode = m['tax_code'].toString();
-      merchantRepresentative = m['representative_name'].toString();
-      merchantOpenHours = m['open_hours'].toString();
-      merchantBankName = m['bank_name'].toString();
-      merchantBankAccount = m['bank_account'].toString();
-      merchantCodBalance =
-          (m['cod_balance'] as num?)?.toDouble() ?? merchantCodBalance;
+      final m = merchantApplicants.first;
+      merchantStoreName = m.storeName;
+      merchantBusinessType = m.businessType;
+      merchantTaxCode = m.taxCode;
+      merchantRepresentative = m.representativeName;
+      merchantOpenHours = m.openHours;
+      merchantBankName = m.bankName;
+      merchantBankAccount = m.bankAccount;
+      merchantCodBalance = m.codBalance;
     }
 
     final whRows = await _sqliteDb.queryRows('merchant_pickup_points');
+    merchantWarehouses.clear();
     if (whRows.isNotEmpty) {
       merchantWarehouses
         ..clear()
         ..addAll(
-          whRows.map(
-            (r) => PickupWarehouseRecord(
-              id: r['id'].toString(),
+          whRows.map((r) {
+            final whId = r['id'].toString();
+            final meta = warehouseMeta[whId];
+            final colPhone = r['contact_phone']?.toString() ?? '';
+            final colHours = r['open_hours']?.toString() ?? '';
+            final colPrimary = (r['is_primary'] as num?)?.toInt();
+            final colWebhook = r['webhook_url']?.toString() ?? '';
+            final resolvedPrimary = colPrimary != null
+                ? colPrimary == 1
+                : (meta != null && meta.containsKey('isPrimary')
+                    ? meta['isPrimary'] == true
+                    : false);
+            return PickupWarehouseRecord(
+              id: whId,
+              merchantId: (r['merchant_id'] ?? '').toString(),
               name: r['warehouse_name'].toString(),
               address: r['full_address'].toString(),
               location: GeoPoint(
                 latitude: (r['latitude'] as num).toDouble(),
                 longitude: (r['longitude'] as num).toDouble(),
               ),
-            ),
-          ),
+              contactName: meta?['contactName']?.toString() ?? '',
+              contactPhone: colPhone.isNotEmpty
+                  ? colPhone
+                  : (meta?['contactPhone']?.toString() ??
+                      ''),
+              openHours: colHours.isNotEmpty
+                  ? colHours
+                  : (meta?['openHours']?.toString() ??
+                      (whId == 'WH-02' ? '08:30 - 20:30' : '08:00 - 21:00')),
+              isPrimary: resolvedPrimary,
+              webhookUrl: colWebhook.isNotEmpty
+                  ? colWebhook
+                  : (meta?['webhookUrl']?.toString() ?? ''),
+            );
+          }),
         );
+    }
+
+    final codRecRows = await _sqliteDb.queryRows('cod_reconciliations');
+    codReconciliations.clear();
+    if (codRecRows.isNotEmpty) {
+      codReconciliations
+        ..clear()
+        ..addAll(
+          codRecRows.map((r) {
+            final recId = r['id'].toString();
+            final meta = codRecMeta[recId];
+            final colReturnFee = (r['return_cancel_fee'] as num?)?.toDouble();
+            return CodReconciliationRecord(
+              id: recId,
+              merchantId: r['merchant_id'].toString(),
+              periodLabel: r['period_label'].toString(),
+              totalCodCollected: (r['total_cod_collected'] as num).toDouble(),
+              totalServiceFee: (r['total_service_fee'] as num).toDouble(),
+              returnCancelFee: colReturnFee ??
+                  (meta?['returnCancelFee'] as num?)?.toDouble() ??
+                  0.0,
+              netPayoutAmount: (r['net_payout_amount'] as num).toDouble(),
+              status: r['status'].toString(),
+            );
+          }),
+        );
+    } else if (codReconciliations.isNotEmpty) {
+      for (final rec in codReconciliations) {
+        await _sqliteDb.upsertRow('cod_reconciliations', {
+          'id': rec.id,
+          'merchant_id': rec.merchantId,
+          'period_label': rec.periodLabel,
+          'total_cod_collected': rec.totalCodCollected,
+          'total_service_fee': rec.totalServiceFee,
+          'return_cancel_fee': rec.returnCancelFee,
+          'net_payout_amount': rec.netPayoutAmount,
+          'status': rec.status,
+        });
+      }
     }
 
     final prcRows = await _sqliteDb.queryRows('pricing_configs');
@@ -1022,13 +495,18 @@ extension AppStateSeedAndHydration on AppStateStore {
     }
 
     final vRows = await _sqliteDb.queryRows('vouchers');
+    vouchers.clear();
     if (vRows.isNotEmpty) {
       vouchers
         ..clear()
         ..addAll(
-          vRows.map(
-            (r) => VoucherRecord(
-              code: r['code'].toString(),
+          vRows.map((r) {
+            final vCode = r['code'].toString();
+            final meta = voucherMeta[vCode];
+            final colLimit = (r['usage_limit'] as num?)?.toInt();
+            final colUsed = (r['used_count'] as num?)?.toInt();
+            return VoucherRecord(
+              code: vCode,
               title: r['title'].toString(),
               discountLabel: r['discount_label'].toString(),
               discountValue: (r['discount_value'] as num).toDouble(),
@@ -1037,8 +515,13 @@ extension AppStateSeedAndHydration on AppStateStore {
               minOrderValue: (r['min_order_value'] as num).toDouble(),
               expiryDate: r['expiry_date'].toString(),
               status: r['status'].toString(),
-            ),
-          ),
+              usageLimit: colLimit ??
+                  (meta?['usageLimit'] as num?)?.toInt() ??
+                  1000,
+              usedCount:
+                  colUsed ?? (meta?['usedCount'] as num?)?.toInt() ?? 0,
+            );
+          }),
         );
     }
 
@@ -1046,57 +529,12 @@ extension AppStateSeedAndHydration on AppStateStore {
       'orders',
       orderBy: 'created_at_ms DESC',
     );
-    if (ordRows.isNotEmpty) {
-      final loadedOrders = ordRows.map(ActiveOrderRecord.fromSqlRow).toList();
-      final staleDemoOrders = loadedOrders.where(
-        (o) =>
-            o.id != 'ORD-01' &&
-            o.recipientName == 'Nguyễn Thị Minh An' &&
-            o.dropoffAddress.contains('Lê Trọng Tấn'),
-      );
-      for (final stale in staleDemoOrders) {
-        await _sqliteDb.deleteRows(
-          'orders',
-          where: 'id = ?',
-          whereArgs: [stale.id],
-        );
-      }
-      loadedOrders.removeWhere(
-        (o) =>
-            o.id != 'ORD-01' &&
-            o.recipientName == 'Nguyễn Thị Minh An' &&
-            o.dropoffAddress.contains('Lê Trọng Tấn'),
-      );
-      final migrateNow = DateTime.now();
-      final migratedTodayLabel =
-          '${migrateNow.day.toString().padLeft(2, '0')}/${migrateNow.month.toString().padLeft(2, '0')}/${migrateNow.year}';
-      for (final ord in loadedOrders) {
-        if ((ord.id == 'ORD-02' || ord.id == 'ORD-03') &&
-            (ord.customerName == 'Trần Văn An' ||
-                ord.customerName == 'Phạm Văn C')) {
-          ord.customerName = customerFullName;
-          await _sqliteDb.updateRows(
-            'orders',
-            {'customer_name': ord.customerName},
-            where: 'id = ?',
-            whereArgs: [ord.id],
-          );
-        }
-        if (ord.createdDateLabel.endsWith('/2023')) {
-          await _sqliteDb.updateRows(
-            'orders',
-            {'created_date_label': migratedTodayLabel},
-            where: 'id = ?',
-            whereArgs: [ord.id],
-          );
-        }
-      }
-      orders
-        ..clear()
-        ..addAll(loadedOrders);
-    }
+    orders
+      ..clear()
+      ..addAll(ordRows.map(ActiveOrderRecord.fromSqlRow));
 
     final geoRows = await _sqliteDb.queryRows('geofence_zones');
+    geofenceZones.clear();
     if (geoRows.isNotEmpty) {
       geofenceZones
         ..clear()
@@ -1125,33 +563,65 @@ extension AppStateSeedAndHydration on AppStateStore {
         );
     }
 
+    final defaultRbacMap = <String, Map<String, bool>>{
+      for (final r in rbacRoles) r.roleName: Map<String, bool>.from(r.permissions),
+    };
     final rbacRows = await _sqliteDb.queryRows('admin_roles_permissions');
     if (rbacRows.isNotEmpty) {
+      final migratedRoles = <RbacRoleRecord>[];
+      for (final r in rbacRows) {
+        final roleName = r['role_name'].toString();
+        final decoded =
+            jsonDecode(r['permissions_json'].toString()) as Map<String, dynamic>;
+        final hadComplaintPerm = decoded.containsKey('Khiếu nại: Xử lý');
+        final hadUserPerm = decoded.containsKey('User: Khóa/Mở');
+        final defaults = defaultRbacMap[roleName] ?? const <String, bool>{};
+        final merged = <String, bool>{
+          ...defaults,
+          for (final e in decoded.entries) e.key: e.value == true,
+        };
+        if (!hadComplaintPerm && roleName == 'Hỗ trợ CSKH') {
+          merged['Khiếu nại: Xử lý'] = true;
+          merged['Hệ thống: Cài đặt'] = false;
+        }
+        if (!hadComplaintPerm || !hadUserPerm) {
+          await _sqliteDb.updateRows(
+            'admin_roles_permissions',
+            {
+              'permissions_json': jsonEncode(merged),
+              'updated_at': DateTime.now().toIso8601String(),
+            },
+            where: 'role_name = ?',
+            whereArgs: [roleName],
+          );
+        }
+        migratedRoles.add(
+          RbacRoleRecord(roleName: roleName, permissions: merged),
+        );
+      }
       rbacRoles
         ..clear()
-        ..addAll(
-          rbacRows.map((r) {
-            final decoded = jsonDecode(r['permissions_json'].toString())
-                as Map<String, dynamic>;
-            return RbacRoleRecord(
-              roleName: r['role_name'].toString(),
-              permissions: decoded.map((k, v) => MapEntry(k, v == true)),
-            );
-          }),
-        );
+        ..addAll(migratedRoles);
     }
 
     final wdRows = await _sqliteDb.queryRows(
       'wallets_and_transactions',
       orderBy: 'created_at_ms DESC',
     );
+    withdrawalRequests.clear();
     if (wdRows.isNotEmpty) {
       withdrawalRequests
         ..clear()
         ..addAll(
-          wdRows.map(
-            (r) => WithdrawalRequestRecord(
-              id: r['id'].toString(),
+          wdRows.map((r) {
+            final wdId = r['id'].toString();
+            final colOwnerId = r['owner_id']?.toString() ?? '';
+            final metaOwnerId = colOwnerId.isNotEmpty
+                ? colOwnerId
+                : (withdrawalMeta[wdId]?['ownerId']?.toString() ?? '');
+            return WithdrawalRequestRecord(
+              id: wdId,
+              ownerId: metaOwnerId,
               ownerName: r['owner_name'].toString(),
               ownerRole: r['owner_role'].toString(),
               amount: (r['amount'] as num).toDouble(),
@@ -1159,8 +629,8 @@ extension AppStateSeedAndHydration on AppStateStore {
               accountMasked: r['account_masked'].toString(),
               requestDate: r['request_date'].toString(),
               status: r['status'].toString(),
-            ),
-          ),
+            );
+          }),
         );
     }
 
@@ -1168,17 +638,33 @@ extension AppStateSeedAndHydration on AppStateStore {
       'incidents_and_complaints',
       orderBy: 'created_at_ms DESC',
     );
+    complaints.clear();
     if (compRows.isNotEmpty) {
       complaints
         ..clear()
         ..addAll(
           compRows.map((r) {
+            final tCode = r['ticket_code'].toString();
             final repliesList =
                 (jsonDecode(r['replies_json'].toString()) as List<dynamic>)
                     .map((e) => e.toString())
                     .toList();
+            List<String> evList = const [];
+            final colEvJson = r['evidence_files_json']?.toString();
+            if (colEvJson != null && colEvJson.trim().startsWith('[')) {
+              try {
+                evList = (jsonDecode(colEvJson) as List<dynamic>)
+                    .map((e) => e.toString())
+                    .toList();
+              } catch (_) {}
+            } else {
+              final rawEv = complaintMeta[tCode]?['evidenceFiles'];
+              if (rawEv is List) {
+                evList = rawEv.map((e) => e.toString()).toList();
+              }
+            }
             return ComplaintTicketRecord(
-              ticketCode: r['ticket_code'].toString(),
+              ticketCode: tCode,
               orderId: r['order_id'].toString(),
               customerName: r['customer_name'].toString(),
               driverName: r['driver_name'].toString(),
@@ -1186,6 +672,7 @@ extension AppStateSeedAndHydration on AppStateStore {
               description: r['description'].toString(),
               status: r['status'].toString(),
               replies: repliesList,
+              evidenceFiles: evList,
             );
           }),
         );
@@ -1195,6 +682,8 @@ extension AppStateSeedAndHydration on AppStateStore {
       'chat_messages_and_notifications',
       orderBy: 'created_at_ms ASC',
     );
+    chatMessages.clear();
+    notifications.clear();
     if (chatNotiRows.isNotEmpty) {
       final loadedChats = <ChatMessageRecord>[];
       final loadedNotis = <NotificationRecord>[];
@@ -1203,7 +692,7 @@ extension AppStateSeedAndHydration on AppStateStore {
           loadedChats.add(
             ChatMessageRecord(
               id: r['id'].toString(),
-              orderId: (r['order_id'] ?? '#DH123456').toString(),
+              orderId: (r['order_id'] ?? '').toString(),
               senderName: (r['sender_name'] ?? '').toString(),
               isCustomer: (r['is_customer'] as num?)?.toInt() == 1,
               text: r['content'].toString(),
@@ -1211,6 +700,7 @@ extension AppStateSeedAndHydration on AppStateStore {
             ),
           );
         } else {
+          final colRk = r['recipient_key']?.toString();
           loadedNotis.insert(
             0,
             NotificationRecord(
@@ -1219,6 +709,9 @@ extension AppStateSeedAndHydration on AppStateStore {
               title: (r['title'] ?? r['content']).toString(),
               timeAgo: r['time_label'].toString(),
               targetGroup: (r['target_group'] ?? 'Khách hàng').toString(),
+              recipientKey: (colRk != null && colRk.isNotEmpty)
+                  ? colRk
+                  : r['order_id']?.toString(),
               isRead: (r['is_read'] as num?)?.toInt() == 1,
             ),
           );
@@ -1235,6 +728,106 @@ extension AppStateSeedAndHydration on AppStateStore {
           ..addAll(loadedNotis);
       }
     }
+
+    final seenRecMerchants = <String>{};
+    final duplicateRecIds = <String>[];
+    for (final rec in codReconciliations) {
+      if (!seenRecMerchants.add(rec.merchantId)) {
+        duplicateRecIds.add(rec.id);
+      }
+    }
+    if (duplicateRecIds.isNotEmpty) {
+      codReconciliations.removeWhere((r) => duplicateRecIds.contains(r.id));
+      for (final dupId in duplicateRecIds) {
+        await _sqliteDb.deleteRows(
+          'cod_reconciliations',
+          where: 'id = ?',
+          whereArgs: [dupId],
+        );
+      }
+    }
+
+    final compRegex = RegExp(r'Đã cộng (\d+)đ tiền bồi thường');
+    for (final mer in merchantApplicants) {
+      _syncMerchantCodReconciliation(mer);
+      final rec = codReconciliations
+          .where((r) => r.merchantId == mer.id)
+          .firstOrNull;
+      if (rec == null) continue;
+      final merStoreLower = mer.storeName.trim().toLowerCase();
+      final merWithdrawals = withdrawalRequests
+          .where(
+            (w) =>
+                w.ownerRole.contains('Cửa hàng') &&
+                w.status != 'Từ chối' &&
+                ((w.ownerId.isNotEmpty && w.ownerId == mer.id) ||
+                    (w.ownerId.isEmpty &&
+                        w.ownerName.trim().toLowerCase() == merStoreLower)),
+          )
+          .fold<double>(0.0, (s, w) => s + w.amount);
+      final merOrderCodes = orders
+          .where((o) => o.customerName.trim().toLowerCase() == merStoreLower)
+          .map((o) => o.trackingCode)
+          .toSet();
+      double shopCompensations = 0.0;
+      for (final c in complaints) {
+        if (merOrderCodes.contains(c.orderId) ||
+            c.customerName.trim().toLowerCase() == merStoreLower) {
+          for (final rep in c.replies) {
+            final match = compRegex.firstMatch(rep);
+            if (match != null) {
+              shopCompensations += double.tryParse(match.group(1)!) ?? 0.0;
+            }
+          }
+        }
+      }
+      final expectedBalance =
+          (rec.netPayoutAmount + shopCompensations - merWithdrawals)
+              .clamp(0.0, double.infinity);
+      if ((mer.codBalance - expectedBalance).abs() > 0.5) {
+        mer.codBalance = expectedBalance;
+        await _sqliteDb.updateRows(
+          'merchants',
+          {'cod_balance': mer.codBalance},
+          where: 'id = ?',
+          whereArgs: [mer.id],
+        );
+      }
+    }
+    if (merchantApplicants.isNotEmpty) {
+      merchantCodBalance =
+          (activeMerchantRecord ?? merchantApplicants.first).codBalance;
+    }
+
+    final persistedLogs = await _sqliteDb.getEntityRecords('system_audit_logs');
+    if (persistedLogs.isNotEmpty) {
+      systemAuditLogs
+        ..clear()
+        ..addAll(persistedLogs.take(80));
+    } else if (systemAuditLogs.isEmpty) {
+      systemAuditLogs.add({
+        'action': 'SYSTEM_DATABASE_READY',
+        'actor': 'SQLite Engine',
+        'role': 'SYSTEM',
+        'summary':
+            '{"users":${users.length},"orders":${orders.length},"drivers":${drivers.length}}',
+        'timestamp': DateTime.now().toIso8601String(),
+      });
+    }
+
     await loadAuthProviderConfigsFromDatabase();
+    final activeSessionUser = activeAuthenticatedUser;
+    if (activeSessionUser != null) {
+      final refreshed = users
+              .where((u) => u.id == activeSessionUser.id && u.phone == activeSessionUser.phone)
+              .firstOrNull ??
+          findUserByPhone(activeSessionUser.phone);
+      if (refreshed != null) {
+        applyAuthenticatedUserSession(refreshed);
+      } else {
+        clearAuthenticatedSession();
+        customerFullName = customerPhone = customerEmail = customerDefaultAddress = '';
+      }
+    }
   }
 }

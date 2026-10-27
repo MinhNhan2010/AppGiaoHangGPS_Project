@@ -14,9 +14,25 @@ class KalmanGpsFilter {
     required double accuracyMeters,
     required int timestampMs,
   }) {
-    final effectiveAccuracy = accuracyMeters < 1.0 ? 1.0 : accuracyMeters;
+    if (!rawPoint.latitude.isFinite || !rawPoint.longitude.isFinite) {
+      if (_variance >= 0.0 && _lat.isFinite && _lng.isFinite) {
+        return GeoPoint(latitude: _lat, longitude: _lng);
+      }
+      throw ArgumentError.value(
+        rawPoint,
+        'rawPoint',
+        'Invalid non-finite GeoPoint',
+      );
+    }
 
-    if (_variance < 0.0) {
+    final effectiveAccuracy = (!accuracyMeters.isFinite || accuracyMeters < 1.0)
+        ? 1.0
+        : accuracyMeters.clamp(1.0, 5000.0);
+
+    if (_variance < 0.0 ||
+        !_variance.isFinite ||
+        !_lat.isFinite ||
+        !_lng.isFinite) {
       _timestampMs = timestampMs;
       _lat = rawPoint.latitude;
       _lng = rawPoint.longitude;
@@ -25,10 +41,19 @@ class KalmanGpsFilter {
     }
 
     final timeDeltaMs = timestampMs - _timestampMs;
+    if (timeDeltaMs > 60000) {
+      _timestampMs = timestampMs;
+      _lat = rawPoint.latitude;
+      _lng = rawPoint.longitude;
+      _variance = effectiveAccuracy * effectiveAccuracy;
+      return rawPoint;
+    }
     if (timeDeltaMs > 0) {
       _variance += (timeDeltaMs / 1000.0) *
           processNoiseMetersPerSec *
           processNoiseMetersPerSec;
+      _timestampMs = timestampMs;
+    } else if (timeDeltaMs < 0) {
       _timestampMs = timestampMs;
     }
 

@@ -51,43 +51,65 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                     final focusedSaved = mySavedAddresses.isNotEmpty
                         ? mySavedAddresses[safeAddrIdx]
                         : null;
-                    final pinPos = focusedSaved != null
-                        ? focusedSaved.location
-                        : (_store.activeAuthenticatedUser?.defaultLocation ??
-                            _store.activeDriverLocation);
-                    final pinAddress = focusedSaved != null
-                        ? focusedSaved.fullAddress
-                        : (_store.customerDefaultAddress.isNotEmpty
-                            ? _store.customerDefaultAddress
-                            : 'Chưa thiết lập địa chỉ mặc định');
+                    final pinPos = _pinnedSavedAddressLocation ??
+                        (_store.liveDeviceLocation ??
+                            (focusedSaved != null
+                                ? focusedSaved.location
+                                : (_store.activeAuthenticatedUser
+                                        ?.defaultLocation ??
+                                    const GeoPoint(
+                                      latitude: 10.7769,
+                                      longitude: 106.6953,
+                                    ))));
+                    final pinAddress = _newAddressCtrl.text.trim().isNotEmpty &&
+                            _pinnedSavedAddressLocation != null
+                        ? _newAddressCtrl.text.trim()
+                        : (_store.liveDeviceLocation != null &&
+                                _store.liveDeviceAddress.trim().isNotEmpty
+                            ? 'GPS Thiết bị: ${_store.liveDeviceAddress.trim()}'
+                            : (focusedSaved != null
+                                ? focusedSaved.fullAddress
+                                : (_store.customerDefaultAddress.isNotEmpty
+                                    ? _store.customerDefaultAddress
+                                    : 'Chạm trực tiếp lên bản đồ để ghim địa chỉ mới')));
                     return Container(
                       decoration: BoxDecoration(
                         border: Border.all(color: const Color(0xFF15131E)),
                       ),
                       clipBehavior: Clip.antiAlias,
                       child: Map3dPerspectiveWidget(
-                        height: 175,
+                        height: 440,
                         mode: MapViewMode.customerPreview,
                         is3dMode: _store.isMap3dEnabled,
                         speedKmh: 0,
                         onToggle3d: _store.toggleMap3d,
-                        routePoints: [
-                          pinPos,
-                          GeoPoint(
-                            latitude: pinPos.latitude + 0.0032,
-                            longitude: pinPos.longitude + 0.0040,
-                          ),
-                        ],
-                        pickupLabel: focusedSaved != null
-                            ? '📍 ${focusedSaved.label}'
-                            : '📍 Vị trí lưu',
-                        dropoffLabel: 'Khu vực lân cận',
-                        nextTurnInstruction: focusedSaved != null &&
-                                focusedSaved.fullAddress ==
-                                    _store.customerDefaultAddress
-                            ? 'Địa chỉ mặc định của bạn'
-                            : 'Đang xem trước địa chỉ đã lưu',
+                        singlePinPoint: _pinnedSavedAddressLocation != null ||
+                                focusedSaved != null || _store.liveDeviceLocation != null
+                            ? pinPos : null,
+                        singlePinLabel: _pinnedSavedAddressLocation != null
+                            ? 'Vị trí vừa ghim'
+                            : (focusedSaved != null
+                                ? focusedSaved.label
+                                : 'Vị trí lưu'),
+                        nextTurnInstruction: _pinnedSavedAddressLocation != null
+                            ? 'Đã ghim tọa độ (${pinPos.latitude.toStringAsFixed(5)}, ${pinPos.longitude.toStringAsFixed(5)})'
+                            : (focusedSaved != null &&
+                                    focusedSaved.fullAddress ==
+                                        _store.customerDefaultAddress
+                                ? 'Địa chỉ mặc định của bạn • Chạm bản đồ để đổi điểm ghim'
+                                : 'Chạm vào bản đồ để ghim tọa độ chính xác'),
                         roadName: pinAddress,
+                        onTapGeoPoint: (pt) async {
+                          _rebuildCustomerUi(() {
+                            _pinnedSavedAddressLocation = pt;
+                          });
+                          final resolvedAddr = await SmartDispatchEngine
+                              .reverseGeocodeCoordinate(pt);
+                          if (!mounted) return;
+                          _rebuildCustomerUi(() {
+                            _newAddressCtrl.text = resolvedAddr;
+                          });
+                        },
                       ),
                     );
                   },
@@ -104,30 +126,40 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                       ),
                     ),
                     onPressed: () async {
-                      final gpsMsg = await _store.acquireRealHardwareGps();
+                      final pos = await _store.acquireCustomerDeviceGps();
                       if (!mounted) return;
-                      final pos = _store.activeDriverLocation;
-                      final candidates = SmartDispatchEngine.searchAddressSuggestions('');
-                      GeocodedPlaceSuggestion? nearestPlace;
-                      double minDist = double.infinity;
-                      for (final c in candidates) {
-                        final d = GeoMath.distanceMeters(pos, c.location);
-                        if (d < minDist) {
-                          minDist = d;
-                          nearestPlace = c;
-                        }
+                      if (pos == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(_store.liveGpsStatusMessage),
+                            action: SnackBarAction(
+                              label: 'Mở Cài đặt',
+                              textColor: AppColors.acid,
+                              onPressed: () {
+                                unawaited(_store.openDeviceLocationSettings());
+                              },
+                            ),
+                          ),
+                        );
+                        return;
                       }
-                      final resolvedText = (nearestPlace != null && minDist <= 2500)
-                          ? '${nearestPlace.fullAddress} (${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)})'
-                          : 'Vị trí GPS thực tế (${pos.latitude.toStringAsFixed(5)}, ${pos.longitude.toStringAsFixed(5)})';
+                      final resolvedText = await SmartDispatchEngine
+                          .reverseGeocodeCoordinate(pos);
+                      if (!mounted) return;
                       _rebuildCustomerUi(() {
+                        _pinnedSavedAddressLocation = pos;
+                        _pinnedPickupLocation = pos;
                         _pickupCtrl.text = resolvedText;
                         _newAddressCtrl.text = resolvedText;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            '$gpsMsg • Đã gán địa chỉ: ${_pickupCtrl.text}',
+                            'Đã định vị GPS thiết bị: $resolvedText',
                           ),
                         ),
                       );
@@ -177,9 +209,10 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                           mySavedAddresses.length - 1,
                         );
                     return InkWell(
-                      onTap: () => _rebuildCustomerUi(
-                        () => _selectedSavedAddressIndex = idx,
-                      ),
+                      onTap: () => _rebuildCustomerUi(() {
+                        _selectedSavedAddressIndex = idx;
+                        _pinnedSavedAddressLocation = null;
+                      }),
                       child: Container(
                         margin: const EdgeInsets.only(bottom: 10),
                         padding: const EdgeInsets.all(12),
@@ -294,9 +327,13 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                                   ),
                                   onPressed: () {
                                     _pickupCtrl.text = addr.fullAddress;
-                                    _rebuildCustomerUi(
-                                      () => _selectedScreenIndex = 2,
-                                    );
+                                    _pinnedPickupLocation = addr.location;
+                                    _rebuildCustomerUi(() {
+                                      _osrmPreviewPoints = null;
+                                      _osrmDistMeters = null;
+                                      _osrmDurationSec = null;
+                                      _selectedScreenIndex = 2;
+                                    });
                                   },
                                   icon: const Icon(
                                     Icons.trip_origin_rounded,
@@ -317,9 +354,13 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                                   ),
                                   onPressed: () {
                                     _dropoffCtrl.text = addr.fullAddress;
-                                    _rebuildCustomerUi(
-                                      () => _selectedScreenIndex = 2,
-                                    );
+                                    _pinnedDropoffLocation = addr.location;
+                                    _rebuildCustomerUi(() {
+                                      _osrmPreviewPoints = null;
+                                      _osrmDistMeters = null;
+                                      _osrmDurationSec = null;
+                                      _selectedScreenIndex = 2;
+                                    });
                                   },
                                   icon: const Icon(
                                     Icons.location_on_outlined,
@@ -390,44 +431,41 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                   }).toList(),
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _newAddressCtrl,
-                        onChanged: (_) => _rebuildCustomerUi(() {}),
-                        decoration: InputDecoration(
-                          isDense: true,
-                          hintText: 'Nhập địa chỉ mới để lưu vào sổ...',
-                          prefixIcon: const Icon(Icons.place_outlined),
-                          suffixIcon: IconButton(
-                            tooltip: 'Tra cứu địa chỉ thực tế từ OpenStreetMap',
-                            onPressed: () async {
-                              final q = _newAddressCtrl.text.trim();
-                              if (q.isEmpty) return;
-                              final results = await SmartDispatchEngine
-                                  .fetchLiveNominatimSuggestions(q);
-                              if (!mounted) return;
-                              _rebuildCustomerUi(() {});
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    'Đã tìm thấy ${results.length} địa chỉ thực tế cho "$q"',
-                                  ),
+                LayoutBuilder(
+                  builder: (layoutCtx, constraints) {
+                    final addressField = TextField(
+                      controller: _newAddressCtrl,
+                      onChanged: (_) => _rebuildCustomerUi(() {}),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: 'Nhập địa chỉ mới để lưu vào sổ...',
+                        prefixIcon: const Icon(Icons.place_outlined),
+                        suffixIcon: IconButton(
+                          tooltip: 'Tra cứu địa chỉ thực tế từ OpenStreetMap',
+                          onPressed: () async {
+                            final q = _newAddressCtrl.text.trim();
+                            if (q.isEmpty) return;
+                            final results = await SmartDispatchEngine
+                                .fetchLiveNominatimSuggestions(q);
+                            if (!mounted) return;
+                            _rebuildCustomerUi(() {});
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Đã tìm thấy ${results.length} địa chỉ thực tế cho "$q"',
                                 ),
-                              );
-                            },
-                            icon: const Icon(
-                              Icons.travel_explore_rounded,
-                              color: Color(0xFF5B33E6),
-                              size: 18,
-                            ),
+                              ),
+                            );
+                          },
+                          icon: const Icon(
+                            Icons.travel_explore_rounded,
+                            color: Color(0xFF5B33E6),
+                            size: 18,
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    ElevatedButton.icon(
+                    );
+                    final addBtn = ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFFF5E83),
                         foregroundColor: Colors.white,
@@ -444,7 +482,9 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                         _store.addCustomerAddress(
                           _selectedAddressTag,
                           _newAddressCtrl.text.trim(),
+                          customLocation: _pinnedSavedAddressLocation,
                         );
+                        _pinnedSavedAddressLocation = null;
                         _newAddressCtrl.clear();
                       },
                       icon: const Icon(Icons.add, size: 18),
@@ -452,8 +492,25 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                         'Thêm địa chỉ',
                         style: TextStyle(fontWeight: FontWeight.w800),
                       ),
-                    ),
-                  ],
+                    );
+                    if (constraints.maxWidth < 520) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          addressField,
+                          const SizedBox(height: 8),
+                          addBtn,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: addressField),
+                        const SizedBox(width: 10),
+                        addBtn,
+                      ],
+                    );
+                  },
                 ),
                 if (_newAddressCtrl.text.trim().isNotEmpty) ...[
                   const SizedBox(height: 6),
@@ -474,9 +531,10 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
                           place.title,
                           style: const TextStyle(fontSize: 11),
                         ),
-                        onPressed: () => _rebuildCustomerUi(
-                          () => _newAddressCtrl.text = place.fullAddress,
-                        ),
+                        onPressed: () => _rebuildCustomerUi(() {
+                          _newAddressCtrl.text = place.fullAddress;
+                          _pinnedSavedAddressLocation = place.location;
+                        }),
                       );
                     }).toList(),
                   ),
@@ -505,11 +563,15 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
       );
       return;
     }
-    if (matched.status != 'Đang hoạt động') {
+    if (!matched.isUsable) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           backgroundColor: AppColors.danger,
-          content: Text('Mã "$cleanCode" hiện đang tạm ngưng áp dụng.'),
+          content: Text(
+            matched.isExpired
+                ? 'Mã "$cleanCode" đã hết hạn sử dụng (${matched.expiryDate}).'
+                : 'Mã "$cleanCode" hiện đang tạm ngưng áp dụng.',
+          ),
         ),
       );
       return;
@@ -533,213 +595,78 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
     );
   }
 
-  /// UC11: Mã giảm giá / Khuyến mãi (Khớp 100% anh_sua_lai/uc11_khuyen_mai.jpg)
-  Widget _buildDedicatedVoucherUc11View() {
-    return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            color: const Color(0xFF5B33E6),
-            child: const Row(
-              children: [
-                Icon(
-                  Icons.local_offer_rounded,
-                  color: Colors.white,
-                  size: 20,
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Kho mã ưu đãi & Khuyến mãi',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ],
+  Widget _buildVoucherChoices({required ValueChanged<String> onSelected}) {
+    final available = _store.vouchers.where((v) => v.isUsable).toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _voucherCtrl,
+          decoration: InputDecoration(
+            labelText: 'Mã ưu đãi',
+            prefixIcon: const Icon(Icons.local_offer_outlined),
+            suffixIcon: IconButton(
+              tooltip: 'Áp dụng',
+              icon: const Icon(Icons.check),
+              onPressed: () => onSelected(_voucherCtrl.text),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _voucherCtrl,
-                        decoration: const InputDecoration(
-                          hintText: 'Nhập mã giảm giá',
-                          prefixIcon: Icon(Icons.confirmation_number_outlined),
-                        ),
-                        onChanged: (_) => _rebuildCustomerUi(() {}),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      height: 48,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF5E83),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.all(Radius.zero),
-                          ),
-                        ),
-                        onPressed: () =>
-                            _applyVoucherAndProceed(context, _voucherCtrl.text),
-                        child: const Text(
-                          'Áp dụng',
-                          style: TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Voucher khả dụng',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                    color: Color(0xFF15131E),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ..._store.vouchers.map((v) {
-                  final isSelected =
-                      _voucherCtrl.text.trim().toUpperCase() == v.code;
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.all(Radius.zero),
-                      border: Border.all(
-                        color: isSelected
-                            ? const Color(0xFFFF5E83)
-                            : const Color(0xFF15131E),
-                        width: isSelected ? 2 : 1,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.04),
-                          blurRadius: 6,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 96,
-                          padding: const EdgeInsets.symmetric(
-                            vertical: 18,
-                            horizontal: 8,
-                          ),
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF5B33E6),
-                            borderRadius: BorderRadius.horizontal(
-                              left: Radius.circular(0),
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              const Icon(
-                                Icons.local_offer_rounded,
-                                color: Colors.white,
-                                size: 22,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                v.discountLabel,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 10,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  v.title.toUpperCase(),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 13,
-                                    color: Color(0xFF15131E),
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  'Mã: ${v.code} • Đơn tối thiểu: ${CurrencyFormatter.formatVnd(v.minOrderValue)}',
-                                  style: const TextStyle(
-                                    fontSize: 11.5,
-                                    color: Color(0xFF4A4754),
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'HSD: ${v.expiryDate}',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF4A4754),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.only(right: 12),
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFFF5E83),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.all(Radius.zero),
-                              ),
-                            ),
-                            onPressed: () =>
-                                _applyVoucherAndProceed(context, v.code),
-                            child: const Text(
-                              'Dùng ngay',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
+          onSubmitted: onSelected,
+        ),
+        const SizedBox(height: 12),
+        if (available.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Text('Chưa có ưu đãi khả dụng.'),
+          ),
+        ...available.map((voucher) => ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.confirmation_number_outlined),
+          title: Text(voucher.code),
+          subtitle: Text('${voucher.title}\nĐơn tối thiểu: ${CurrencyFormatter.formatVnd(voucher.minOrderValue)} • HSD: ${voucher.expiryDate}'),
+          trailing: IconButton(
+            tooltip: 'Chọn ưu đãi',
+            icon: const Icon(Icons.add_circle_outline),
+            onPressed: () => onSelected(voucher.code),
+          ),
+          onTap: () => onSelected(voucher.code),
+        )),
+      ],
+    );
+  }
+
+  Future<void> _showVoucherPicker() async {
+    final code = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Chọn ưu đãi'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: _buildVoucherChoices(
+              onSelected: (code) => Navigator.of(dialogContext).pop(code),
             ),
           ),
-        ],
+        ),
+        actions: [TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Đóng'),
+        )],
       ),
+    );
+    if (mounted && code != null) _applyVoucherAndProceed(context, code);
+  }
+
+  Widget _buildDedicatedVoucherUc11View() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Ưu đãi', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 16),
+        _buildVoucherChoices(
+          onSelected: (code) => _applyVoucherAndProceed(context, code),
+        ),
+      ],
     );
   }
 }

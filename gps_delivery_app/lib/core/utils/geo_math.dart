@@ -14,13 +14,17 @@ class GeoMath {
 
     final sinDLat = math.sin(dLat / 2);
     final sinDLon = math.sin(dLon / 2);
-    final h = sinDLat * sinDLat +
-        math.cos(lat1) * math.cos(lat2) * sinDLon * sinDLon;
-    final c = 2 * math.atan2(math.sqrt(h), math.sqrt(1 - h));
+    final h = (sinDLat * sinDLat +
+            math.cos(lat1) * math.cos(lat2) * sinDLon * sinDLon)
+        .clamp(0.0, 1.0);
+    final c = 2 * math.atan2(math.sqrt(h), math.sqrt(1.0 - h));
     return _earthRadiusMeters * c;
   }
 
   static double bearingDegrees(GeoPoint from, GeoPoint to) {
+    if (from.latitude == to.latitude && from.longitude == to.longitude) {
+      return 0.0;
+    }
     final lat1 = _degToRad(from.latitude);
     final lat2 = _degToRad(to.latitude);
     final dLon = _degToRad(to.longitude - from.longitude);
@@ -34,13 +38,20 @@ class GeoMath {
 
   /// Thuật toán Ray-Casting kiểm tra điểm nằm trong đa giác
   static bool isPointInPolygon(GeoPoint point, List<GeoPoint> polygon) {
-    if (polygon.length < 3) return false;
+    if (polygon.length < 3 ||
+        !point.latitude.isFinite ||
+        !point.longitude.isFinite) {
+      return false;
+    }
     bool inside = false;
     for (int i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
       final xi = polygon[i].longitude;
       final yi = polygon[i].latitude;
       final xj = polygon[j].longitude;
       final yj = polygon[j].latitude;
+      if (!xi.isFinite || !yi.isFinite || !xj.isFinite || !yj.isFinite) {
+        continue;
+      }
 
       final intersect = ((yi > point.latitude) != (yj > point.latitude)) &&
           (point.longitude <

@@ -1,5 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
 import '../config/env_config.dart';
@@ -52,65 +56,66 @@ class SmartDispatchEngine {
 
   static const List<int> radiusTiersMeters = [3000, 5000, 8000];
 
+  static const int _maxLiveCachedPlaces = 150;
   static final List<GeocodedPlaceSuggestion> _liveCachedPlaces = [];
   static List<GeoPoint>? _lastLiveOsrmPolyline;
 
-  static const List<GeocodedPlaceSuggestion> knownPlaces = [
-    GeocodedPlaceSuggestion(
-      title: '145 Phố Huế, Hai Bà Trưng',
-      fullAddress: '145 Phố Huế, Hai Bà Trưng, Hà Nội',
-      location: GeoPoint(latitude: 21.0145, longitude: 105.8512),
-    ),
-    GeocodedPlaceSuggestion(
-      title: '15 Ngõ 100 Lê Trọng Tấn',
-      fullAddress:
-          'Số 15, Ngõ 100, Đường Lê Trọng Tấn, Quận Thanh Xuân, Hà Nội',
-      location: GeoPoint(latitude: 20.9951, longitude: 105.8286),
-    ),
-    GeocodedPlaceSuggestion(
-      title: '123 Lê Lợi, Bến Nghé, Quận 1',
-      fullAddress: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
-      location: GeoPoint(latitude: 10.7731, longitude: 106.6983),
-    ),
-    GeocodedPlaceSuggestion(
-      title: 'Bitexco Financial Tower',
-      fullAddress: 'Bitexco Financial Tower, 45 Lê Lợi, P. Bến Nghé, Q.1, TP. HCM',
-      location: GeoPoint(latitude: 10.7716, longitude: 106.7044),
-    ),
-    GeocodedPlaceSuggestion(
-      title: '456 Nguyễn Huệ, Phú Nhuận',
-      fullAddress: '456 Đường Nguyễn Huệ, Quận Phú Nhuận, TP. HCM',
-      location: GeoPoint(latitude: 10.7992, longitude: 106.6805),
-    ),
-    GeocodedPlaceSuggestion(
-      title: '77 Võ Văn Tần, Quận 3',
-      fullAddress: '77 Võ Văn Tần, Phường 6, Quận 3, TP. HCM',
-      location: GeoPoint(latitude: 10.7761, longitude: 106.6894),
-    ),
-    GeocodedPlaceSuggestion(
-      title: '789 Điện Biên Phủ, Bình Thạnh',
-      fullAddress: '789 Điện Biên Phủ, Quận Bình Thạnh, TP. HCM',
-      location: GeoPoint(latitude: 10.7985, longitude: 106.7152),
-    ),
-  ];
+  static void _cachePlaceSuggestion(GeocodedPlaceSuggestion suggestion) {
+    _liveCachedPlaces.removeWhere(
+      (p) =>
+          p.fullAddress == suggestion.fullAddress ||
+          (GeoMath.distanceMeters(p.location, suggestion.location) < 8.0 &&
+              p.title == suggestion.title),
+    );
+    _liveCachedPlaces.insert(0, suggestion);
+    if (_liveCachedPlaces.length > _maxLiveCachedPlaces) {
+      _liveCachedPlaces.removeRange(
+        _maxLiveCachedPlaces,
+        _liveCachedPlaces.length,
+      );
+    }
+  }
 
-  static List<GeocodedPlaceSuggestion> get _allPlaces => [
-    ..._liveCachedPlaces,
-    ...knownPlaces,
-  ];
+  static List<GeocodedPlaceSuggestion> get _allPlaces => _liveCachedPlaces;
 
-  /// Tìm kiếm gợi ý địa chỉ cục bộ + bộ nhớ đệm Google Maps / Nominatim
+  static String _foldVietnamese(String input) {
+    const groups = <String, String>{
+      'a': 'àáạảãâầấậẩẫăằắặẳẵ',
+      'e': 'èéẹẻẽêềếệểễ',
+      'i': 'ìíịỉĩ',
+      'o': 'òóọỏõôồốộổỗơờớợởỡ',
+      'u': 'ùúụủũưừứựửữ',
+      'y': 'ỳýỵỷỹ',
+      'd': 'đ',
+    };
+    var out = input.trim().toLowerCase();
+    groups.forEach((ascii, chars) {
+      for (var i = 0; i < chars.length; i++) {
+        out = out.replaceAll(chars[i], ascii);
+      }
+    });
+    return out;
+  }
+
+  /// Tìm kiếm gợi ý địa chỉ cục bộ + bộ nhớ đệm Google Maps / Nominatim (hỗ trợ cả có dấu & không dấu)
   static List<GeocodedPlaceSuggestion> searchAddressSuggestions(String query) {
     final normalized = query.trim().toLowerCase();
     if (normalized.isEmpty) return _allPlaces.take(4).toList();
-    final matches = _allPlaces
-        .where(
-          (p) =>
-              p.fullAddress.toLowerCase().contains(normalized) ||
-              p.title.toLowerCase().contains(normalized),
-        )
+    final foldedQuery = _foldVietnamese(normalized);
+    final tokens = foldedQuery
+        .split(RegExp(r'[\s,]+'))
+        .where((t) => t.isNotEmpty)
         .toList();
-    return matches.isEmpty ? _allPlaces.take(3).toList() : matches;
+    final matches = _allPlaces.where((p) {
+      final rawHay = '${p.title} ${p.fullAddress}'.toLowerCase();
+      if (rawHay.contains(normalized)) return true;
+      final foldedHay = _foldVietnamese(rawHay);
+      if (foldedHay.contains(foldedQuery)) return true;
+      return tokens.isNotEmpty && tokens.every(foldedHay.contains);
+    }).toList();
+    if (matches.isNotEmpty) return matches;
+    if (_liveCachedPlaces.isNotEmpty) return _liveCachedPlaces.take(5).toList();
+    return const <GeocodedPlaceSuggestion>[];
   }
 
   /// Truy vấn trực tiếp Google Maps Geocoding API + OpenStreetMap Nominatim toàn quốc (`countrycodes=vn`)
@@ -120,8 +125,7 @@ class SmartDispatchEngine {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return searchAddressSuggestions(trimmed);
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 4);
+    final client = http.Client();
     try {
       if (EnvConfig.isGoogleMapsKeyConfigured) {
         final gUri = Uri.parse(EnvConfig.googleMapsGeocodeEndpoint).replace(
@@ -132,11 +136,11 @@ class SmartDispatchEngine {
             'key': EnvConfig.googleMapsApiKey,
           },
         );
-        final gReq = await client.getUrl(gUri);
-        final gResp = await gReq.close().timeout(const Duration(seconds: 4));
+        final gResp = await client
+            .get(gUri)
+            .timeout(const Duration(seconds: 4));
         if (gResp.statusCode == 200) {
-          final gBody = await gResp.transform(utf8.decoder).join();
-          final gDecoded = jsonDecode(gBody);
+          final gDecoded = jsonDecode(utf8.decode(gResp.bodyBytes));
           if (gDecoded is Map<String, dynamic> &&
               gDecoded['status'] == 'OK' &&
               gDecoded['results'] is List) {
@@ -157,11 +161,7 @@ class SmartDispatchEngine {
                     location: GeoPoint(latitude: lat, longitude: lng),
                   );
                   gResults.add(suggestion);
-                  if (!_liveCachedPlaces.any(
-                    (p) => p.fullAddress == suggestion.fullAddress,
-                  )) {
-                    _liveCachedPlaces.insert(0, suggestion);
-                  }
+                  _cachePlaceSuggestion(suggestion);
                 }
               }
             }
@@ -178,15 +178,18 @@ class SmartDispatchEngine {
           'q': trimmed,
         },
       );
-      final req = await client.getUrl(uri);
-      req.headers.set(
-        HttpHeaders.userAgentHeader,
-        'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
-      );
-      final resp = await req.close().timeout(const Duration(seconds: 4));
+      final resp = await client
+          .get(
+            uri,
+            headers: kIsWeb
+                ? const <String, String>{}
+                : const <String, String>{
+                    'User-Agent': 'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
+                  },
+          )
+          .timeout(const Duration(seconds: 4));
       if (resp.statusCode == 200) {
-        final body = await resp.transform(utf8.decoder).join();
-        final decoded = jsonDecode(body);
+        final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
         if (decoded is List && decoded.isNotEmpty) {
           final results = <GeocodedPlaceSuggestion>[];
           for (final item in decoded) {
@@ -203,12 +206,7 @@ class SmartDispatchEngine {
                   location: GeoPoint(latitude: lat, longitude: lon),
                 );
                 results.add(suggestion);
-                final exists = _liveCachedPlaces.any(
-                  (p) => p.fullAddress == suggestion.fullAddress,
-                );
-                if (!exists) {
-                  _liveCachedPlaces.insert(0, suggestion);
-                }
+                _cachePlaceSuggestion(suggestion);
               }
             }
           }
@@ -218,7 +216,7 @@ class SmartDispatchEngine {
     } catch (_) {
       // Tự động fallback về danh mục nội bộ khi không có kết nối mạng hoặc trong môi trường test
     } finally {
-      client.close(force: true);
+      client.close();
     }
     return searchAddressSuggestions(trimmed);
   }
@@ -240,6 +238,7 @@ class SmartDispatchEngine {
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20 && index < len);
+      if (b >= 0x20) break;
       final dlat = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
       lat += dlat;
 
@@ -251,6 +250,7 @@ class SmartDispatchEngine {
         result |= (b & 0x1f) << shift;
         shift += 5;
       } while (b >= 0x20 && index < len);
+      if (b >= 0x20) break;
       final dlng = (result & 1) != 0 ? ~(result >> 1) : (result >> 1);
       lng += dlng;
 
@@ -264,8 +264,7 @@ class SmartDispatchEngine {
     GeoPoint start,
     GeoPoint end,
   ) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 4);
+    final client = http.Client();
     try {
       if (EnvConfig.isGoogleMapsKeyConfigured) {
         final gUri = Uri.parse(EnvConfig.googleMapsDirectionsEndpoint).replace(
@@ -277,40 +276,50 @@ class SmartDispatchEngine {
             'key': EnvConfig.googleMapsApiKey,
           },
         );
-        final gReq = await client.getUrl(gUri);
-        final gResp = await gReq.close().timeout(const Duration(seconds: 4));
+        final gResp = await client
+            .get(gUri)
+            .timeout(const Duration(seconds: 4));
         if (gResp.statusCode == 200) {
-          final gBody = await gResp.transform(utf8.decoder).join();
-          final gDecoded = jsonDecode(gBody);
+          final gDecoded = jsonDecode(utf8.decode(gResp.bodyBytes));
           if (gDecoded is Map<String, dynamic> &&
               gDecoded['status'] == 'OK' &&
               gDecoded['routes'] is List &&
               (gDecoded['routes'] as List).isNotEmpty) {
-            final route =
-                (gDecoded['routes'] as List).first as Map<String, dynamic>;
-            final legs = route['legs'] as List?;
-            final firstLeg = legs != null && legs.isNotEmpty
-                ? legs.first as Map<String, dynamic>
-                : null;
-            final dist =
-                ((firstLeg?['distance']?['value'] as num?)?.round() ?? 1200)
-                    .clamp(300, 100000);
-            final dur =
-                ((firstLeg?['duration']?['value'] as num?)?.round() ?? 300)
-                    .clamp(60, 36000);
-            final overview =
-                route['overview_polyline'] as Map<String, dynamic>?;
-            final encodedPoints = '${overview?['points'] ?? ''}'.trim();
-            if (encodedPoints.isNotEmpty) {
-              final pts = decodeGoogleEncodedPolyline(encodedPoints);
-              if (pts.length >= 2) {
-                _lastLiveOsrmPolyline = pts;
-                return OsrmRouteResult(
-                  distanceMeters: dist,
-                  durationSeconds: dur,
-                  polylinePoints: pts,
-                  isLiveOsrm: true,
-                );
+            final rawFirstRoute = (gDecoded['routes'] as List).first;
+            if (rawFirstRoute is Map) {
+              final route = Map<String, dynamic>.from(rawFirstRoute);
+              final legs = route['legs'];
+              final firstLeg =
+                  (legs is List && legs.isNotEmpty && legs.first is Map)
+                  ? Map<String, dynamic>.from(legs.first as Map)
+                  : null;
+              final distMap = firstLeg?['distance'];
+              final durMap = firstLeg?['duration'];
+              final distVal = distMap is Map ? distMap['value'] : null;
+              final durVal = durMap is Map ? durMap['value'] : null;
+              final dist = ((distVal is num ? distVal.round() : 1200)).clamp(
+                50,
+                3000000,
+              );
+              final dur = ((durVal is num ? durVal.round() : 300)).clamp(
+                30,
+                259200,
+              );
+              final overview = route['overview_polyline'];
+              final encodedPoints = overview is Map
+                  ? '${overview['points'] ?? ''}'.trim()
+                  : '';
+              if (encodedPoints.isNotEmpty) {
+                final pts = decodeGoogleEncodedPolyline(encodedPoints);
+                if (pts.length >= 2) {
+                  _lastLiveOsrmPolyline = pts;
+                  return OsrmRouteResult(
+                    distanceMeters: dist,
+                    durationSeconds: dur,
+                    polylinePoints: pts,
+                    isLiveOsrm: true,
+                  );
+                }
               }
             }
           }
@@ -319,29 +328,38 @@ class SmartDispatchEngine {
 
       final url =
           '${EnvConfig.osrmRouteEndpoint}/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
-      final req = await client.getUrl(Uri.parse(url));
-      req.headers.set(
-        HttpHeaders.userAgentHeader,
-        'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
-      );
-      final resp = await req.close().timeout(const Duration(seconds: 4));
+      final resp = await client
+          .get(
+            Uri.parse(url),
+            headers: kIsWeb
+                ? const <String, String>{}
+                : const <String, String>{
+                    'User-Agent': 'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
+                  },
+          )
+          .timeout(const Duration(seconds: 4));
       if (resp.statusCode == 200) {
-        final body = await resp.transform(utf8.decoder).join();
-        final decoded = jsonDecode(body);
+        final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
         if (decoded is Map<String, dynamic>) {
           final routes = decoded['routes'];
-          if (routes is List && routes.isNotEmpty) {
-            final route = routes.first as Map<String, dynamic>;
-            final dist = ((route['distance'] as num?)?.round() ?? 1200)
-                .clamp(300, 100000);
-            final dur = ((route['duration'] as num?)?.round() ?? 300)
-                .clamp(60, 36000);
-            final geom = route['geometry'] as Map<String, dynamic>?;
-            final coords = geom?['coordinates'];
+          if (routes is List && routes.isNotEmpty && routes.first is Map) {
+            final route = Map<String, dynamic>.from(routes.first as Map);
+            final rawDist = route['distance'];
+            final rawDur = route['duration'];
+            final dist = ((rawDist is num ? rawDist.round() : 1200)).clamp(
+              50,
+              3000000,
+            );
+            final dur = ((rawDur is num ? rawDur.round() : 300)).clamp(
+              30,
+              259200,
+            );
+            final geom = route['geometry'];
+            final coords = geom is Map ? geom['coordinates'] : null;
             final pts = <GeoPoint>[];
             if (coords is List) {
               for (final c in coords) {
-                if (c is List && c.length >= 2) {
+                if (c is List && c.length >= 2 && c[0] is num && c[1] is num) {
                   final lon = (c[0] as num).toDouble();
                   final lat = (c[1] as num).toDouble();
                   pts.add(GeoPoint(latitude: lat, longitude: lon));
@@ -363,11 +381,13 @@ class SmartDispatchEngine {
     } catch (_) {
       // Fallback sang nội suy Haversine khi offline
     } finally {
-      client.close(force: true);
+      client.close();
     }
 
-    final fallbackDist =
-        (GeoMath.distanceMeters(start, end) * 1.28).round().clamp(800, 50000);
+    final rawMeters = GeoMath.distanceMeters(start, end);
+    final fallbackDist = rawMeters < 1.0
+        ? 0
+        : (rawMeters * 1.28).round().clamp(50, 3000000);
     final fallbackDur = ((fallbackDist / 1000.0) * 185).round();
     final fallbackPts = generateRoutePolyline(start, end);
     return OsrmRouteResult(
@@ -378,19 +398,128 @@ class SmartDispatchEngine {
     );
   }
 
+  /// Giải mã ngược tọa độ GPS (Reverse Geocoding) sang địa chỉ đường phố thực tế qua Google Maps / OpenStreetMap Nominatim
+  static Future<String> reverseGeocodeCoordinate(GeoPoint point) async {
+    final client = http.Client();
+    try {
+      if (EnvConfig.isGoogleMapsKeyConfigured) {
+        final gUri = Uri.parse(EnvConfig.googleMapsGeocodeEndpoint).replace(
+          queryParameters: {
+            'latlng': '${point.latitude},${point.longitude}',
+            'language': 'vi',
+            'key': EnvConfig.googleMapsApiKey,
+          },
+        );
+        final gResp = await client
+            .get(gUri)
+            .timeout(const Duration(seconds: 4));
+        if (gResp.statusCode == 200) {
+          final decoded = jsonDecode(utf8.decode(gResp.bodyBytes));
+          if (decoded is Map<String, dynamic> &&
+              decoded['status'] == 'OK' &&
+              decoded['results'] is List &&
+              (decoded['results'] as List).isNotEmpty) {
+            final first = (decoded['results'] as List).first;
+            if (first is Map<String, dynamic>) {
+              final formatted = '${first['formatted_address'] ?? ''}'.trim();
+              if (formatted.isNotEmpty) {
+                final parts = formatted.split(',');
+                final shortTitle = parts.take(2).join(',').trim();
+                _cachePlaceSuggestion(
+                  GeocodedPlaceSuggestion(
+                    title: shortTitle.isEmpty ? formatted : shortTitle,
+                    fullAddress: formatted,
+                    location: point,
+                  ),
+                );
+                return formatted;
+              }
+            }
+          }
+        }
+      }
+
+      final uri = Uri.parse('https://nominatim.openstreetmap.org/reverse')
+          .replace(
+            queryParameters: {
+              'format': 'jsonv2',
+              'lat': point.latitude.toStringAsFixed(6),
+              'lon': point.longitude.toStringAsFixed(6),
+              'accept-language': 'vi',
+            },
+          );
+      final resp = await client
+          .get(
+            uri,
+            headers: kIsWeb
+                ? const <String, String>{}
+                : const <String, String>{
+                    'User-Agent': 'GpsDeliveryApp/1.0 (Flutter Multiplatform)',
+                  },
+          )
+          .timeout(const Duration(seconds: 4));
+      if (resp.statusCode == 200) {
+        final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+        if (decoded is Map<String, dynamic>) {
+          final displayName = '${decoded['display_name'] ?? ''}'.trim();
+          if (displayName.isNotEmpty) {
+            final parts = displayName.split(',');
+            final shortTitle = parts.take(2).join(',').trim();
+            _cachePlaceSuggestion(
+              GeocodedPlaceSuggestion(
+                title: shortTitle.isEmpty ? displayName : shortTitle,
+                fullAddress: displayName,
+                location: point,
+              ),
+            );
+            return displayName;
+          }
+        }
+      }
+    } catch (_) {
+      // Fallback sang địa điểm đã xác thực gần nhất khi mất kết nối mạng hoặc trong môi trường test
+    } finally {
+      client.close();
+    }
+
+    GeocodedPlaceSuggestion? nearest;
+    var bestMeters = double.infinity;
+    for (final p in _allPlaces) {
+      final d = GeoMath.distanceMeters(point, p.location);
+      if (d < bestMeters) {
+        bestMeters = d;
+        nearest = p;
+      }
+    }
+    if (nearest != null && bestMeters <= 900) {
+      return nearest.fullAddress;
+    }
+    return 'Tọa độ (${point.latitude.toStringAsFixed(5)}, ${point.longitude.toStringAsFixed(5)})';
+  }
+
   /// Giải mã địa chỉ sang tọa độ GPS thực tế
   static GeoPoint resolveAddressToCoordinate(
     String address, {
     required GeoPoint fallback,
   }) {
+    return tryResolveAddressToCoordinate(address) ?? fallback;
+  }
+
+  static GeoPoint? tryResolveAddressToCoordinate(String address) {
     final normalized = address.trim().toLowerCase();
+    if (normalized.isEmpty) return null;
+    final folded = _foldVietnamese(normalized);
     for (final p in _allPlaces) {
-      if (normalized.contains(p.title.toLowerCase()) ||
-          p.fullAddress.toLowerCase() == normalized) {
+      final titleLow = p.title.toLowerCase();
+      final fullLow = p.fullAddress.toLowerCase();
+      if (normalized.contains(titleLow) ||
+          fullLow == normalized ||
+          folded.contains(_foldVietnamese(titleLow)) ||
+          _foldVietnamese(fullLow) == folded) {
         return p.location;
       }
     }
-    return fallback;
+    return null;
   }
 
   /// Xếp hạng ứng viên tài xế theo bán kính mở rộng (3km -> 5km -> 8km)
@@ -403,6 +532,7 @@ class SmartDispatchEngine {
     final eligible = drivers.where((d) {
       return d.isOnline &&
           d.approvalStatus == 'Đã duyệt' &&
+          d.walletBalance >= 200000 &&
           !excludedDriverIds.contains(d.id);
     }).toList();
 
@@ -414,7 +544,10 @@ class SmartDispatchEngine {
           final distScore = (1.0 - (dist / radiusTier)).clamp(0.0, 1.0);
           final ratingScore = (d.rating / 5.0).clamp(0.0, 1.0);
           final acceptanceRate =
-              (0.85 + (d.totalTrips % 15) * 0.01).clamp(0.0, 1.0);
+              (d.acceptanceRate > 1.0
+                      ? d.acceptanceRate / 100.0
+                      : d.acceptanceRate)
+                  .clamp(0.0, 1.0);
           final weighted =
               0.5 * distScore + 0.3 * ratingScore + 0.2 * acceptanceRate;
 
@@ -439,15 +572,17 @@ class SmartDispatchEngine {
       final dist = GeoMath.distanceMeters(pickupLocation, d.location);
       final distScore = (1.0 / (1.0 + dist / 5000.0)).clamp(0.0, 1.0);
       final ratingScore = (d.rating / 5.0).clamp(0.0, 1.0);
-      final score = 0.5 * distScore + 0.3 * ratingScore + 0.2 * 0.95;
+      final acceptanceRate =
+          (d.acceptanceRate > 1.0 ? d.acceptanceRate / 100.0 : d.acceptanceRate)
+              .clamp(0.0, 1.0);
+      final score = 0.5 * distScore + 0.3 * ratingScore + 0.2 * acceptanceRate;
       return DispatchCandidateScore(
         driver: d,
         distanceMeters: dist,
         searchRadiusTierMeters: 8000,
         totalScore: score,
       );
-    }).toList()
-      ..sort((a, b) => b.totalScore.compareTo(a.totalScore));
+    }).toList()..sort((a, b) => b.totalScore.compareTo(a.totalScore));
 
     return allRanked;
   }
@@ -460,16 +595,19 @@ class SmartDispatchEngine {
     GeoPoint end, {
     int segments = 10,
   }) {
+    final safeSegments = math.max(1, segments);
+    final dLat = end.latitude - start.latitude;
+    final dLng = end.longitude - start.longitude;
+    final chord = math.sqrt(dLat * dLat + dLng * dLng);
+    final maxBend = math.min(0.0035, chord * 0.18);
     final points = <GeoPoint>[];
-    for (var i = 0; i <= segments; i++) {
-      final t = i / segments;
-      // Tạo độ cong nhẹ mô phỏng khúc cua đường phố đô thị
-      final bend = (t * (1.0 - t)) * 0.0035;
+    for (var i = 0; i <= safeSegments; i++) {
+      final t = i / safeSegments;
+      final bend = (t * (1.0 - t)) * maxBend;
       points.add(
         GeoPoint(
-          latitude: start.latitude + (end.latitude - start.latitude) * t + bend,
-          longitude:
-              start.longitude + (end.longitude - start.longitude) * t - bend,
+          latitude: start.latitude + dLat * t + bend,
+          longitude: start.longitude + dLng * t - bend,
         ),
       );
     }

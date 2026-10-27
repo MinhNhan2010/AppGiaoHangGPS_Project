@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import '../../core/gps/gps_integrity_validator.dart';
+import 'package:flutter/services.dart';
+
 import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/currency_formatter.dart';
@@ -8,6 +10,7 @@ import '../../core/utils/security_and_barcode_utils.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
 import '../../domain/enums/order_status.dart';
+import '../../domain/enums/service_type.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
@@ -31,23 +34,23 @@ class DriverSubsystemEntry extends StatefulWidget {
 
 class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   final AppStateStore _store = AppStateStore.instance;
-  int _selectedScreenIndex = 1; // Mặc định: Trang chủ Tài xế Online/Offline (UC14)
+  int _selectedScreenIndex =
+      1; // Mặc định: Trang chủ Tài xế Online/Offline (UC14)
 
   // Hồ sơ đăng ký tài xế (UC13)
-  final TextEditingController _drvNameCtrl =
-      TextEditingController(text: 'Nguyễn Văn Nam');
-  final TextEditingController _drvPhoneCtrl =
-      TextEditingController(text: '0987654321');
-  final TextEditingController _drvCitizenCtrl =
-      TextEditingController(text: '079095001234');
-  final TextEditingController _drvPlateCtrl =
-      TextEditingController(text: '59X1-123.45');
+  final TextEditingController _drvNameCtrl = TextEditingController();
+  final TextEditingController _drvPhoneCtrl = TextEditingController();
+  final TextEditingController _drvCitizenCtrl = TextEditingController();
+  final TextEditingController _drvPlateCtrl = TextEditingController();
+  final TextEditingController _drvBankNameCtrl = TextEditingController();
+  final TextEditingController _drvBankAccCtrl = TextEditingController();
   String _vehicleType = 'Xe máy';
 
   // Countdown 28s & Smart Dispatch (UC15)
   int _countdownSeconds = 28;
   Timer? _dispatchCountdownTimer;
   final Set<String> _rejectedDriverIds = {};
+  final Set<String> _rejectedOrderCodes = {};
 
   // POD & OTP 4 số (UC17) & Chat hai chiều với Khách (UC16)
   final TextEditingController _podOtpCtrl = TextEditingController();
@@ -59,9 +62,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   String? _lastSyncedDriverProfileKey;
 
   // Rút tiền Ví tài xế (UC18)
-  final TextEditingController _withdrawAmountCtrl =
-      TextEditingController(text: '1000000');
-  String _selectedBank = 'Vietcombank - 007100****889';
+  final TextEditingController _withdrawAmountCtrl = TextEditingController();
+  String _selectedBank = '';
   String _incomePeriod = 'Tuần';
 
   // Lịch sử giao hàng (UC19)
@@ -70,22 +72,22 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   // Báo cáo sự cố (UC20)
   String _incidentType = 'Hàng bị hỏng';
   final TextEditingController _incidentNoteCtrl = TextEditingController();
-  final Set<String> _attachedKycDocs = {'CCCD mặt trước', 'Giấy phép lái xe'};
-  int _attachedIncidentPhotos = 1;
+  final Set<String> _attachedKycDocs = <String>{};
+  final List<String> _driverIncidentEvidenceFiles = <String>[];
 
   // Thống kê hiệu suất (UC21)
   String _statsPeriod = 'Tuần này';
 
   static const List<String> _screenTitles = [
-    'Hồ sơ & Pháp lý Tài xế',
+    'Hồ sơ & hiệu suất',
     'Trang chủ Tài xế & Trạng thái Hoạt động',
     'ĐƠN HÀNG MỚI! (28s)',
-    'Điều hướng GPS Turn-by-Turn',
+    'Chuyến đang giao',
     'Cập nhật tiến độ vận đơn',
     'Xác nhận Giao hàng POD & Mã OTP',
     'Thu nhập và rút tiền',
     'Báo cáo sự cố trên đường',
-    'Thống kê hoạt động & Hồ sơ',
+    'Hồ sơ & hiệu suất',
     'Lịch sử giao hàng',
   ];
 
@@ -93,29 +95,134 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   void initState() {
     super.initState();
     if (widget.forcedScreenIndex != null) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(
+        0,
+        _screenTitles.length - 1,
+      );
     }
     _syncDriverControllersFromDb();
+    _syncDispatchCountdownTimer();
     _store.addListener(_onStoreChanged);
+    if (!_isAutomatedTestBinding) {
+      unawaited(
+        _store.startRealTimeDeviceGpsTracking(
+          syncDriverLocation: true,
+          forcePromptPermission: false,
+        ),
+      );
+    }
+  }
+
+  bool get _isAutomatedTestBinding =>
+      WidgetsBinding.instance.runtimeType.toString().contains('Test');
+
+  bool _isSearchingOrderCompatibleWithActiveDriver(ActiveOrderRecord o) {
+    if (o.status != OrderStatus.searching ||
+        _rejectedOrderCodes.contains(o.trackingCode)) {
+      return false;
+    }
+    if (o.serviceType == DeliveryServiceType.truck) {
+      final vLower = (_store.activeDriverRecord?.vehicleType ?? _vehicleType)
+          .toLowerCase();
+      if (!vLower.contains('tải') &&
+          !vLower.contains('van') &&
+          !vLower.contains('truck')) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void _syncDispatchCountdownTimer() {
+    final activeDrv = _store.activeDriverRecord;
+    final canReceiveDispatch =
+        _selectedScreenIndex == 2 &&
+        _store.isDriverOnline &&
+        activeDrv != null &&
+        activeDrv.approvalStatus == 'Đã duyệt' &&
+        activeDrv.walletBalance >= 200000 &&
+        _store.activeDriverInProgressOrder == null &&
+        _store.orders.any(_isSearchingOrderCompatibleWithActiveDriver);
+    if (!canReceiveDispatch || _isAutomatedTestBinding) {
+      _dispatchCountdownTimer?.cancel();
+      _dispatchCountdownTimer = null;
+      return;
+    }
+    if (_dispatchCountdownTimer?.isActive ?? false) return;
+    _dispatchCountdownTimer = Timer.periodic(const Duration(seconds: 1), (
+      timer,
+    ) {
+      final drv = _store.activeDriverRecord;
+      if (!mounted ||
+          _selectedScreenIndex != 2 ||
+          !_store.isDriverOnline ||
+          drv == null ||
+          drv.approvalStatus != 'Đã duyệt' ||
+          _store.activeDriverInProgressOrder != null) {
+        timer.cancel();
+        _dispatchCountdownTimer = null;
+        return;
+      }
+      final currentSearching = _store.orders
+          .where(_isSearchingOrderCompatibleWithActiveDriver)
+          .firstOrNull;
+      if (currentSearching == null) {
+        timer.cancel();
+        _dispatchCountdownTimer = null;
+        return;
+      }
+      setState(() {
+        if (_countdownSeconds > 1) {
+          _countdownSeconds -= 1;
+        } else {
+          _countdownSeconds = 28;
+          _rejectedOrderCodes.add(currentSearching.trackingCode);
+          _store.recordDriverDispatchRejection(currentSearching.trackingCode);
+          _reassignToNextCandidate();
+        }
+      });
+    });
   }
 
   void _syncDriverControllersFromDb() {
     final d = _store.activeDriverRecord;
+    final authUser = _store.activeAuthenticatedUser;
     if (d != null) {
+      final docsKey = d.attachedKycDocs.join(',');
       final profileKey =
-          '${d.id}|${d.fullName}|${d.phone}|${d.citizenId}|${d.licensePlate}|${d.vehicleType}';
+          '${d.id}|${d.fullName}|${d.phone}|${d.citizenId}|${d.licensePlate}|${d.vehicleType}|${d.bankName}|${d.bankAccount}|$docsKey';
       if (_lastSyncedDriverProfileKey != profileKey) {
         _lastSyncedDriverProfileKey = profileKey;
         _drvNameCtrl.text = d.fullName;
         _drvPhoneCtrl.text = d.phone;
         _drvCitizenCtrl.text = d.citizenId;
         _drvPlateCtrl.text = d.licensePlate;
-        if (d.vehicleType.isNotEmpty) {
-          _vehicleType = d.vehicleType;
+        _drvBankNameCtrl.text = d.bankName;
+        _drvBankAccCtrl.text = d.bankAccount;
+        _selectedBank = '${d.bankName} - ${d.bankAccount}';
+        _attachedKycDocs
+          ..clear()
+          ..addAll(d.attachedKycDocs);
+        if (d.vehicleType.trim().isNotEmpty) {
+          _vehicleType = d.vehicleType.trim();
         }
       }
+    } else if (authUser != null) {
+      final profileKey = 'UNREGISTERED|${authUser.id}|${authUser.phone}';
+      if (_lastSyncedDriverProfileKey != profileKey) {
+        _lastSyncedDriverProfileKey = profileKey;
+        _drvNameCtrl.text = authUser.fullName;
+        _drvPhoneCtrl.text = authUser.phone;
+        _drvCitizenCtrl.clear();
+        _drvPlateCtrl.clear();
+        _drvBankNameCtrl.clear();
+        _drvBankAccCtrl.clear();
+        _selectedBank = '';
+        _vehicleType = 'Xe máy';
+        _attachedKycDocs.clear();
+      }
     }
-    final activeOrd = _store.activeOrderRecord;
+    final activeOrd = _store.activeDriverPersonalOrderRecord;
     if (activeOrd != null) {
       if (_lastSyncedDriverOrderCode != activeOrd.trackingCode) {
         _lastSyncedDriverOrderCode = activeOrd.trackingCode;
@@ -143,22 +250,25 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     super.didUpdateWidget(oldWidget);
     if (widget.forcedScreenIndex != null &&
         widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(
+        0,
+        _screenTitles.length - 1,
+      );
+      _syncDispatchCountdownTimer();
     }
   }
 
   void _onStoreChanged() {
     if (!mounted) return;
     _syncDriverControllersFromDb();
+    _syncDispatchCountdownTimer();
     setState(() {});
   }
 
   void _reassignToNextCandidate() {
     final targetOrder = _store.orders
-            .where((o) => o.status == OrderStatus.searching)
-            .firstOrNull ??
-        _store.activeOrderRecord ??
-        _store.orders.firstOrNull;
+        .where(_isSearchingOrderCompatibleWithActiveDriver)
+        .firstOrNull;
     if (targetOrder == null) return;
     final ranked = SmartDispatchEngine.rankDriversForPickup(
       pickupLocation: targetOrder.pickupLocation,
@@ -178,6 +288,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     _drvPhoneCtrl.dispose();
     _drvCitizenCtrl.dispose();
     _drvPlateCtrl.dispose();
+    _drvBankNameCtrl.dispose();
+    _drvBankAccCtrl.dispose();
     _podOtpCtrl.dispose();
     _podRecipientCtrl.dispose();
     _podNoteCtrl.dispose();
@@ -210,7 +322,9 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
           _selectedScreenIndex = 1; // Trang chủ (UC14)
           break;
         case 1:
-          _selectedScreenIndex = 9; // Lịch sử giao hàng (UC19)
+          _selectedScreenIndex = _store.activeDriverInProgressOrder != null
+              ? 3
+              : 9;
           break;
         case 2:
           _selectedScreenIndex = 6; // Thu nhập và rút tiền (UC18)
@@ -227,8 +341,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       _selectedScreenIndex == 3 ||
       _selectedScreenIndex == 4 ||
       _selectedScreenIndex == 5 ||
-      _selectedScreenIndex == 7 ||
-      _selectedScreenIndex == 9;
+      _selectedScreenIndex == 7;
 
   void _navigateBackFromDriverSubScreen() {
     setState(() {
@@ -250,8 +363,14 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 860;
         if (isWide) {
-          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 285.0);
-          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(
+            210.0,
+            285.0,
+          );
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(
+            16.0,
+            32.0,
+          );
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -317,22 +436,20 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       (Icons.radar_rounded, 'Trạng thái & Bản đồ GPS', 1),
       (Icons.history_rounded, 'Lịch sử giao hàng', 9),
       (Icons.account_balance_wallet_outlined, 'Thu nhập & Ví tài xế', 6),
-      (Icons.insights_rounded, 'Hiệu suất & Hồ sơ KYC', 8),
+      (Icons.insights_rounded, 'Hồ sơ & hiệu suất', 8),
     ];
-    final activeOrd = _store.activeOrderRecord;
-    final hasActiveTrip = _store.isDriverOnline &&
-        activeOrd != null &&
-        activeOrd.status != OrderStatus.delivered &&
-        activeOrd.status != OrderStatus.cancelled &&
-        activeOrd.status != OrderStatus.failed;
+    final activeOrd =
+        _store.activeDriverInProgressOrder ??
+        _store.orders
+            .where(_isSearchingOrderCompatibleWithActiveDriver)
+            .firstOrNull;
+    final hasActiveTrip = _store.isDriverOnline && activeOrd != null;
 
     return Container(
       width: sidebarWidth,
       decoration: const BoxDecoration(
         color: AppColors.techBg,
-        border: Border(
-          right: BorderSide(color: AppColors.ink, width: 1.6),
-        ),
+        border: Border(right: BorderSide(color: AppColors.ink, width: 1.6)),
       ),
       child: Material(
         type: MaterialType.transparency,
@@ -371,7 +488,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                           ),
                         ),
                         Text(
-                          'ĐỐI TÁC TÀI XẾ • STUDIO',
+                          'ĐỐI TÁC TÀI XẾ',
                           style: TextStyle(
                             color: AppColors.acid,
                             fontSize: 9.5,
@@ -394,7 +511,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     ...menuItems.map((item) {
-                      final selected = _selectedScreenIndex == item.$3 ||
+                      final selected =
+                          _selectedScreenIndex == item.$3 ||
                           (item.$3 == 1 &&
                               (_selectedScreenIndex == 2 ||
                                   _selectedScreenIndex == 3 ||
@@ -466,8 +584,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                           onTap: () => setState(() {
                             _selectedScreenIndex =
                                 activeOrd.status == OrderStatus.searching
-                                    ? 2
-                                    : 3;
+                                ? 2
+                                : 3;
                           }),
                           child: Container(
                             padding: const EdgeInsets.all(12),
@@ -607,14 +725,16 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               if (showPlateBadge) ...[
                 Flexible(
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: AppColors.paper,
                       border: Border.all(color: AppColors.ink, width: 1.2),
                     ),
                     child: Text(
-                      'Biển số: ${_store.activeDriverRecord?.licensePlate ?? _store.drivers.firstOrNull?.licensePlate ?? "59X1-123.45"} • Ví: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                      'Biển số: ${_store.activeDriverRecord?.licensePlate ?? "Chưa đăng ký"} • Ví: ${CurrencyFormatter.formatVnd(_store.activeDriverRecord?.walletBalance ?? 0.0)}',
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 11.5,
@@ -669,11 +789,12 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                       ? const Color(0xFF14B866)
                       : AppColors.ink,
                   foregroundColor: Colors.white,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                 ),
-                onPressed: () =>
-                    _store.setDriverOnlineStatus(!_store.isDriverOnline),
+                onPressed: () => _handleHeaderToggleDriverOnline(context),
                 icon: Icon(
                   _store.isDriverOnline
                       ? Icons.sensors_rounded
@@ -688,26 +809,6 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                   ),
                 ),
               ),
-              if (widget.onLogout != null) ...[
-                const SizedBox(width: 10),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.ink,
-                    backgroundColor: AppColors.acid,
-                    side: const BorderSide(color: AppColors.ink, width: 1.2),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                  ),
-                  onPressed: widget.onLogout,
-                  icon: const Icon(Icons.logout_rounded, size: 15),
-                  label: const Text(
-                    'Đăng xuất',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
-                  ),
-                ),
-              ],
             ],
           ),
         );
@@ -722,11 +823,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         color: AppColors.techBg,
         border: Border.all(color: AppColors.ink, width: 1.5),
         boxShadow: const [
-          BoxShadow(
-            color: AppColors.pink,
-            offset: Offset(6, 6),
-            blurRadius: 0,
-          ),
+          BoxShadow(color: AppColors.pink, offset: Offset(6, 6), blurRadius: 0),
         ],
       ),
       child: Row(
@@ -754,7 +851,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Tài xế: ${_store.activeDriverName} • Ví: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                  'Tài xế: ${_store.activeDriverRecord?.fullName ?? _store.activeAuthenticatedUser?.fullName ?? _store.activeDriverName} • Ví: ${CurrencyFormatter.formatVnd(_store.activeDriverRecord?.walletBalance ?? 0.0)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -817,8 +914,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               minimumSize: Size.zero,
             ),
-            onPressed: () =>
-                _store.setDriverOnlineStatus(!_store.isDriverOnline),
+            onPressed: () => _handleHeaderToggleDriverOnline(context),
             child: Text(
               _store.isDriverOnline ? 'ONLINE' : 'OFFLINE',
               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
@@ -867,11 +963,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         color: AppColors.techBg,
         border: Border.all(color: AppColors.ink, width: 1.5),
         boxShadow: const [
-          BoxShadow(
-            color: AppColors.pink,
-            offset: Offset(5, 5),
-            blurRadius: 0,
-          ),
+          BoxShadow(color: AppColors.pink, offset: Offset(5, 5), blurRadius: 0),
         ],
       ),
       child: Row(
@@ -896,11 +988,14 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                     const SizedBox(height: 3),
                     Text(
                       items[idx].$2,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: color,
-                        fontSize: 11.5,
-                        fontWeight:
-                            selected ? FontWeight.w900 : FontWeight.w600,
+                        fontSize: 10.5,
+                        fontWeight: selected
+                            ? FontWeight.w900
+                            : FontWeight.w600,
                       ),
                     ),
                   ],
@@ -920,11 +1015,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         color: Colors.white,
         border: Border.all(color: AppColors.ink, width: 1.4),
         boxShadow: const [
-          BoxShadow(
-            color: AppColors.ink,
-            offset: Offset(3, 3),
-            blurRadius: 0,
-          ),
+          BoxShadow(color: AppColors.ink, offset: Offset(3, 3), blurRadius: 0),
         ],
       ),
       child: Row(
@@ -959,9 +1050,17 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       case 2:
         return _buildIncomingOrderPopupView();
       case 3:
-        return _buildTurnByTurnNavigationView();
       case 4:
-        return _buildTripStepProgressView();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _buildTurnByTurnNavigationView(),
+            if (_store.activeDriverPersonalOrderRecord != null) ...[
+              const SizedBox(height: 12),
+              _buildTripStepProgressView(),
+            ],
+          ],
+        );
       case 5:
         return _buildPodConfirmationView();
       case 6:
@@ -1007,7 +1106,9 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                   ),
                   TextButton(
                     onPressed: () {
-                      _store.markAllNotificationsAsRead();
+                      _store.markAllNotificationsAsRead(
+                        targetGroupScope: 'Tài xế',
+                      );
                       setDialogState(() {});
                     },
                     child: const Text(
@@ -1035,9 +1136,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                         separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (_, idx) {
                           final n = items[idx];
-                          final orderMatch = RegExp(
-                            r'#DH[0-9A-Za-z-]+',
-                          ).firstMatch(n.title);
+                          final orderMatch = RegExp(r'#DH[0-9A-Za-z-]+')
+                              .firstMatch(n.title);
                           final orderCode = orderMatch?.group(0);
                           return InkWell(
                             onTap: () {
@@ -1052,8 +1152,8 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                                 setState(() {
                                   _selectedScreenIndex =
                                       ord?.status == OrderStatus.searching
-                                          ? 2
-                                          : 3;
+                                      ? 2
+                                      : 3;
                                 });
                               }
                             },
@@ -1135,8 +1235,90 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
     );
   }
 
+  void _handleHeaderToggleDriverOnline(
+    BuildContext context, {
+    bool? targetOnline,
+  }) {
+    final nextOnline = targetOnline ?? !_store.isDriverOnline;
+    if (!nextOnline) {
+      final ongoingOrd = _store.driverPersonalOrders
+          .where(
+            (o) =>
+                o.status == OrderStatus.accepted ||
+                o.status == OrderStatus.arrivingPickup ||
+                o.status == OrderStatus.inTransit ||
+                o.status == OrderStatus.returning,
+          )
+          .firstOrNull;
+      if (ongoingOrd != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.danger,
+            content: Text(
+              'Không thể tắt Offline khi đang thực hiện cuốc xe ${ongoingOrd.trackingCode} (${ongoingOrd.status.displayName})! Vui lòng hoàn tất giao hàng hoặc báo cáo sự cố trước.',
+            ),
+          ),
+        );
+        return;
+      }
+      _store.setDriverOnlineStatus(false);
+      return;
+    }
+    final activeDrv = _store.activeDriverRecord;
+    if (activeDrv == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: AppColors.danger,
+          content: Text(
+            'Bạn chưa gửi hồ sơ đăng ký Tài xế. Vui lòng hoàn tất KYC trước khi bật trực tuyến!',
+          ),
+        ),
+      );
+      setState(() => _selectedScreenIndex = 0);
+      return;
+    }
+    final linkedUser = _store.findUserByPhone(activeDrv.phone);
+    if (linkedUser?.status == 'LOCKED') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: AppColors.danger,
+          content: Text(
+            'Tài khoản Tài xế hiện đang bị tạm khóa bởi Quản trị viên. Không thể bật trực tuyến!',
+          ),
+        ),
+      );
+      return;
+    }
+    if (activeDrv.approvalStatus != 'Đã duyệt') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.danger,
+          content: Text(
+            'Hồ sơ Tài xế đang ở trạng thái "${activeDrv.approvalStatus}". Vui lòng chờ Admin duyệt KYC trước khi bật trực tuyến!',
+          ),
+        ),
+      );
+      setState(() => _selectedScreenIndex = 0);
+      return;
+    }
+    if (activeDrv.walletBalance < 200000) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppColors.warning,
+          content: Text(
+            'Số dư ví ký quỹ (${CurrencyFormatter.formatVnd(activeDrv.walletBalance)}) thấp hơn 200.000đ. Đang chuyển tới Ví Thu nhập để nạp ký quỹ!',
+          ),
+        ),
+      );
+      setState(() => _selectedScreenIndex = 6);
+      return;
+    }
+    _store.setDriverOnlineStatus(true);
+  }
+
   void _rebuildDriverUi(VoidCallback fn) {
     if (!mounted) return;
     setState(fn);
+    _syncDispatchCountdownTimer();
   }
 }

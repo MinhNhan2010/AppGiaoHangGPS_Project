@@ -81,6 +81,8 @@ class VoucherRecord {
   final double minOrderValue;
   final String expiryDate;
   String status;
+  final int usageLimit;
+  int usedCount;
 
   VoucherRecord({
     required this.code,
@@ -92,7 +94,26 @@ class VoucherRecord {
     required this.minOrderValue,
     required this.expiryDate,
     required this.status,
+    this.usageLimit = 1000,
+    this.usedCount = 0,
   });
+
+  bool get isExpired {
+    final parts = expiryDate.trim().split('/');
+    if (parts.length == 3) {
+      final d = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      final y = int.tryParse(parts[2]);
+      if (d != null && m != null && y != null) {
+        final expiryEnd = DateTime(y, m, d, 23, 59, 59);
+        return DateTime.now().isAfter(expiryEnd);
+      }
+    }
+    return false;
+  }
+
+  bool get isUsable =>
+      status == 'Đang hoạt động' && !isExpired && usedCount < usageLimit;
 }
 
 class ChatMessageRecord {
@@ -119,6 +140,7 @@ class NotificationRecord {
   final String title;
   final String timeAgo;
   final String targetGroup;
+  final String? recipientKey;
   bool isRead;
 
   NotificationRecord({
@@ -127,6 +149,7 @@ class NotificationRecord {
     required this.title,
     required this.timeAgo,
     this.targetGroup = 'Khách hàng',
+    this.recipientKey,
     this.isRead = false,
   });
 }
@@ -144,6 +167,11 @@ class DriverApplicantRecord {
   GeoPoint location;
   double rating;
   int totalTrips;
+  int rejectedCount;
+  double walletBalance;
+  String bankName;
+  String bankAccount;
+  List<String> attachedKycDocs;
 
   DriverApplicantRecord({
     required this.id,
@@ -154,11 +182,23 @@ class DriverApplicantRecord {
     required this.vehicleType,
     required this.vehicleColor,
     required this.approvalStatus,
-    this.isOnline = true,
+    this.isOnline = false,
     required this.location,
-    this.rating = 4.8,
-    this.totalTrips = 320,
-  });
+    this.rating = 0,
+    this.totalTrips = 0,
+    this.rejectedCount = 0,
+    this.walletBalance = 0.0,
+    this.bankName = '',
+    this.bankAccount = '',
+    List<String>? attachedKycDocs,
+  }) : attachedKycDocs = attachedKycDocs ??
+            <String>[];
+
+  double get acceptanceRate {
+    final totalDecisions = totalTrips + rejectedCount;
+    if (totalDecisions <= 0) return 1.0;
+    return (totalTrips / totalDecisions).clamp(0.0, 1.0);
+  }
 }
 
 class MerchantApplicantRecord {
@@ -172,6 +212,9 @@ class MerchantApplicantRecord {
   String bankName;
   String bankAccount;
   String approvalStatus;
+  double codBalance;
+  String webhookUrl;
+  List<String> attachedKycDocs;
 
   MerchantApplicantRecord({
     required this.id,
@@ -184,7 +227,11 @@ class MerchantApplicantRecord {
     required this.bankName,
     required this.bankAccount,
     required this.approvalStatus,
-  });
+    this.codBalance = 0.0,
+    this.webhookUrl = '',
+    List<String>? attachedKycDocs,
+  }) : attachedKycDocs = attachedKycDocs ??
+            <String>[];
 }
 
 class ComplaintTicketRecord {
@@ -196,6 +243,7 @@ class ComplaintTicketRecord {
   final String description;
   String status;
   final List<String> replies;
+  final List<String> evidenceFiles;
 
   ComplaintTicketRecord({
     required this.ticketCode,
@@ -206,11 +254,13 @@ class ComplaintTicketRecord {
     required this.description,
     required this.status,
     required this.replies,
+    this.evidenceFiles = const [],
   });
 }
 
 class WithdrawalRequestRecord {
   final String id;
+  final String ownerId;
   final String ownerName;
   final String ownerRole;
   final double amount;
@@ -221,12 +271,35 @@ class WithdrawalRequestRecord {
 
   WithdrawalRequestRecord({
     required this.id,
+    this.ownerId = '',
     required this.ownerName,
     required this.ownerRole,
     required this.amount,
     required this.bankName,
     required this.accountMasked,
     required this.requestDate,
+    required this.status,
+  });
+}
+
+class CodReconciliationRecord {
+  final String id;
+  final String merchantId;
+  final String periodLabel;
+  double totalCodCollected;
+  double totalServiceFee;
+  double returnCancelFee;
+  double netPayoutAmount;
+  String status;
+
+  CodReconciliationRecord({
+    required this.id,
+    required this.merchantId,
+    required this.periodLabel,
+    required this.totalCodCollected,
+    required this.totalServiceFee,
+    this.returnCancelFee = 0.0,
+    required this.netPayoutAmount,
     required this.status,
   });
 }
@@ -261,15 +334,27 @@ class RbacRoleRecord {
 
 class PickupWarehouseRecord {
   final String id;
+  final String merchantId;
   final String name;
   final String address;
   final GeoPoint location;
+  final String contactName;
+  final String contactPhone;
+  final String openHours;
+  final bool isPrimary;
+  final String webhookUrl;
 
   const PickupWarehouseRecord({
     required this.id,
+    this.merchantId = '',
     required this.name,
     required this.address,
     required this.location,
+    this.contactName = '',
+    this.contactPhone = '',
+    this.openHours = '08:00 - 21:00',
+    this.isPrimary = false,
+    this.webhookUrl = '',
   });
 }
 
@@ -304,6 +389,8 @@ class ActiveOrderRecord {
   int? ratingStars;
   String? ratingComment;
   final String createdDateLabel;
+  final int createdAtMs;
+  int? deliveredAtMs;
 
   ActiveOrderRecord({
     required this.id,
@@ -336,7 +423,58 @@ class ActiveOrderRecord {
     this.ratingStars,
     this.ratingComment,
     required this.createdDateLabel,
-  });
+    int? createdAtMs,
+    this.deliveredAtMs,
+  }) : createdAtMs = createdAtMs ?? _parseCreatedAtMs(createdDateLabel);
+
+  static int _parseCreatedAtMs(String label) {
+    final now = DateTime.now();
+    final trimmed = label.trim();
+    if (trimmed == 'Hôm nay' || trimmed.isEmpty) {
+      return now.millisecondsSinceEpoch;
+    }
+    if (trimmed == 'Hôm qua') {
+      return now.subtract(const Duration(days: 1)).millisecondsSinceEpoch;
+    }
+    final datePart = trimmed.split(' ').first;
+    final parts = datePart.split('/');
+    if (parts.length == 3) {
+      final d = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      final y = int.tryParse(parts[2]);
+      if (d != null && m != null && y != null) {
+        return DateTime(y, m, d, 12).millisecondsSinceEpoch;
+      }
+    }
+    return now.millisecondsSinceEpoch;
+  }
+
+  DateTime get createdAtDateTime {
+    final trimmed = createdDateLabel.trim();
+    if (trimmed == 'Hôm nay') return DateTime.now();
+    if (trimmed == 'Hôm qua') {
+      return DateTime.now().subtract(const Duration(days: 1));
+    }
+    final datePart = trimmed.split(' ').first;
+    final parts = datePart.split('/');
+    if (parts.length == 3) {
+      final d = int.tryParse(parts[0]);
+      final m = int.tryParse(parts[1]);
+      final y = int.tryParse(parts[2]);
+      if (d != null && m != null && y != null) {
+        return DateTime(y, m, d, 12);
+      }
+    }
+    return DateTime.fromMillisecondsSinceEpoch(createdAtMs);
+  }
+
+  int daysAgoFrom(DateTime now) {
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final dt = createdAtDateTime;
+    final orderDayStart = DateTime(dt.year, dt.month, dt.day);
+    final diff = todayStart.difference(orderDayStart).inDays;
+    return diff < 0 ? 0 : diff;
+  }
 
   Map<String, Object?> toSqlRow([int? createdAtMs]) {
     return {
@@ -372,7 +510,8 @@ class ActiveOrderRecord {
       'rating_stars': ratingStars,
       'rating_comment': ratingComment,
       'created_date_label': createdDateLabel,
-      'created_at_ms': createdAtMs ?? DateTime.now().millisecondsSinceEpoch,
+      'created_at_ms': createdAtMs ?? this.createdAtMs,
+      'delivered_at_ms': deliveredAtMs,
     };
   }
 
@@ -425,6 +564,8 @@ class ActiveOrderRecord {
       ratingStars: (row['rating_stars'] as num?)?.toInt(),
       ratingComment: row['rating_comment']?.toString(),
       createdDateLabel: row['created_date_label'].toString(),
+      createdAtMs: (row['created_at_ms'] as num?)?.toInt(),
+      deliveredAtMs: (row['delivered_at_ms'] as num?)?.toInt(),
     );
   }
 }

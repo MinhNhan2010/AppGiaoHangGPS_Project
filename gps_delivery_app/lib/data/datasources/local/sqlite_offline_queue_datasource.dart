@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart' as sqflite_ffi;
 import 'package:sqflite/sqflite.dart' as sqflite;
 import 'package:uuid/uuid.dart';
+
 import '../../../core/config/env_config.dart';
 import '../../../domain/entities/order_entity.dart';
 
@@ -42,22 +46,31 @@ class SqliteOfflineQueueDatasource {
   SqliteOfflineQueueDatasource._internal();
 
   static const String _dbFileName = 'gps_delivery_production.db';
-  static const int _dbVersion = 4;
+  static const int _dbVersion = 6;
   static const Uuid _uuid = Uuid();
 
   static bool _ffiInitialized = false;
   sqflite.Database? _database;
   String? _resolvedDbFilePath;
+  final WebLocalStorageRelationalEngine _webEngine =
+      WebLocalStorageRelationalEngine();
 
-  String get databaseFilePath => _resolvedDbFilePath ?? _dbFileName;
+  String get databaseFilePath {
+    if (kIsWeb) return 'localStorage://$_dbFileName';
+    return _resolvedDbFilePath ?? _dbFileName;
+  }
 
   static void ensureDesktopFfiInitialized() {
-    if (_ffiInitialized) return;
+    if (kIsWeb || _ffiInitialized) {
+      _ffiInitialized = true;
+      return;
+    }
     try {
       if (Platform.isWindows) {
         final exeDir = File(Platform.resolvedExecutable).parent;
         if (File(p.join(exeDir.path, 'sqlite3.dll')).existsSync() &&
-            !File(p.join(Directory.current.path, 'pubspec.yaml')).existsSync()) {
+            !File(p.join(Directory.current.path, 'pubspec.yaml'))
+                .existsSync()) {
           Directory.current = exeDir;
         }
       }
@@ -70,6 +83,11 @@ class SqliteOfflineQueueDatasource {
   }
 
   Future<sqflite.Database> get database async {
+    if (kIsWeb) {
+      throw UnsupportedError(
+        'Web runtime uses WebLocalStorageRelationalEngine instead of FFI SQLite.',
+      );
+    }
     if (_database != null && _database!.isOpen) return _database!;
     ensureDesktopFfiInitialized();
 
@@ -78,8 +96,11 @@ class SqliteOfflineQueueDatasource {
     if (isTestEnv) {
       fullPath = p.join(
         Directory.systemTemp.path,
-        'gps_delivery_test_runtime.db',
+        'gps_delivery_test_runtime_$pid.db',
       );
+    } else if (Platform.isAndroid || Platform.isIOS) {
+      final mobileDbDir = await sqflite.getDatabasesPath();
+      fullPath = p.join(mobileDbDir, _dbFileName);
     } else {
       final hasPubspecInCwd = File(
         p.join(Directory.current.path, 'pubspec.yaml'),
@@ -109,9 +130,122 @@ class SqliteOfflineQueueDatasource {
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         await _createRelationalSchema16Tables(db);
+        await _ensureSchemaColumnsMigrated(db);
+      },
+      onOpen: (db) async {
+        await _createRelationalSchema16Tables(db);
+        await _ensureSchemaColumnsMigrated(db);
       },
     );
     return _database!;
+  }
+
+  Future<void> _ensureColumnExists(
+    sqflite.Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final info = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = info.any(
+      (row) => row['name']?.toString().toLowerCase() == column.toLowerCase(),
+    );
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    }
+  }
+
+  Future<void> _ensureSchemaColumnsMigrated(sqflite.Database db) async {
+    await _ensureColumnExists(
+      db,
+      'drivers',
+      'rejected_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'drivers',
+      'bank_name',
+      "TEXT NOT NULL DEFAULT 'Vietcombank'",
+    );
+    await _ensureColumnExists(
+      db,
+      'drivers',
+      'bank_account',
+      "TEXT NOT NULL DEFAULT '007100****889'",
+    );
+    await _ensureColumnExists(db, 'drivers', 'attached_kyc_docs_json', 'TEXT');
+
+    await _ensureColumnExists(
+      db,
+      'merchants',
+      'webhook_url',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumnExists(
+      db,
+      'merchants',
+      'attached_kyc_docs_json',
+      'TEXT',
+    );
+
+    await _ensureColumnExists(
+      db,
+      'merchant_pickup_points',
+      'contact_phone',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumnExists(
+      db,
+      'merchant_pickup_points',
+      'open_hours',
+      "TEXT NOT NULL DEFAULT '08:00 - 21:00'",
+    );
+    await _ensureColumnExists(
+      db,
+      'merchant_pickup_points',
+      'is_primary',
+      'INTEGER',
+    );
+    await _ensureColumnExists(
+      db,
+      'merchant_pickup_points',
+      'webhook_url',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+
+    await _ensureColumnExists(db, 'vouchers', 'usage_limit', 'INTEGER');
+    await _ensureColumnExists(db, 'vouchers', 'used_count', 'INTEGER');
+
+    await _ensureColumnExists(db, 'orders', 'delivered_at_ms', 'INTEGER');
+
+    await _ensureColumnExists(
+      db,
+      'wallets_and_transactions',
+      'owner_id',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+
+    await _ensureColumnExists(
+      db,
+      'cod_reconciliations',
+      'return_cancel_fee',
+      'REAL',
+    );
+
+    await _ensureColumnExists(
+      db,
+      'incidents_and_complaints',
+      'evidence_files_json',
+      'TEXT',
+    );
+
+    await _ensureColumnExists(
+      db,
+      'chat_messages_and_notifications',
+      'recipient_key',
+      'TEXT',
+    );
   }
 
   Future<void> _createRelationalSchema16Tables(sqflite.Database db) async {
@@ -167,7 +301,11 @@ class SqliteOfflineQueueDatasource {
         longitude REAL NOT NULL,
         rating REAL NOT NULL DEFAULT 5.0,
         total_trips INTEGER NOT NULL DEFAULT 0,
+        rejected_count INTEGER NOT NULL DEFAULT 0,
         wallet_balance REAL NOT NULL DEFAULT 0.0,
+        bank_name TEXT NOT NULL DEFAULT 'Vietcombank',
+        bank_account TEXT NOT NULL DEFAULT '007100****889',
+        attached_kyc_docs_json TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -185,6 +323,8 @@ class SqliteOfflineQueueDatasource {
         bank_account TEXT NOT NULL,
         cod_balance REAL NOT NULL DEFAULT 0.0,
         approval_status TEXT NOT NULL DEFAULT 'APPROVED',
+        webhook_url TEXT NOT NULL DEFAULT '',
+        attached_kyc_docs_json TEXT,
         created_at TEXT NOT NULL
       )
     ''');
@@ -197,6 +337,10 @@ class SqliteOfflineQueueDatasource {
         full_address TEXT NOT NULL,
         latitude REAL NOT NULL,
         longitude REAL NOT NULL,
+        contact_phone TEXT NOT NULL DEFAULT '',
+        open_hours TEXT NOT NULL DEFAULT '08:00 - 21:00',
+        is_primary INTEGER,
+        webhook_url TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL
       )
     ''');
@@ -225,7 +369,9 @@ class SqliteOfflineQueueDatasource {
         max_discount REAL NOT NULL,
         min_order_value REAL NOT NULL,
         expiry_date TEXT NOT NULL,
-        status TEXT NOT NULL
+        status TEXT NOT NULL,
+        usage_limit INTEGER,
+        used_count INTEGER
       )
     ''');
 
@@ -263,7 +409,8 @@ class SqliteOfflineQueueDatasource {
         rating_stars INTEGER,
         rating_comment TEXT,
         created_date_label TEXT NOT NULL,
-        created_at_ms INTEGER NOT NULL
+        created_at_ms INTEGER NOT NULL,
+        delivered_at_ms INTEGER
       )
     ''');
 
@@ -295,6 +442,7 @@ class SqliteOfflineQueueDatasource {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS wallets_and_transactions (
         id TEXT PRIMARY KEY,
+        owner_id TEXT NOT NULL DEFAULT '',
         owner_name TEXT NOT NULL,
         owner_role TEXT NOT NULL,
         amount REAL NOT NULL,
@@ -313,6 +461,7 @@ class SqliteOfflineQueueDatasource {
         period_label TEXT NOT NULL,
         total_cod_collected REAL NOT NULL,
         total_service_fee REAL NOT NULL,
+        return_cancel_fee REAL,
         net_payout_amount REAL NOT NULL,
         status TEXT NOT NULL
       )
@@ -340,6 +489,7 @@ class SqliteOfflineQueueDatasource {
         description TEXT NOT NULL,
         status TEXT NOT NULL,
         replies_json TEXT NOT NULL,
+        evidence_files_json TEXT,
         created_at_ms INTEGER NOT NULL
       )
     ''');
@@ -349,6 +499,7 @@ class SqliteOfflineQueueDatasource {
         id TEXT PRIMARY KEY,
         record_type TEXT NOT NULL,
         order_id TEXT,
+        recipient_key TEXT,
         sender_name TEXT,
         is_customer INTEGER NOT NULL DEFAULT 1,
         category TEXT,
@@ -392,6 +543,88 @@ class SqliteOfflineQueueDatasource {
         PRIMARY KEY (table_name, record_id)
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS order_stops (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL,
+        sequence_no INTEGER NOT NULL,
+        stop_type TEXT NOT NULL,
+        address TEXT NOT NULL,
+        latitude REAL,
+        longitude REAL,
+        recipient_name TEXT,
+        recipient_phone TEXT,
+        cod_amount REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        note TEXT,
+        created_at_ms INTEGER NOT NULL,
+        UNIQUE(order_id, sequence_no)
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS scheduled_orders (
+        id TEXT PRIMARY KEY,
+        order_id TEXT UNIQUE NOT NULL,
+        scheduled_at_ms INTEGER NOT NULL,
+        timezone TEXT NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        last_error TEXT,
+        created_at_ms INTEGER NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS payment_ledger (
+        id TEXT PRIMARY KEY,
+        owner_id TEXT,
+        owner_type TEXT NOT NULL,
+        order_id TEXT,
+        direction TEXT NOT NULL,
+        entry_type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'VND',
+        idempotency_key TEXT UNIQUE NOT NULL,
+        metadata_json TEXT,
+        created_at_ms INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS webhook_deliveries (
+        id TEXT PRIMARY KEY,
+        endpoint_url TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        aggregate_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        signature TEXT,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at_ms INTEGER,
+        last_http_status INTEGER,
+        last_error TEXT,
+        created_at_ms INTEGER NOT NULL,
+        delivered_at_ms INTEGER
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        actor_id TEXT,
+        actor_role TEXT,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT,
+        before_json TEXT,
+        after_json TEXT,
+        ip_address TEXT,
+        device_id TEXT,
+        created_at_ms INTEGER NOT NULL
+      )
+    ''');
   }
 
   Future<List<Map<String, dynamic>>> queryRows(
@@ -401,6 +634,15 @@ class SqliteOfflineQueueDatasource {
     String? orderBy,
     int? limit,
   }) async {
+    if (kIsWeb) {
+      return _webEngine.queryRows(
+        table,
+        where: where,
+        whereArgs: whereArgs,
+        orderBy: orderBy,
+        limit: limit,
+      );
+    }
     final db = await database;
     return db.query(
       table,
@@ -412,6 +654,10 @@ class SqliteOfflineQueueDatasource {
   }
 
   Future<void> upsertRow(String table, Map<String, Object?> values) async {
+    if (kIsWeb) {
+      await _webEngine.upsertRow(table, values);
+      return;
+    }
     final db = await database;
     await db.insert(
       table,
@@ -426,6 +672,14 @@ class SqliteOfflineQueueDatasource {
     required String where,
     required List<Object?> whereArgs,
   }) async {
+    if (kIsWeb) {
+      return _webEngine.updateRows(
+        table,
+        values,
+        where: where,
+        whereArgs: whereArgs,
+      );
+    }
     final db = await database;
     return db.update(table, values, where: where, whereArgs: whereArgs);
   }
@@ -435,11 +689,17 @@ class SqliteOfflineQueueDatasource {
     required String where,
     required List<Object?> whereArgs,
   }) async {
+    if (kIsWeb) {
+      return _webEngine.deleteRows(table, where: where, whereArgs: whereArgs);
+    }
     final db = await database;
     return db.delete(table, where: where, whereArgs: whereArgs);
   }
 
   Future<int> countRows(String table) async {
+    if (kIsWeb) {
+      return _webEngine.countRows(table);
+    }
     final db = await database;
     final res = await db.rawQuery('SELECT COUNT(*) AS cnt FROM $table');
     return sqflite.Sqflite.firstIntValue(res) ?? 0;
@@ -450,22 +710,16 @@ class SqliteOfflineQueueDatasource {
     required String recordId,
     required Map<String, dynamic> payload,
   }) async {
-    final db = await database;
-    await db.insert(
-      'local_relational_entities',
-      {
-        'table_name': tableName,
-        'record_id': recordId,
-        'payload_json': jsonEncode(payload),
-        'updated_at_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: sqflite.ConflictAlgorithm.replace,
-    );
+    await upsertRow('local_relational_entities', {
+      'table_name': tableName,
+      'record_id': recordId,
+      'payload_json': jsonEncode(payload),
+      'updated_at_ms': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   Future<List<Map<String, dynamic>>> getEntityRecords(String tableName) async {
-    final db = await database;
-    final rows = await db.query(
+    final rows = await queryRows(
       'local_relational_entities',
       where: 'table_name = ?',
       whereArgs: [tableName],
@@ -483,26 +737,20 @@ class SqliteOfflineQueueDatasource {
     required String actionType,
     required Map<String, dynamic> payload,
   }) async {
-    final db = await database;
     final idempotencyKey = _uuid.v4();
-    await db.insert(
-      'local_sync_queue',
-      {
-        'idempotency_key': idempotencyKey,
-        'action_type': actionType,
-        'payload_json': jsonEncode(payload),
-        'retry_count': 0,
-        'sync_status': 'PENDING',
-        'created_at_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: sqflite.ConflictAlgorithm.replace,
-    );
+    await upsertRow('local_sync_queue', {
+      'idempotency_key': idempotencyKey,
+      'action_type': actionType,
+      'payload_json': jsonEncode(payload),
+      'retry_count': 0,
+      'sync_status': 'PENDING',
+      'created_at_ms': DateTime.now().millisecondsSinceEpoch,
+    });
     return idempotencyKey;
   }
 
   Future<List<OfflineSyncRecord>> getPendingSyncItems({int limit = 50}) async {
-    final db = await database;
-    final rows = await db.query(
+    final rows = await queryRows(
       'local_sync_queue',
       where: 'sync_status = ?',
       whereArgs: ['PENDING'],
@@ -512,19 +760,27 @@ class SqliteOfflineQueueDatasource {
 
     return rows.map((row) {
       return OfflineSyncRecord(
-        id: row['id'] as int,
+        id: (row['id'] as num).toInt(),
         idempotencyKey: row['idempotency_key'] as String,
         actionType: row['action_type'] as String,
-        payload: jsonDecode(row['payload_json'] as String)
-            as Map<String, dynamic>,
-        retryCount: row['retry_count'] as int,
+        payload:
+            jsonDecode(row['payload_json'] as String) as Map<String, dynamic>,
+        retryCount: (row['retry_count'] as num).toInt(),
         syncStatus: row['sync_status'] as String,
-        createdAtMs: row['created_at_ms'] as int,
+        createdAtMs: (row['created_at_ms'] as num).toInt(),
       );
     }).toList();
   }
 
   Future<int> getPendingQueueCount() async {
+    if (kIsWeb) {
+      final rows = await queryRows(
+        'local_sync_queue',
+        where: 'sync_status = ?',
+        whereArgs: ['PENDING'],
+      );
+      return rows.length;
+    }
     final db = await database;
     final result = await db.rawQuery(
       "SELECT COUNT(*) AS cnt FROM local_sync_queue WHERE sync_status = 'PENDING'",
@@ -533,47 +789,48 @@ class SqliteOfflineQueueDatasource {
   }
 
   Future<void> markSynced(int id) async {
-    final db = await database;
-    await db.delete(
+    await deleteRows('local_sync_queue', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<int> clearStaleSnapshotEntries() async {
+    return deleteRows(
       'local_sync_queue',
-      where: 'id = ?',
-      whereArgs: [id],
+      where: 'action_type = ?',
+      whereArgs: ['STATE_SNAPSHOT'],
+    );
+  }
+
+  Future<int> clearAllPendingSyncItems() async {
+    return deleteRows(
+      'local_sync_queue',
+      where: 'sync_status = ?',
+      whereArgs: ['PENDING'],
     );
   }
 
   Future<void> incrementRetry(int id, int currentRetry) async {
-    final db = await database;
     final nextRetry = currentRetry + 1;
     final nextStatus = nextRetry >= 10 ? 'FAILED' : 'PENDING';
-    await db.update(
+    await updateRows(
       'local_sync_queue',
-      {
-        'retry_count': nextRetry,
-        'sync_status': nextStatus,
-      },
+      {'retry_count': nextRetry, 'sync_status': nextStatus},
       where: 'id = ?',
       whereArgs: [id],
     );
   }
 
   Future<void> cacheOrder(OrderEntity order) async {
-    final db = await database;
-    await db.insert(
-      'cached_active_orders',
-      {
-        'id': order.id,
-        'tracking_code': order.trackingCode,
-        'customer_id': order.customerId,
-        'payload_json': jsonEncode(order.toMap()),
-        'updated_at_ms': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: sqflite.ConflictAlgorithm.replace,
-    );
+    await upsertRow('cached_active_orders', {
+      'id': order.id,
+      'tracking_code': order.trackingCode,
+      'customer_id': order.customerId,
+      'payload_json': jsonEncode(order.toMap()),
+      'updated_at_ms': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   Future<List<OrderEntity>> getCachedOrders([String? customerId]) async {
-    final db = await database;
-    final rows = await db.query(
+    final rows = await queryRows(
       'cached_active_orders',
       where: customerId != null ? 'customer_id = ?' : null,
       whereArgs: customerId != null ? [customerId] : null,
@@ -584,5 +841,267 @@ class SqliteOfflineQueueDatasource {
           jsonDecode(r['payload_json'] as String) as Map<String, dynamic>;
       return OrderEntity.fromMap(map);
     }).toList();
+  }
+}
+
+class WebLocalStorageRelationalEngine {
+  static const String _keyPrefix = 'ghst_sql_v5_';
+  SharedPreferences? _prefs;
+  final Map<String, List<Map<String, dynamic>>> _tablesCache = {};
+  final Map<String, int> _autoIncrementByTable = {};
+
+  Future<SharedPreferences> _ensurePrefs() async {
+    return _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  Future<List<Map<String, dynamic>>> _loadTable(String table) async {
+    final cached = _tablesCache[table];
+    if (cached != null) return cached;
+    final prefs = await _ensurePrefs();
+    final raw = prefs.getString('$_keyPrefix$table');
+    final rows = <Map<String, dynamic>>[];
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          for (final item in decoded) {
+            if (item is Map) {
+              final map = Map<String, dynamic>.from(item);
+              rows.add(map);
+              final rowId = map['id'];
+              final cur = _autoIncrementByTable[table] ?? 1;
+              if (rowId is num && rowId.toInt() >= cur) {
+                _autoIncrementByTable[table] = rowId.toInt() + 1;
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    _tablesCache[table] = rows;
+    return rows;
+  }
+
+  Future<void> _persistTable(
+    String table,
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final prefs = await _ensurePrefs();
+    await prefs.setString('$_keyPrefix$table', jsonEncode(rows));
+  }
+
+  bool _matchesWhere(
+    Map<String, dynamic> row,
+    String? where,
+    List<Object?>? whereArgs,
+  ) {
+    if (where == null || where.trim().isEmpty) return true;
+    final clauses = where.split(RegExp(r'\s+AND\s+', caseSensitive: false));
+    int argIdx = 0;
+    for (final rawClause in clauses) {
+      final clause = rawClause.trim();
+      if (clause.isEmpty) continue;
+      final upper = clause.toUpperCase();
+      if (upper.endsWith(' IS NOT NULL')) {
+        final col = clause.substring(0, clause.length - 12).trim();
+        if (row[col] == null) return false;
+        continue;
+      }
+      if (upper.endsWith(' IS NULL')) {
+        final col = clause.substring(0, clause.length - 8).trim();
+        if (row[col] != null) return false;
+        continue;
+      }
+      final opMatch = RegExp(r'^([a-zA-Z0-9_]+)\s*(!=|<>|<=|>=|=|<|>)\s*(.+)$')
+          .firstMatch(clause);
+      if (opMatch == null) return false;
+      final col = opMatch.group(1)!;
+      final op = opMatch.group(2)!;
+      final rhs = opMatch.group(3)!.trim();
+      Object? expected;
+      if (rhs == '?') {
+        if (whereArgs == null || argIdx >= whereArgs.length) return false;
+        expected = whereArgs[argIdx++];
+      } else {
+        expected = rhs.replaceAll("'", '');
+      }
+      final actual = row[col];
+      final strEq =
+          actual == expected || '${actual ?? ''}' == '${expected ?? ''}';
+      if (op == '=') {
+        if (!strEq) return false;
+      } else if (op == '!=' || op == '<>') {
+        if (strEq) return false;
+      } else {
+        final numActual = actual is num
+            ? actual.toDouble()
+            : double.tryParse('${actual ?? ''}');
+        final numExpected = expected is num
+            ? expected.toDouble()
+            : double.tryParse('${expected ?? ''}');
+        final cmp = (numActual != null && numExpected != null)
+            ? numActual.compareTo(numExpected)
+            : '${actual ?? ''}'.compareTo('${expected ?? ''}');
+        if (op == '<' && cmp >= 0) return false;
+        if (op == '<=' && cmp > 0) return false;
+        if (op == '>' && cmp <= 0) return false;
+        if (op == '>=' && cmp < 0) return false;
+      }
+    }
+    return true;
+  }
+
+  bool _isSamePrimaryOrUniqueKey(
+    String table,
+    Map<String, dynamic> existing,
+    Map<String, dynamic> incoming,
+  ) {
+    if (table == 'local_relational_entities') {
+      return existing['table_name'] == incoming['table_name'] &&
+          existing['record_id'] == incoming['record_id'];
+    }
+    if (table == 'vouchers') {
+      return existing['code'] == incoming['code'];
+    }
+    if (table == 'incidents_and_complaints') {
+      return existing['ticket_code'] == incoming['ticket_code'];
+    }
+    if (incoming['id'] != null && existing['id'] == incoming['id']) {
+      return true;
+    }
+    if (table == 'admin_roles_permissions' &&
+        incoming['role_name'] != null &&
+        existing['role_name'] == incoming['role_name']) {
+      return true;
+    }
+    if ((table == 'users' || table == 'drivers') &&
+        incoming['phone'] != null &&
+        existing['phone'] == incoming['phone']) {
+      return true;
+    }
+    if (table == 'orders' &&
+        incoming['tracking_code'] != null &&
+        existing['tracking_code'] == incoming['tracking_code']) {
+      return true;
+    }
+    if (table == 'pricing_configs' &&
+        incoming['service_type'] != null &&
+        existing['service_type'] == incoming['service_type']) {
+      return true;
+    }
+    if (table == 'order_ratings' &&
+        incoming['order_tracking_code'] != null &&
+        existing['order_tracking_code'] == incoming['order_tracking_code']) {
+      return true;
+    }
+    if (table == 'local_sync_queue' &&
+        incoming['idempotency_key'] != null &&
+        existing['idempotency_key'] == incoming['idempotency_key']) {
+      return true;
+    }
+    return false;
+  }
+
+  Future<List<Map<String, dynamic>>> queryRows(
+    String table, {
+    String? where,
+    List<Object?>? whereArgs,
+    String? orderBy,
+    int? limit,
+  }) async {
+    final rows = await _loadTable(table);
+    var matched = rows
+        .where((r) => _matchesWhere(r, where, whereArgs))
+        .map(Map<String, dynamic>.from)
+        .toList();
+    if (orderBy != null && orderBy.trim().isNotEmpty) {
+      final parts = orderBy.trim().split(RegExp(r'\s+'));
+      final col = parts.first;
+      final desc = parts.length > 1 && parts[1].toUpperCase() == 'DESC';
+      matched.sort((a, b) {
+        final va = a[col];
+        final vb = b[col];
+        int cmp;
+        if (va is num && vb is num) {
+          cmp = va.compareTo(vb);
+        } else {
+          cmp = '${va ?? ''}'.compareTo('${vb ?? ''}');
+        }
+        return desc ? -cmp : cmp;
+      });
+    }
+    if (limit != null && limit >= 0 && matched.length > limit) {
+      matched = matched.sublist(0, limit);
+    }
+    return matched;
+  }
+
+  Future<void> upsertRow(String table, Map<String, Object?> values) async {
+    final rows = await _loadTable(table);
+    final normalized = Map<String, dynamic>.from(values);
+    final existingIdx = rows.indexWhere(
+      (r) => _isSamePrimaryOrUniqueKey(table, r, normalized),
+    );
+    if (existingIdx >= 0) {
+      if ((table == 'order_tracking_logs' || table == 'local_sync_queue') &&
+          normalized['id'] == null) {
+        normalized['id'] = rows[existingIdx]['id'];
+      }
+      rows[existingIdx] = normalized;
+    } else {
+      if ((table == 'order_tracking_logs' || table == 'local_sync_queue') &&
+          normalized['id'] == null) {
+        final nextId = _autoIncrementByTable[table] ?? 1;
+        normalized['id'] = nextId;
+        _autoIncrementByTable[table] = nextId + 1;
+      }
+      rows.add(normalized);
+      if (table == 'order_tracking_logs' && rows.length > 200) {
+        rows.removeRange(0, rows.length - 200);
+      }
+    }
+    await _persistTable(table, rows);
+  }
+
+  Future<int> updateRows(
+    String table,
+    Map<String, Object?> values, {
+    required String where,
+    required List<Object?> whereArgs,
+  }) async {
+    final rows = await _loadTable(table);
+    int updated = 0;
+    for (final row in rows) {
+      if (_matchesWhere(row, where, whereArgs)) {
+        values.forEach((k, v) {
+          row[k] = v;
+        });
+        updated++;
+      }
+    }
+    if (updated > 0) {
+      await _persistTable(table, rows);
+    }
+    return updated;
+  }
+
+  Future<int> deleteRows(
+    String table, {
+    required String where,
+    required List<Object?> whereArgs,
+  }) async {
+    final rows = await _loadTable(table);
+    final before = rows.length;
+    rows.removeWhere((row) => _matchesWhere(row, where, whereArgs));
+    final removed = before - rows.length;
+    if (removed > 0) {
+      await _persistTable(table, rows);
+    }
+    return removed;
+  }
+
+  Future<int> countRows(String table) async {
+    final rows = await _loadTable(table);
+    return rows.length;
   }
 }

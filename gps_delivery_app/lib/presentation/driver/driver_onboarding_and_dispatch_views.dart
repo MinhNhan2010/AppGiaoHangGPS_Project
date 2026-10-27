@@ -3,9 +3,23 @@ part of 'driver_subsystem_views.dart';
 extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
   /// UC13: ĐĂNG KÝ TÀI KHOẢN TÀI XẾ (Khớp 100% uc13_dang_ky_tai_xe_1791014665242.jpg)
   Widget _buildDriverKycRegistrationView() {
-    final docCount = _attachedKycDocs.length;
+    const requiredDocLabels = <String>[
+      'CCCD mặt trước',
+      'CCCD mặt sau',
+      'Giấy phép lái xe',
+      'Đăng ký xe',
+    ];
+    final docCount = requiredDocLabels
+        .where(
+          (lbl) => _attachedKycDocs.any(
+            (d) => d == lbl || d.startsWith('$lbl:'),
+          ),
+        )
+        .length;
     final kycProgress = (0.34 + (docCount / 4.0) * 0.66).clamp(0.34, 1.0);
     final stepLabel = docCount >= 4 ? 'Bước 3/3 (Đủ 4/4)' : 'Bước 2/3 ($docCount/4)';
+    final isAlreadyApproved =
+        _store.activeDriverRecord?.approvalStatus == 'Đã duyệt';
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
       clipBehavior: Clip.antiAlias,
@@ -105,30 +119,44 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
                 ),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _drvNameCtrl,
-                        decoration:
-                            const InputDecoration(labelText: 'Họ và tên'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: _drvPhoneCtrl,
-                        decoration:
-                            const InputDecoration(labelText: 'Số điện thoại'),
-                      ),
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final nameField = TextField(
+                      controller: _drvNameCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Họ và tên'),
+                    );
+                    final phoneField = TextField(
+                      controller: _drvPhoneCtrl,
+                      decoration:
+                          const InputDecoration(labelText: 'Số điện thoại'),
+                    );
+                    if (constraints.maxWidth < 520) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          nameField,
+                          const SizedBox(height: 10),
+                          phoneField,
+                        ],
+                      );
+                    }
+                    return Row(
+                      children: [
+                        Expanded(child: nameField),
+                        const SizedBox(width: 10),
+                        Expanded(child: phoneField),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _drvCitizenCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Số CCCD / CMND'),
+                  decoration: const InputDecoration(
+                    labelText: 'Số CCCD / CMND',
+                    hintText: 'Nhập 12 chữ số CCCD',
+                  ),
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -136,40 +164,95 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
                 ),
                 const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        isExpanded: true,
-                        initialValue: _vehicleType,
-                        decoration:
-                            const InputDecoration(labelText: 'Loại xe'),
-                        items: ['Xe máy', 'Xe tải nhỏ', 'Xe Van']
-                            .map(
-                              (v) => DropdownMenuItem(
-                                value: v,
-                                child: Text(
-                                  v,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final trimmedVehicle = _vehicleType.trim().isNotEmpty
+                        ? _vehicleType.trim()
+                        : 'Xe máy';
+                    final vehicleDropdown = DropdownButtonFormField<String>(
+                      key: ValueKey(trimmedVehicle),
+                      isExpanded: true,
+                      initialValue: trimmedVehicle,
+                      decoration:
+                          const InputDecoration(labelText: 'Loại xe'),
+                      items: <String>{
+                        'Xe máy',
+                        'Xe tải 500kg',
+                        'Xe tải nhỏ',
+                        'Xe bán tải',
+                        'Xe Van',
+                        trimmedVehicle,
+                      }
+                          .map(
+                            (v) => DropdownMenuItem(
+                              value: v,
+                              child: Text(
+                                v,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          if (v != null) _rebuildDriverUi(() => _vehicleType = v);
-                        },
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) _rebuildDriverUi(() => _vehicleType = v);
+                      },
+                    );
+                    final plateField = TextField(
+                      controller: _drvPlateCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Biển số xe',
+                        hintText: 'VD: 59-P1 123.45',
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: _drvPlateCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Biển số xe',
+                    );
+                    final bankNameField = TextField(
+                      controller: _drvBankNameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Ngân hàng nhận thu nhập',
+                        hintText: 'VD: Vietcombank, Techcombank...',
+                      ),
+                    );
+                    final bankAccField = TextField(
+                      controller: _drvBankAccCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Số tài khoản ngân hàng',
+                        hintText: 'Nhập số tài khoản nhận thu nhập',
+                      ),
+                    );
+                    if (constraints.maxWidth < 520) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          vehicleDropdown,
+                          const SizedBox(height: 10),
+                          plateField,
+                          const SizedBox(height: 10),
+                          bankNameField,
+                          const SizedBox(height: 10),
+                          bankAccField,
+                        ],
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(child: vehicleDropdown),
+                            const SizedBox(width: 10),
+                            Expanded(child: plateField),
+                          ],
                         ),
-                      ),
-                    ),
-                  ],
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(child: bankNameField),
+                            const SizedBox(width: 10),
+                            Expanded(child: bankAccField),
+                          ],
+                        ),
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 16),
                 const Text(
@@ -222,6 +305,18 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         );
                         return;
                       }
+                      if (!RegExp(r'^(\+84|0)[0-9]{8,10}$').hasMatch(phone) ||
+                          !RegExp(r'^[0-9]{9,12}$').hasMatch(citizen)) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              'Vui lòng nhập Số điện thoại (10-11 số) và Số CCCD (9-12 chữ số) hợp lệ!',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
                       if (_attachedKycDocs.isEmpty) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
@@ -238,19 +333,28 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         citizenId: citizen,
                         vehicleType: _vehicleType,
                         licensePlate: plate,
+                        bankName: _drvBankNameCtrl.text.trim(),
+                        bankAccount: _drvBankAccCtrl.text.trim(),
+                        attachedDocs: _attachedKycDocs.toList(),
                       );
+                      final nowApproved =
+                          _store.activeDriverRecord?.approvalStatus == 'Đã duyệt';
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
+                        SnackBar(
                           content: Text(
-                            'Đã gửi hồ sơ đăng ký Tài xế chờ duyệt thành công!',
+                            nowApproved
+                                ? 'Đã cập nhật thông tin hồ sơ & tài khoản ngân hàng Tài xế thành công!'
+                                : 'Đã gửi hồ sơ đăng ký Tài xế chờ duyệt thành công!',
                           ),
                         ),
                       );
                     },
                     icon: const Icon(Icons.send_rounded, size: 18),
-                    label: const Text(
-                      'GỬI HỒ SƠ CHỜ DUYỆT',
-                      style: TextStyle(
+                    label: Text(
+                      isAlreadyApproved
+                          ? 'CẬP NHẬT HỒ SƠ & NGÂN HÀNG'
+                          : 'GỬI HỒ SƠ CHỜ DUYỆT',
+                      style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 14.5,
                       ),
@@ -266,23 +370,36 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
   }
 
   Widget _buildKycCameraBox(String label) {
-    final isAttached = _attachedKycDocs.contains(label);
+    final matchedDoc = _attachedKycDocs
+        .where((d) => d == label || d.startsWith('$label:'))
+        .firstOrNull;
+    final isAttached = matchedDoc != null;
+    final attachedFileName =
+        (matchedDoc != null && matchedDoc.startsWith('$label:'))
+            ? matchedDoc.substring(label.length + 1).trim()
+            : '';
     return InkWell(
-      borderRadius: BorderRadius.all(Radius.zero),
-      onTap: () {
+      borderRadius: const BorderRadius.all(Radius.zero),
+      onTap: () async {
+        if (isAttached) {
+          _rebuildDriverUi(() => _attachedKycDocs.remove(matchedDoc));
+          return;
+        }
+        final picked = await SecurityAndBarcodeUtils.pickLocalDocumentOrImage(
+          dialogTitle: 'Chọn tệp / ảnh giấy tờ: $label',
+        );
+        if (picked == null || !mounted) return;
         _rebuildDriverUi(() {
-          if (isAttached) {
-            _attachedKycDocs.remove(label);
-          } else {
-            _attachedKycDocs.add(label);
-          }
+          _attachedKycDocs
+            ..removeWhere((d) => d == label || d.startsWith('$label:'))
+            ..add('$label: $picked');
         });
       },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 10),
         decoration: BoxDecoration(
           color: isAttached ? const Color(0xFFDCFCE7) : const Color(0xFFF5F1E8),
-          borderRadius: BorderRadius.all(Radius.zero),
+          borderRadius: const BorderRadius.all(Radius.zero),
           border: Border.all(
             color: const Color(0xFF14B866),
             width: isAttached ? 1.8 : 1.0,
@@ -293,16 +410,22 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
             Icon(
               isAttached
                   ? Icons.check_circle_rounded
-                  : Icons.camera_alt_outlined,
+                  : Icons.upload_file_rounded,
               color: const Color(0xFF15131E),
               size: 24,
             ),
             const SizedBox(height: 4),
             Text(
-              isAttached ? '$label (Đã đính kèm)' : label,
+              isAttached
+                  ? (attachedFileName.isNotEmpty
+                      ? '$label\n($attachedFileName)'
+                      : '$label (Đã đính kèm)')
+                  : '$label (Chọn tệp)',
               textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 12,
+                fontSize: 11.5,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF065F46),
               ),
@@ -315,25 +438,23 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
 
   /// Trang chủ Tài xế & Gạt trạng thái Online/Offline (Khớp 100% uc14_bat_tat_trang_thai_1791021276770.jpg)
   Widget _buildDriverHomeOnlineView() {
-    final policy = GpsIntegrityValidator.resolvePolicy(
-      batteryLevelPercent: _store.batteryPercent,
-      isCharging: false,
-    );
-    final activeDrv = _store.activeDriverRecord ??
-        (_store.drivers.isNotEmpty ? _store.drivers.first : null);
-    final todayOrderCount = _store.orders
+    final activeDrv = _store.activeDriverRecord;
+    final now = DateTime.now();
+    final todayOrderCount = _store.driverPersonalOrders
         .where(
           (o) =>
-              (o.assignedDriverName == _store.activeDriverName ||
-                  (activeDrv != null &&
-                      o.assignedDriverName == activeDrv.fullName)) &&
+              (o.daysAgoFrom(now) == 0 ||
+                  o.status == OrderStatus.accepted ||
+                  o.status == OrderStatus.arrivingPickup ||
+                  o.status == OrderStatus.inTransit) &&
               o.status != OrderStatus.cancelled &&
               o.status != OrderStatus.failed &&
               o.status != OrderStatus.returning &&
               o.paymentStatus != 'RETURNED',
         )
         .length;
-    final driverRating = activeDrv?.rating ?? 4.9;
+    final driverRating = activeDrv?.rating ?? 0.0;
+    final availableWallet = activeDrv?.walletBalance ?? 0.0;
 
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
@@ -360,6 +481,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                       size: 46,
                       showRadarPulse: _store.isDriverOnline,
                       isSelected: _store.isDriverOnline,
+                      animateIdle: _store.isDriverOnline,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -434,22 +556,10 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           Switch(
                             value: _store.isDriverOnline,
                             activeThumbColor: const Color(0xFF14B866),
-                            onChanged: (v) {
-                              if (v &&
-                                  activeDrv != null &&
-                                  activeDrv.approvalStatus != 'Đã duyệt') {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    backgroundColor: AppColors.danger,
-                                    content: Text(
-                                      'Hồ sơ Tài xế đang ở trạng thái "${activeDrv.approvalStatus}". Cần Admin phê duyệt KYC trước khi bật Online!',
-                                    ),
-                                  ),
-                                );
-                                return;
-                              }
-                              _store.setDriverOnlineStatus(v);
-                            },
+                            onChanged: (v) => _handleHeaderToggleDriverOnline(
+                              context,
+                              targetOnline: v,
+                            ),
                           ),
                         ],
                       ),
@@ -492,7 +602,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           borderRadius: BorderRadius.all(Radius.zero),
                         ),
                         child: Text(
-                          'Ví: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                          'Ví: ${CurrencyFormatter.formatVnd(availableWallet)}',
                           textAlign: TextAlign.center,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -516,7 +626,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           borderRadius: BorderRadius.all(Radius.zero),
                         ),
                         child: Text(
-                          'Đánh giá: ${driverRating.toStringAsFixed(1)}★',
+                          driverRating > 0 ? 'Đánh giá: ${driverRating.toStringAsFixed(1)}★' : 'Chưa có đánh giá',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 11.5,
@@ -531,34 +641,59 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
               ],
             ),
           ),
-          Map3dPerspectiveWidget(
-            height: 310,
-            mode: MapViewMode.driverRadar,
-            is3dMode: _store.isMap3dEnabled,
-            speedKmh: _store.currentSpeedKmh,
-            onToggle3d: _store.toggleMap3d,
-            routePoints: _store.activeOrderRecord != null
-                ? [
-                    _store.activeDriverLocation,
-                    _store.activeOrderRecord!.pickupLocation,
-                    _store.activeOrderRecord!.dropoffLocation,
-                  ]
-                : [
-                    _store.activeDriverLocation,
-                    GeoPoint(
-                      latitude: _store.activeDriverLocation.latitude + 0.0040,
-                      longitude: _store.activeDriverLocation.longitude + 0.0048,
-                    ),
-                  ],
-            nextTurnInstruction: _store.isDriverOnline
-                ? 'Đang tìm đơn hàng quanh bạn • Chu kỳ GPS: ${policy.pingIntervalSeconds}s'
-                : 'Bật trạng thái ON để nhận đơn hàng mới',
-            roadName: _store.activeOrderRecord?.pickupAddress ??
-                'Tọa độ GPS: ${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)}',
+          Builder(
+            builder: (context) {
+              final ongoingOrder = _store.activeDriverInProgressOrder;
+              final compatibleSearchingOrders = _store.isDriverOnline
+                  ? _store.orders
+                      .where(_isSearchingOrderCompatibleWithActiveDriver)
+                      .toList()
+                  : const <ActiveOrderRecord>[];
+              return Map3dPerspectiveWidget(
+                height: 500,
+                mode: MapViewMode.driverRadar,
+                is3dMode: _store.isMap3dEnabled,
+                speedKmh: _store.isDriverOnline && ongoingOrder != null
+                    ? _store.currentSpeedKmh
+                    : 0.0,
+                onToggle3d: _store.toggleMap3d,
+                driverLocation: _store.verifiedDriverLocations[_store.activeDriverId],
+                nearbySearchingOrders: compatibleSearchingOrders,
+                routePoints: ongoingOrder != null
+                    ? [
+                        if (_store.verifiedDriverLocations[_store.activeDriverId] != null)
+                          _store.verifiedDriverLocations[_store.activeDriverId]!,
+                        ongoingOrder.pickupLocation,
+                        ongoingOrder.dropoffLocation,
+                      ]
+                    : const [],
+                pickupLabel: ongoingOrder != null
+                    ? 'Lấy: ${ongoingOrder.pickupAddress}'
+                    : 'Điểm lấy [A]',
+                dropoffLabel: ongoingOrder != null
+                    ? 'Giao: ${ongoingOrder.dropoffAddress}'
+                    : 'Điểm giao [B]',
+                nextTurnInstruction: _store.isDriverOnline
+                    ? (ongoingOrder != null
+                        ? 'Đang thực hiện đơn ${ongoingOrder.trackingCode} (${ongoingOrder.status.displayName})'
+                        : (compatibleSearchingOrders.isNotEmpty
+                            ? 'Có ${compatibleSearchingOrders.length} đơn hàng mới quanh bạn'
+                            : 'Đang tìm đơn hàng quanh bạn'))
+                    : 'Bật trạng thái ON để nhận đơn hàng mới',
+                roadName: ongoingOrder?.pickupAddress ??
+                    (_store.liveDeviceAddress.trim().isNotEmpty
+                        ? 'GPS Thiết bị: ${_store.liveDeviceAddress.trim()} (${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})'
+                        : 'Đang chờ vị trí GPS'),
+              );
+            },
           ),
           Builder(
             builder: (context) {
-              final activeOrd = _store.activeOrderRecord;
+              final searchingOrd = _store.orders
+                  .where(_isSearchingOrderCompatibleWithActiveDriver)
+                  .firstOrNull;
+              final activeOrd =
+                  _store.activeDriverInProgressOrder ?? searchingOrd;
               if (!_store.isDriverOnline) {
                 return Container(
                   padding: const EdgeInsets.all(14),
@@ -581,23 +716,10 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           backgroundColor: const Color(0xFF14B866),
                           foregroundColor: Colors.white,
                         ),
-                        onPressed: () {
-                          final activeDrv = _store.activeDriverRecord;
-                          final isApprovedDriver = activeDrv == null ||
-                              activeDrv.approvalStatus == 'Đã duyệt';
-                          if (!isApprovedDriver) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                backgroundColor: AppColors.danger,
-                                content: Text(
-                                  'Hồ sơ Tài xế đang ở trạng thái "${activeDrv.approvalStatus}". Vui lòng chờ Admin duyệt KYC trước khi bật trực tuyến nhận đơn!',
-                                ),
-                              ),
-                            );
-                            return;
-                          }
-                          _store.setDriverOnlineStatus(true);
-                        },
+                        onPressed: () => _handleHeaderToggleDriverOnline(
+                          context,
+                          targetOnline: true,
+                        ),
                         icon: const Icon(
                           Icons.power_settings_new_rounded,
                           size: 18,
@@ -716,8 +838,10 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         runSpacing: 8,
                         children: [
                           ElevatedButton.icon(
-                            onPressed: () =>
-                                _rebuildDriverUi(() => _selectedScreenIndex = 3),
+                            onPressed: () {
+                              _store.selectDriverOrder(activeOrd.trackingCode);
+                              _rebuildDriverUi(() => _selectedScreenIndex = 3);
+                            },
                             icon: const Icon(
                               Icons.navigation_outlined,
                               size: 18,
@@ -725,8 +849,10 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                             label: const Text('Điều hướng GPS'),
                           ),
                           OutlinedButton.icon(
-                            onPressed: () =>
-                                _rebuildDriverUi(() => _selectedScreenIndex = 5),
+                            onPressed: () {
+                              _store.selectDriverOrder(activeOrd.trackingCode);
+                              _rebuildDriverUi(() => _selectedScreenIndex = 5);
+                            },
                             icon: const Icon(
                               Icons.fact_check_outlined,
                               size: 18,
@@ -751,17 +877,71 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
   /// UC15: Nhận thông báo đơn hàng mới (Khớp 100% uc15_nhan_tu_choi_don_1791021299473.jpg)
   Widget _buildIncomingOrderPopupView() {
     final searchingOrders = _store.orders
-        .where((o) => o.status == OrderStatus.searching)
+        .where(_isSearchingOrderCompatibleWithActiveDriver)
         .toList();
-    final selectedFromStore = _store.orders
+    final selectedFromStore = searchingOrders
         .where((o) => o.trackingCode == _store.selectedDriverOrderCode)
         .firstOrNull;
-    final targetOrder = (selectedFromStore != null &&
-            selectedFromStore.status == OrderStatus.searching)
-        ? selectedFromStore
-        : (searchingOrders.isNotEmpty
-            ? searchingOrders.first
-            : (_store.activeOrderRecord ?? _store.orders.first));
+    final targetOrder = selectedFromStore ?? searchingOrders.firstOrNull;
+    final ongoingTrip = _store.activeDriverInProgressOrder;
+    if (targetOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Đang dò tìm đơn hàng mới quanh khu vực của bạn',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                ongoingTrip != null
+                    ? 'Hiện chưa có cuốc xe mới (SEARCHING) phù hợp phương tiện của bạn. Bạn đang thực hiện cuốc xe ${ongoingTrip.trackingCode} (${ongoingTrip.status.displayName}).'
+                    : 'Hiện tại chưa có đơn hàng nào đang chờ nhận (SEARCHING) phù hợp phương tiện quanh vị trí của bạn.',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF14B866),
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: () =>
+                        _rebuildDriverUi(() => _selectedScreenIndex = 1),
+                    icon: const Icon(Icons.radar_rounded, size: 18),
+                    label: const Text('Quay lại Radar Trực tuyến'),
+                  ),
+                  if (ongoingTrip != null)
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        _store.selectDriverOrder(ongoingTrip.trackingCode);
+                        _rebuildDriverUi(() => _selectedScreenIndex = 3);
+                      },
+                      icon: const Icon(Icons.navigation_outlined, size: 18),
+                      label: Text(
+                        'Điều hướng ${ongoingTrip.trackingCode}',
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final rankedCandidates = SmartDispatchEngine.rankDriversForPickup(
       pickupLocation: targetOrder.pickupLocation,
       drivers: _store.drivers,
@@ -772,7 +952,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
     final isTimerRunning = _dispatchCountdownTimer?.isActive ?? false;
     final expectedNetDriverEarning =
         (targetOrder.deliveryFee + targetOrder.surchargeFee) * 0.80;
-    final isNewSearching = targetOrder.status == OrderStatus.searching;
+    final popupOrders = searchingOrders;
 
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
@@ -782,11 +962,11 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_store.orders.length > 1) ...[
+            if (popupOrders.length > 1) ...[
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: _store.orders.map((ord) {
+                children: popupOrders.map((ord) {
                   final selected = ord.trackingCode == targetOrder.trackingCode;
                   return ChoiceChip(
                     visualDensity: VisualDensity.compact,
@@ -835,11 +1015,9 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        isNewSearching
-                            ? 'ĐƠN HÀNG MỚI!'
-                            : 'CUỐC XE ${targetOrder.trackingCode} (${targetOrder.status.displayName})',
-                        style: const TextStyle(
+                      const Text(
+                        'ĐƠN HÀNG MỚI!',
+                        style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w900,
                           color: Color(0xFF15131E),
@@ -963,21 +1141,23 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                       side: const BorderSide(color: AppColors.danger),
                       padding: const EdgeInsets.symmetric(vertical: 13),
                     ),
-                    onPressed: isNewSearching
-                        ? () {
-                            _rebuildDriverUi(() {
-                              _countdownSeconds = 28;
-                              _reassignToNextCandidate();
-                            });
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Đã từ chối cuốc xe. Hệ thống tự động chuyển đơn cho tài xế phù hợp tiếp theo.',
-                                ),
-                              ),
-                            );
-                          }
-                        : null,
+                    onPressed: () {
+                      _store.recordDriverDispatchRejection(
+                        targetOrder.trackingCode,
+                      );
+                      _rebuildDriverUi(() {
+                        _rejectedOrderCodes.add(targetOrder.trackingCode);
+                        _countdownSeconds = 28;
+                        _reassignToNextCandidate();
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Đã từ chối cuốc ${targetOrder.trackingCode}. Hệ thống đã ghi nhận vào tỷ lệ nhận đơn và chuyển tiếp cho tài xế kế tiếp.',
+                          ),
+                        ),
+                      );
+                    },
                     child: const Text('Từ chối (Chuyển tiếp)'),
                   ),
                 ),
@@ -992,9 +1172,19 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                     ),
                     onPressed: () {
                       final currentActiveDrv = _store.activeDriverRecord;
-                      if (isNewSearching &&
-                          currentActiveDrv != null &&
-                          currentActiveDrv.approvalStatus != 'Đã duyệt') {
+                      if (currentActiveDrv == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              'Vui lòng hoàn tất đăng ký hồ sơ KYC Tài xế trước khi nhận đơn!',
+                            ),
+                          ),
+                        );
+                        _rebuildDriverUi(() => _selectedScreenIndex = 0);
+                        return;
+                      }
+                      if (currentActiveDrv.approvalStatus != 'Đã duyệt') {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             backgroundColor: AppColors.danger,
@@ -1005,38 +1195,71 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         );
                         return;
                       }
+                      final drvBal = currentActiveDrv.walletBalance;
+                      if (drvBal < 200000) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.warning,
+                            content: Text(
+                              'Ví ký quỹ (${CurrencyFormatter.formatVnd(drvBal)}) chưa đạt tối thiểu 200.000đ để nhận đơn mới. Đang chuyển tới Ví Thu nhập...',
+                            ),
+                          ),
+                        );
+                        _rebuildDriverUi(() => _selectedScreenIndex = 6);
+                        return;
+                      }
+                      final inProg = _store.activeDriverInProgressOrder;
+                      if (inProg != null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.warning,
+                            content: Text(
+                              'Bạn đang thực hiện cuốc xe ${inProg.trackingCode} (${inProg.status.displayName}). Vui lòng hoàn tất cuốc hiện tại trước khi nhận cuốc mới!',
+                            ),
+                          ),
+                        );
+                        _store.selectDriverOrder(inProg.trackingCode);
+                        _rebuildDriverUi(() => _selectedScreenIndex = 3);
+                        return;
+                      }
                       _dispatchCountdownTimer?.cancel();
                       if (!_store.isDriverOnline) {
                         _store.setDriverOnlineStatus(true);
                       }
-                      _store.selectDriverOrder(targetOrder.trackingCode);
-                      if (isNewSearching) {
-                        final assignedName = currentActiveDrv?.fullName ??
-                            topCandidate?.driver.fullName;
-                        final assignedPlate = currentActiveDrv?.licensePlate ??
-                            topCandidate?.driver.licensePlate;
-                        _store.driverAcceptOrder(
-                          targetOrder.trackingCode,
-                          customDriverName: assignedName,
-                          customPlate: assignedPlate,
+                      final assignedName = currentActiveDrv.fullName;
+                      final assignedPlate = currentActiveDrv.licensePlate;
+                      final wasStillSearching =
+                          targetOrder.status == OrderStatus.searching;
+                      _store.driverAcceptOrder(
+                        targetOrder.trackingCode,
+                        customDriverName: assignedName,
+                        customPlate: assignedPlate,
+                      );
+                      if (targetOrder.status != OrderStatus.accepted) {
+                        final failReason = !wasStillSearching
+                            ? 'Đơn hàng ${targetOrder.trackingCode} vừa được xử lý hoặc đã hết hiệu lực nhận chuyến!'
+                            : 'Phương tiện hoặc ví ký quỹ của bạn chưa đủ điều kiện nhận đơn này!';
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(failReason),
+                          ),
                         );
+                        return;
                       }
+                      _store.selectDriverOrder(targetOrder.trackingCode);
                       _podRecipientCtrl.text = targetOrder.recipientName;
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
                           content: Text(
-                            isNewSearching
-                                ? 'Đã nhận cuốc xe ${targetOrder.trackingCode} thành công!'
-                                : 'Đang mở điều hướng cho cuốc xe ${targetOrder.trackingCode} (${targetOrder.status.displayName}).',
+                            'Đã nhận cuốc xe ${targetOrder.trackingCode} thành công!',
                           ),
                         ),
                       );
                       _rebuildDriverUi(() => _selectedScreenIndex = 3);
                     },
                     icon: const Icon(Icons.check_circle_outline),
-                    label: Text(
-                      isNewSearching ? 'NHẬN ĐƠN NGAY' : 'ĐIỀU HƯỚNG CUỐC XE',
-                    ),
+                    label: const Text('NHẬN ĐƠN NGAY'),
                   ),
                 ),
               ],
@@ -1049,22 +1272,66 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
 
   /// UC16: Điều hướng 3D GPS Turn-by-Turn tới điểm lấy/giao hàng (Khớp 100% uc16_dieu_huong_gps_1791021319175.jpg)
   Widget _buildTurnByTurnNavigationView() {
-    final activeOrder = _store.activeOrderRecord ?? _store.orders.first;
-    final remMeters = _store.distanceFromDriverToDropoffMeters();
-    final isHeadingToPickup = activeOrder.status == OrderStatus.searching ||
+    final activeOrder = _store.activeDriverPersonalOrderRecord;
+    if (activeOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chưa có cuốc xe đang điều hướng',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Tài khoản tài xế của bạn hiện chưa nhận đơn hàng nào. Vui lòng mở màn hình Nhận đơn mới để nhận cuốc xe trước khi bắt đầu dẫn đường GPS.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF14B866),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () =>
+                    _rebuildDriverUi(() => _selectedScreenIndex = 2),
+                icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                label: const Text('Mở Nhận đơn mới'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final isReturningToWarehouse =
+        activeOrder.status == OrderStatus.returning;
+    final isHeadingToPickup = isReturningToWarehouse ||
+        activeOrder.status == OrderStatus.searching ||
         activeOrder.status == OrderStatus.accepted ||
         activeOrder.status == OrderStatus.arrivingPickup;
+    final remMeters = isHeadingToPickup
+        ? _store.distanceFromDriverToPickupMeters()
+        : _store.distanceFromDriverToDropoffMeters();
     final targetAddress = isHeadingToPickup
         ? activeOrder.pickupAddress
         : activeOrder.dropoffAddress;
-    final nextTurnMeters = (remMeters * 0.25).round().clamp(40, 600);
-    final navHeadline = remMeters <= 100
-        ? 'Đã tới khu vực đích ($targetAddress)'
-        : 'Rẽ hướng ${_store.activeDriverBearing.toStringAsFixed(0)}° sau $nextTurnMeters m tới $targetAddress';
-    final navSubline =
-        'Chặng: ${isHeadingToPickup ? "Tới điểm lấy hàng [A]" : "Tới điểm giao hàng [B]"} • Còn ${(remMeters / 1000).toStringAsFixed(2)} km';
+    final navHeadline = !_store.hasRealDeviceGpsFix
+        ? 'Đang chờ vị trí GPS'
+        : remMeters <= 100 ? 'Gần điểm đến' : targetAddress;
+    final navSubline = !_store.hasRealDeviceGpsFix
+        ? targetAddress
+        : 'Khoảng cách thẳng đến điểm ${isHeadingToPickup ? 'lấy' : 'giao'}: ${(remMeters / 1000).toStringAsFixed(2)} km';
     final shouldMaskPhone = activeOrder.status == OrderStatus.delivered ||
-        activeOrder.status == OrderStatus.cancelled;
+        activeOrder.status == OrderStatus.cancelled ||
+        activeOrder.status == OrderStatus.failed ||
+        activeOrder.status == OrderStatus.returning ||
+        activeOrder.paymentStatus == 'RETURNED';
     final displayPhone = SecurityAndBarcodeUtils.maskPhoneNumber(
       activeOrder.recipientPhone,
       shouldMask: shouldMaskPhone,
@@ -1130,11 +1397,11 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (_store.orders.length > 1) ...[
+                if (_store.driverPersonalOrders.length > 1) ...[
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: _store.orders.map((ord) {
+                    children: _store.driverPersonalOrders.map((ord) {
                       final selected =
                           ord.trackingCode == activeOrder.trackingCode;
                       return ChoiceChip(
@@ -1159,13 +1426,29 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                   const SizedBox(height: 10),
                 ],
                 Map3dPerspectiveWidget(
-                  height: 300,
+                  height: 520,
                   mode: MapViewMode.driverTurnByTurn,
                   showTopBanner: false,
                   is3dMode: _store.isMap3dEnabled,
-                  speedKmh: _store.currentSpeedKmh,
+                  speedKmh: _store.isDriverOnline &&
+                          (activeOrder.status == OrderStatus.accepted ||
+                              activeOrder.status ==
+                                  OrderStatus.arrivingPickup ||
+                              activeOrder.status == OrderStatus.inTransit ||
+                              activeOrder.status == OrderStatus.returning)
+                      ? _store.currentSpeedKmh
+                      : 0.0,
                   onToggle3d: _store.toggleMap3d,
-                  progressFraction: _store.routeProgressStep / 10.0,
+                  driverLocation: _store.verifiedDriverLocations[_store.activeDriverId],
+                  progressFraction: activeOrder.status == OrderStatus.delivered
+                      ? 1.0
+                      : (_store.routeProgressStep > 0
+                          ? (_store.routeProgressStep / 10.0)
+                          : (1.0 -
+                                  (_store.distanceFromDriverToDropoffMeters() /
+                                      activeOrder.distanceMeters
+                                          .clamp(250.0, 500000.0)))
+                              .clamp(0.0, 1.0)),
                   routePoints: _store.activeRoutePolyline.length >= 2
                       ? _store.activeRoutePolyline
                       : <GeoPoint>[
@@ -1190,7 +1473,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     OutlinedButton.icon(
-                      onPressed: () {
+                      onPressed: () async {
                         if (shouldMaskPhone) {
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
@@ -1201,10 +1484,20 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           );
                           return;
                         }
-                        ScaffoldMessenger.of(context).showSnackBar(
+                        final messenger = ScaffoldMessenger.of(context);
+                        await Clipboard.setData(
+                          ClipboardData(text: activeOrder.recipientPhone),
+                        );
+                        _store.sendChatMessage(
+                          activeOrder.trackingCode,
+                          '📞 Đã thực hiện cuộc gọi liên hệ người nhận ($displayPhone)',
+                          isCustomer: false,
+                        );
+                        if (!mounted) return;
+                        messenger.showSnackBar(
                           SnackBar(
                             content: Text(
-                              'Đang kết nối cuộc gọi tới ${activeOrder.recipientName} ($displayPhone)...',
+                              'Đã sao chép SĐT ${activeOrder.recipientPhone} vào khay nhớ tạm và ghi nhận nhật ký cuộc gọi tới ${activeOrder.recipientName}!',
                             ),
                           ),
                         );
@@ -1242,23 +1535,6 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF14B866),
-                        foregroundColor: Colors.white,
-                      ),
-                      onPressed: () => _rebuildDriverUi(() => _selectedScreenIndex = 4),
-                      icon: const Icon(Icons.flag_rounded, size: 16),
-                      label: const Text('Đã đến nơi / Cập nhật tiến độ'),
-                    ),
-                    ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                      ),
-                      onPressed: () => _rebuildDriverUi(() => _selectedScreenIndex = 5),
-                      icon: const Icon(Icons.camera_alt_outlined, size: 16),
-                      label: const Text('Xác nhận POD & OTP'),
-                    ),
                     OutlinedButton.icon(
                       onPressed: () => _rebuildDriverUi(() => _selectedScreenIndex = 7),
                       icon: const Icon(
@@ -1353,19 +1629,27 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                             'Tôi đã đến điểm giao, vui lòng nhận hàng',
                             'Vui lòng đọc mã OTP 4 số nhận hàng',
                           ].map((quickMsg) {
+                            final canQuickChat = activeOrder.status ==
+                                    OrderStatus.accepted ||
+                                activeOrder.status ==
+                                    OrderStatus.arrivingPickup ||
+                                activeOrder.status == OrderStatus.inTransit ||
+                                activeOrder.status == OrderStatus.returning;
                             return ActionChip(
                               visualDensity: VisualDensity.compact,
                               label: Text(
                                 quickMsg,
                                 style: const TextStyle(fontSize: 11),
                               ),
-                              onPressed: () {
-                                _store.sendChatMessage(
-                                  activeOrder.trackingCode,
-                                  quickMsg,
-                                  isCustomer: false,
-                                );
-                              },
+                              onPressed: canQuickChat
+                                  ? () {
+                                      _store.sendChatMessage(
+                                        activeOrder.trackingCode,
+                                        quickMsg,
+                                        isCustomer: false,
+                                      );
+                                    }
+                                  : null,
                             );
                           }).toList(),
                         ),
@@ -1375,9 +1659,25 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                             Expanded(
                               child: TextField(
                                 controller: _driverChatInputCtrl,
-                                decoration: const InputDecoration(
+                                enabled: activeOrder.status ==
+                                        OrderStatus.accepted ||
+                                    activeOrder.status ==
+                                        OrderStatus.arrivingPickup ||
+                                    activeOrder.status ==
+                                        OrderStatus.inTransit ||
+                                    activeOrder.status == OrderStatus.returning,
+                                decoration: InputDecoration(
                                   isDense: true,
-                                  hintText: 'Nhập tin nhắn gửi khách hàng...',
+                                  hintText: (activeOrder.status ==
+                                              OrderStatus.accepted ||
+                                          activeOrder.status ==
+                                              OrderStatus.arrivingPickup ||
+                                          activeOrder.status ==
+                                              OrderStatus.inTransit ||
+                                          activeOrder.status ==
+                                              OrderStatus.returning)
+                                      ? 'Nhập tin nhắn gửi khách hàng...'
+                                      : 'Chỉ nhắn tin khi đang thực hiện chuyến giao',
                                 ),
                               ),
                             ),
@@ -1387,16 +1687,26 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                                 backgroundColor: const Color(0xFF14B866),
                                 foregroundColor: Colors.white,
                               ),
-                              onPressed: () {
-                                final txt = _driverChatInputCtrl.text.trim();
-                                if (txt.isEmpty) return;
-                                _store.sendChatMessage(
-                                  activeOrder.trackingCode,
-                                  txt,
-                                  isCustomer: false,
-                                );
-                                _driverChatInputCtrl.clear();
-                              },
+                              onPressed: (activeOrder.status ==
+                                          OrderStatus.accepted ||
+                                      activeOrder.status ==
+                                          OrderStatus.arrivingPickup ||
+                                      activeOrder.status ==
+                                          OrderStatus.inTransit ||
+                                      activeOrder.status ==
+                                          OrderStatus.returning)
+                                  ? () {
+                                      final txt =
+                                          _driverChatInputCtrl.text.trim();
+                                      if (txt.isEmpty) return;
+                                      _store.sendChatMessage(
+                                        activeOrder.trackingCode,
+                                        txt,
+                                        isCustomer: false,
+                                      );
+                                      _driverChatInputCtrl.clear();
+                                    }
+                                  : null,
                               child: const Text('Gửi'),
                             ),
                           ],
@@ -1415,11 +1725,49 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
 
   /// UC17: Cập nhật tiến độ chuyến giao (Khớp 100% uc17_cap_nhat_trang_thai_pod_1791021350773.jpg)
   Widget _buildTripStepProgressView() {
-    final ord = _store.activeOrderRecord ?? _store.orders.first;
+    final ord = _store.activeDriverPersonalOrderRecord;
+    if (ord == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chưa có chuyến giao cần cập nhật tiến độ',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Bạn chưa nhận cuốc xe nào. Vui lòng nhận đơn hàng mới trước khi cập nhật tiến độ giao nhận.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF14B866),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () =>
+                    _rebuildDriverUi(() => _selectedScreenIndex = 2),
+                icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                label: const Text('Mở Nhận đơn mới'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final isNormalFlow = ord.status.index >= OrderStatus.accepted.index &&
-        ord.status.index <= OrderStatus.delivered.index;
+        ord.status.index <= OrderStatus.delivered.index &&
+        ord.paymentStatus != 'RETURNED';
     final isTerminal = ord.status == OrderStatus.delivered ||
-        ord.status == OrderStatus.cancelled;
+        ord.status == OrderStatus.cancelled ||
+        ord.paymentStatus == 'RETURNED';
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
       child: Padding(
@@ -1443,12 +1791,12 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                 ),
               ),
             ),
-            if (_store.orders.length > 1) ...[
+            if (_store.driverPersonalOrders.length > 1) ...[
               const SizedBox(height: 10),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: _store.orders.map((o) {
+                children: _store.driverPersonalOrders.map((o) {
                   final selected = o.trackingCode == ord.trackingCode;
                   final statusText = o.paymentStatus == 'RETURNED'
                       ? 'Đã hoàn kho'
@@ -1482,22 +1830,30 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
             ),
             const SizedBox(height: 10),
             _stepTile(
-              'Bước 1: Đã nhận đơn (ACCEPTED)',
+              'Bước 1: Đã nhận đơn',
               isNormalFlow && ord.status.index >= OrderStatus.accepted.index,
             ),
             _stepTile(
-              'Bước 2: Đã đến điểm lấy hàng (ARRIVING_PICKUP)',
+              'Bước 2: Đã đến điểm lấy hàng',
               isNormalFlow &&
                   ord.status.index >= OrderStatus.arrivingPickup.index,
             ),
             _stepTile(
-              'Bước 3: Đã lấy hàng & Đang giao (IN_TRANSIT)',
+              'Bước 3: Đã lấy hàng & Đang giao',
               isNormalFlow && ord.status.index >= OrderStatus.inTransit.index,
             ),
             _stepTile(
-              'Bước 4: Đã giao hàng thành công (DELIVERED + POD)',
-              ord.status == OrderStatus.delivered,
+              'Bước 4: Đã giao hàng thành công & Ký nhận POD',
+              isNormalFlow && ord.status == OrderStatus.delivered,
             ),
+            if (ord.status == OrderStatus.returning ||
+                ord.paymentStatus == 'RETURNED')
+              _stepTile(
+                ord.paymentStatus == 'RETURNED'
+                    ? 'Hoàn kho: Đã bàn giao kiện hàng về kho gửi thành công'
+                    : 'Hoàn kho: Đang vận chuyển kiện hàng quay về kho gửi [A]',
+                ord.paymentStatus == 'RETURNED',
+              ),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -1511,11 +1867,46 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                     onPressed: isTerminal
                         ? null
                         : () {
+                            final activeDrv = _store.activeDriverRecord;
+                            if (activeDrv != null &&
+                                activeDrv.approvalStatus != 'Đã duyệt') {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  backgroundColor: AppColors.danger,
+                                  content: Text(
+                                    'Hồ sơ tài xế đang ở trạng thái "${activeDrv.approvalStatus}". Chưa thể cập nhật chuyến giao!',
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
+                            if (!_store.isDriverOnline) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  backgroundColor: AppColors.danger,
+                                  content: Text(
+                                    'Vui lòng bật trạng thái Trực tuyến (Online) trước khi cập nhật tiến độ đơn hàng!',
+                                  ),
+                                ),
+                              );
+                              return;
+                            }
                             if (ord.status == OrderStatus.inTransit) {
-                              _store.stepDriverAlongRoute(snapToDropoff: true);
                               _rebuildDriverUi(() => _selectedScreenIndex = 5);
                             } else if (ord.status == OrderStatus.searching ||
                                 ord.status == OrderStatus.draft) {
+                              if ((activeDrv?.walletBalance ?? 0.0) < 200000) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    backgroundColor: AppColors.danger,
+                                    content: Text(
+                                      'Số dư Ví ký quỹ tối thiểu phải đạt 200.000đ mới được nhận đơn (Đang mở Ví thu nhập để nạp ký quỹ)!',
+                                    ),
+                                  ),
+                                );
+                                _rebuildDriverUi(() => _selectedScreenIndex = 6);
+                                return;
+                              }
                               _store.driverAcceptOrder(ord.trackingCode);
                             } else {
                               _store.driverAdvanceOrderStatus(ord.trackingCode);
@@ -1523,22 +1914,46 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           },
                     icon: const Icon(Icons.double_arrow),
                     label: Text(
-                      ord.status == OrderStatus.delivered
-                          ? 'Đã hoàn tất giao hàng'
-                          : ord.status == OrderStatus.cancelled
-                              ? 'Đơn hàng đã hủy'
-                              : ord.status == OrderStatus.failed
-                                  ? 'Giao lại chuyến hàng (IN_TRANSIT)'
-                                  : ord.status == OrderStatus.returning
-                                      ? 'Xác nhận hoàn trả về Kho'
-                                      : ord.status == OrderStatus.inTransit
-                                          ? 'Đã đến điểm giao • Xác nhận POD & OTP'
-                                          : 'Vuốt chuyển bước tiếp theo',
+                      ord.paymentStatus == 'RETURNED'
+                          ? 'Đã hoàn trả về Kho thành công'
+                          : ord.status == OrderStatus.delivered
+                              ? 'Đã hoàn tất giao hàng'
+                              : ord.status == OrderStatus.cancelled
+                                  ? 'Đơn hàng đã hủy'
+                                  : ord.status == OrderStatus.failed
+                                      ? 'Bắt đầu giao lại chuyến hàng'
+                                      : ord.status == OrderStatus.returning
+                                          ? 'Xác nhận hoàn trả về Kho'
+                                          : ord.status == OrderStatus.inTransit
+                                              ? 'Đã đến điểm giao • Xác nhận POD & OTP'
+                                              : 'Cập nhật bước tiếp theo',
                     ),
                   ),
                 ),
               ],
             ),
+            if (ord.status == OrderStatus.inTransit) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                    side: const BorderSide(color: AppColors.danger, width: 1.4),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () =>
+                      _showDriverMarkDeliveryFailedDialog(context, ord),
+                  icon: const Icon(Icons.assignment_late_outlined, size: 18),
+                  label: const Text(
+                    'Báo giao thất bại (Khách không nhận / Không nghe máy)',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1564,9 +1979,45 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
 
   /// UC17: Xác nhận giao hàng thành công (POD Photo + OTP 4 số + Kiểm tra <= 100m)
   Widget _buildPodConfirmationView() {
-    final ord = _store.activeOrderRecord ?? _store.orders.first;
+    final ord = _store.activeDriverPersonalOrderRecord;
+    if (ord == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chưa có đơn hàng cần xác nhận POD & OTP',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Bạn chưa có chuyến giao nào được gán. Vui lòng nhận đơn hàng mới trước khi chụp ảnh xác nhận POD.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF14B866),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () =>
+                    _rebuildDriverUi(() => _selectedScreenIndex = 2),
+                icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                label: const Text('Mở Nhận đơn mới'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final distMeters = _store.distanceFromDriverToDropoffMeters();
-    final isWithin100m = distMeters <= 100.0;
+    final isWithin100m = _store.hasRealDeviceGpsFix && distMeters <= 100.0;
     final isOrderClosed = ord.status == OrderStatus.delivered ||
         ord.status == OrderStatus.cancelled;
     final isInTransit = ord.status == OrderStatus.inTransit;
@@ -1597,12 +2048,12 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                 ),
               ),
             ),
-            if (_store.orders.length > 1) ...[
+            if (_store.driverPersonalOrders.length > 1) ...[
               const SizedBox(height: 10),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: _store.orders.map((o) {
+                children: _store.driverPersonalOrders.map((o) {
                   final selected = o.trackingCode == ord.trackingCode;
                   return ChoiceChip(
                     visualDensity: VisualDensity.compact,
@@ -1628,7 +2079,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
             ],
             const SizedBox(height: 12),
             PodGpsWatermarkPhotoCard(
-              driverLocation: _store.activeDriverLocation,
+              driverLocation: _store.verifiedDriverLocations[_store.activeDriverId],
               recipientName: _podRecipientCtrl.text,
               otpCode: _podOtpCtrl.text,
               distanceToDropoffMeters: distMeters,
@@ -1641,7 +2092,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
-                    '⚠️ Quy trình FSM: Đơn ${ord.trackingCode} đang ở trạng thái "${ord.status.displayName}". Tài xế cần hoàn tất bước Nhận đơn & Lấy hàng (IN_TRANSIT) trước khi xác nhận POD.',
+                    '⚠️ Đơn ${ord.trackingCode} đang ở trạng thái "${ord.status.displayName}". Tài xế cần hoàn tất bước Nhận đơn & Lấy hàng trước khi xác nhận POD.',
                     style: const TextStyle(
                       fontSize: 12,
                       color: AppColors.danger,
@@ -1652,7 +2103,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                     onPressed: () =>
                         _rebuildDriverUi(() => _selectedScreenIndex = 4),
                     icon: const Icon(Icons.playlist_add_check_rounded, size: 16),
-                    label: const Text('Mở Tiến độ chuyến (UC17)'),
+                    label: const Text('Mở Tiến độ chuyến'),
                   ),
                 ],
               ),
@@ -1676,49 +2127,62 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                     onPressed: () =>
                         _rebuildDriverUi(() => _selectedScreenIndex = 4),
                     icon: const Icon(Icons.playlist_add_check_rounded, size: 16),
-                    label: const Text('Xác nhận đã đến điểm giao (UC17)'),
+                    label: const Text('Xác nhận đã đến điểm giao'),
                   ),
                 ],
               ),
             ],
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _podRecipientCtrl,
-                    onChanged: (_) => _rebuildDriverUi(() {}),
-                    decoration:
-                        const InputDecoration(labelText: 'Tên người thực nhận'),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final recipientField = TextField(
+                  controller: _podRecipientCtrl,
+                  onChanged: (_) => _rebuildDriverUi(() {}),
+                  decoration:
+                      const InputDecoration(labelText: 'Tên người thực nhận'),
+                );
+                final otpField = TextField(
+                  controller: _podOtpCtrl,
+                  maxLength: 4,
+                  onChanged: (_) => _rebuildDriverUi(() {}),
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Mã OTP xác nhận (4 chữ số)',
+                    helperText:
+                        'Nhập mã OTP 4 chữ số do người nhận cung cấp',
+                    suffixIcon: _podOtpCtrl.text.isNotEmpty
+                        ? IconButton(
+                            tooltip: 'Xóa mã OTP đã nhập',
+                            icon: const Icon(
+                              Icons.clear_rounded,
+                              size: 18,
+                            ),
+                            onPressed: () => _rebuildDriverUi(() {
+                              _podOtpCtrl.clear();
+                            }),
+                          )
+                        : null,
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: TextField(
-                    controller: _podOtpCtrl,
-                    maxLength: 4,
-                    onChanged: (_) => _rebuildDriverUi(() {}),
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: 'Mã OTP xác nhận (4 chữ số)',
-                      helperText:
-                          'Nhập mã OTP 4 chữ số do người nhận cung cấp (xem tại UC06)',
-                      suffixIcon: _podOtpCtrl.text.isNotEmpty
-                          ? IconButton(
-                              tooltip: 'Xóa mã OTP đã nhập',
-                              icon: const Icon(
-                                Icons.clear_rounded,
-                                size: 18,
-                              ),
-                              onPressed: () => _rebuildDriverUi(() {
-                                _podOtpCtrl.clear();
-                              }),
-                            )
-                          : null,
-                    ),
-                  ),
-                ),
-              ],
+                );
+                if (constraints.maxWidth < 520) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      recipientField,
+                      const SizedBox(height: 10),
+                      otpField,
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: recipientField),
+                    const SizedBox(width: 10),
+                    Expanded(child: otpField),
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 10),
             SizedBox(
@@ -1754,7 +2218,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text(
-                                'Mã OTP 4 chữ số không chính xác. Vui lòng đề nghị người nhận kiểm tra mã OTP trên màn hình Theo dõi đơn hàng (UC06)!',
+                                'Mã OTP 4 chữ số không chính xác. Vui lòng đề nghị người nhận kiểm tra mã OTP trên màn hình Theo dõi đơn hàng!',
                               ),
                             ),
                           );
@@ -1792,7 +2256,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                       : ord.status == OrderStatus.cancelled
                           ? 'ĐƠN HÀNG ĐÃ HỦY'
                           : !isInTransit
-                              ? 'CHỜ LẤY HÀNG (IN_TRANSIT)'
+                              ? 'CHỜ NHẬN HÀNG ĐỂ GIAO'
                               : isWithin100m
                                   ? 'XÁC NHẬN GIAO & XUẤT POD'
                                   : 'VÀO VÙNG < 100M ĐỂ MỞ POD',
@@ -1801,9 +2265,159 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                 ),
               ),
             ),
+            if (isInTransit) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                    side: const BorderSide(color: AppColors.danger, width: 1.4),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onPressed: () =>
+                      _showDriverMarkDeliveryFailedDialog(context, ord),
+                  icon: const Icon(Icons.assignment_late_outlined, size: 18),
+                  label: const Text(
+                    'Báo giao thất bại (Chờ Shop xử lý Giao lại / Hoàn kho)',
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  void _showDriverMarkDeliveryFailedDialog(
+    BuildContext context,
+    ActiveOrderRecord ord,
+  ) {
+    const failReasons = <String>[
+      'Khách không nghe máy / Không liên lạc được',
+      'Khách từ chối nhận hàng tại điểm giao',
+      'Sai địa chỉ giao hàng / Không tìm thấy người nhận',
+      'Khách hẹn giao lại ca sau',
+    ];
+    String selectedReason = failReasons.first;
+    final extraNoteCtrl = TextEditingController();
+    Animation<double>? dialogRouteAnim;
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        dialogRouteAnim ??= ModalRoute.of(dialogCtx)?.animation;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: Text(
+                'Báo giao thất bại (${ord.trackingCode})',
+                style: const TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              content: SizedBox(
+                width: 420,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Chọn lý do giao thất bại thực tế tại điểm giao:',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      DropdownButtonFormField<String>(
+                        isExpanded: true,
+                        initialValue: selectedReason,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          labelText: 'Lý do giao thất bại',
+                        ),
+                        items: failReasons
+                            .map(
+                              (r) => DropdownMenuItem(
+                                value: r,
+                                child: Text(
+                                  r,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12.5),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setDialogState(() => selectedReason = v);
+                          }
+                        },
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: extraNoteCtrl,
+                        maxLines: 2,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          labelText: 'Ghi chú hiện trường (Tùy chọn)',
+                          hintText: 'VD: Đã gọi 3 cuộc lúc 14:20 không bắt máy...',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Đóng'),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.danger,
+                  ),
+                  onPressed: () {
+                    final extra = extraNoteCtrl.text.trim();
+                    final fullReason = extra.isEmpty
+                        ? selectedReason
+                        : '$selectedReason ($extra)';
+                    final ok = _store.driverMarkDeliveryFailed(
+                      ord.trackingCode,
+                      fullReason,
+                    );
+                    Navigator.of(dialogCtx).pop();
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor:
+                            ok ? AppColors.warning : AppColors.danger,
+                        content: Text(
+                          ok
+                              ? 'Đã chuyển đơn ${ord.trackingCode} sang trạng thái Giao thất bại ($selectedReason). Chờ Cửa hàng/Khách yêu cầu Giao lại hoặc Hoàn kho!'
+                              : 'Không thể báo giao thất bại ở trạng thái hiện tại.',
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Xác nhận Giao thất bại'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      SecurityAndBarcodeUtils.disposeControllersAfterDialog(
+        [extraNoteCtrl],
+        dialogRouteAnim,
+      );
+    });
   }
 }

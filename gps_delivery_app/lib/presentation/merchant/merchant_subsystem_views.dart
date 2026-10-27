@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/utils/currency_formatter.dart';
@@ -14,7 +17,6 @@ import '../widgets/system_state_screens.dart';
 
 part 'merchant_store_and_order_views.dart';
 part 'merchant_tracking_and_finance_views.dart';
-
 
 class _BatchCsvRow {
   final int rowNumber;
@@ -64,44 +66,55 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   final AppStateStore _store = AppStateStore.instance;
   int _selectedScreenIndex = 2; // Mặc định: Tạo đơn gửi hàng (UC32)
 
-  // Thông tin cửa hàng (UC30)
+  // Thông tin cửa hàng
   late final TextEditingController _storeNameCtrl;
   late final TextEditingController _taxCodeCtrl;
   late final TextEditingController _bankAccountCtrl;
-  final TextEditingController _repNameCtrl =
-      TextEditingController(text: 'Nguyễn Văn A');
-  final TextEditingController _shopPhoneCtrl =
-      TextEditingController(text: '0909112233');
-  final TextEditingController _shopEmailCtrl =
-      TextEditingController(text: 'contact@gomsuviet.vn');
-  final TextEditingController _shopAddressCtrl = TextEditingController(
-    text: '123 Đường Lê Lợi, Phường Bến Nghé, Quận 1, TP. HCM',
-  );
-  String _businessCategory = 'Gốm sứ & Nội thất';
-  String _selectedBankName = 'Ngân hàng VPBank (VPB)';
+  final TextEditingController _repNameCtrl = TextEditingController();
+  final TextEditingController _shopPhoneCtrl = TextEditingController();
+  final TextEditingController _shopEmailCtrl = TextEditingController();
+  final TextEditingController _shopAddressCtrl = TextEditingController();
+  String _businessCategory = '';
+  String _selectedBankName = '';
 
-  // Tạo đơn gửi hàng lẻ (UC32)
-  String _selectedWarehouseName =
-      'Kho chính - 123 Đường Lê Lợi, Quận 1, TP. HCM';
+  // Tạo đơn gửi hàng lẻ & Cấu hình Kho
+  final TextEditingController _warehouseNameCtrl = TextEditingController();
+  final TextEditingController _warehouseContactCtrl = TextEditingController();
+  final TextEditingController _warehousePhoneCtrl = TextEditingController();
+  final TextEditingController _warehouseOpenHoursCtrl = TextEditingController(
+    text: '08:00 - 21:00',
+  );
+  final TextEditingController _webhookUrlCtrl = TextEditingController();
+  bool _warehouseIsPrimary = true;
+  bool _isTestingWebhook = false;
+  GeoPoint? _pinnedWarehouseLocation;
+  bool _isReverseGeocodingWarehouse = false;
   final TextEditingController _singleNameCtrl = TextEditingController();
   final TextEditingController _singlePhoneCtrl = TextEditingController();
   final TextEditingController _singleAddrCtrl = TextEditingController();
+  GeoPoint? _pinnedSingleDropoffLocation;
+  bool _isReverseGeocodingSingleDropoff = false;
+  List<GeoPoint>? _singleLiveOsrmPolyline;
+  final Map<String, List<GeoPoint>> _merchantSyncedPolylines =
+      <String, List<GeoPoint>>{};
   String _singlePkgCategory = 'Quần áo, Điện tử';
-  final TextEditingController _singleWeightCtrl =
-      TextEditingController(text: '2.5');
-  final TextEditingController _singleDimCtrl =
-      TextEditingController(text: '30 x 20 x 10 cm');
-  final TextEditingController _singleCodCtrl =
-      TextEditingController(text: '0');
+  final TextEditingController _singleWeightCtrl = TextEditingController(
+    text: '1.0',
+  );
+  final TextEditingController _singleDimCtrl = TextEditingController(
+    text: '30 x 20 x 10 cm',
+  );
+  final TextEditingController _singleCodCtrl = TextEditingController(text: '0');
   final TextEditingController _singleNoteCtrl = TextEditingController();
   String _feePayer = 'Người gửi trả phí';
+  String _batchFeePayer = 'Người gửi trả phí';
   DeliveryServiceType _merchantServiceType = DeliveryServiceType.express30m;
-  bool _isFragile = true;
+  bool _isFragile = false;
   bool _isKeepCold = false;
   int _selectedWaybillOrderIndex = 0;
   int _selectedWarehouseIndex = 0;
 
-  // Sửa thông tin đơn hàng (UC36) tách biệt khỏi form Tạo đơn (UC32)
+  // Sửa thông tin đơn hàng tách biệt khỏi form Tạo đơn
   final TextEditingController _editOrderNameCtrl = TextEditingController();
   final TextEditingController _editOrderPhoneCtrl = TextEditingController();
   final TextEditingController _editOrderAddrCtrl = TextEditingController();
@@ -110,35 +123,20 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   String? _lastSyncedMerchantProfileKey;
 
   // Batch CSV/Excel Parser
-  final TextEditingController _csvInputCtrl = TextEditingController(
-    text: 'Nguyễn Văn A,0987654321,123 Đường Lê Lợi Q.1 TP.HCM,350000\n'
-        'Trần Thị B,09123456,456 Nguyễn Huệ Phú Nhuận TP.HCM,500000\n'
-        'Lê Văn C,0923560677,Đường Cách Mạng Tháng 8,210000\n'
-        'Phạm Minh D,0909123456,789 Điện Biên Phủ Q.Bình Thạnh TP.HCM,420000',
-  );
+  final TextEditingController _csvInputCtrl = TextEditingController();
   List<_BatchCsvRow> _parsedRows = [];
 
-  // Pickup Request
-  final TextEditingController _pickupQtyCtrl =
-      TextEditingController(text: '15');
-  final TextEditingController _pickupWeightCtrl =
-      TextEditingController(text: '25.5');
-
   // Rút tiền COD
-  final TextEditingController _codWithdrawCtrl =
-      TextEditingController(text: '2000000');
+  final TextEditingController _codWithdrawCtrl = TextEditingController();
 
-  // Trạng thái bộ lọc Theo dõi đơn Shop (UC35) & Khiếu nại Shop (UC40)
+  // Trạng thái bộ lọc Theo dõi đơn Shop & Khiếu nại Shop
   String _shopOrderStatusTab = 'Tất cả';
   String _shopComplaintType = 'Hàng hư hỏng / Mất hàng';
   final TextEditingController _shopComplaintOrderCtrl = TextEditingController();
   final TextEditingController _shopComplaintDescCtrl = TextEditingController();
   String _shopCancelReason = 'Khách hàng báo hủy đơn';
-  final Set<String> _attachedMerchantDocs = {
-    'Giấy phép kinh doanh',
-    'Biển hiệu cửa hàng',
-  };
-  int _attachedShopEvidenceCount = 1;
+  final Set<String> _attachedMerchantDocs = <String>{};
+  final List<String> _attachedShopEvidenceFiles = <String>[];
   List<GeocodedPlaceSuggestion> _liveMerchantNominatimSuggestions = const [];
   bool _isSearchingMerchantNominatim = false;
 
@@ -146,11 +144,12 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   void initState() {
     super.initState();
     if (widget.forcedScreenIndex != null) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 10);
     }
-    _storeNameCtrl = TextEditingController(text: _store.merchantStoreName);
-    _taxCodeCtrl = TextEditingController(text: _store.merchantTaxCode);
-    _bankAccountCtrl = TextEditingController(text: _store.merchantBankAccount);
+    final mer = _store.activeMerchantRecord;
+    _storeNameCtrl = TextEditingController(text: mer?.storeName ?? '');
+    _taxCodeCtrl = TextEditingController(text: mer?.taxCode ?? '');
+    _bankAccountCtrl = TextEditingController(text: mer?.bankAccount ?? '');
     _syncMerchantControllersFromDb();
     _parseCsvBatch();
     _store.addListener(_onStoreChanged);
@@ -158,45 +157,74 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
 
   void _syncMerchantControllersFromDb() {
     final mer = _store.activeMerchantRecord;
-    final storeName = mer?.storeName ?? _store.merchantStoreName;
-    final taxCode = mer?.taxCode ?? _store.merchantTaxCode;
-    final bankAcc = mer?.bankAccount ?? _store.merchantBankAccount;
-    final repName = mer?.representativeName ?? _store.merchantRepresentative;
-    final ownerPhone = mer?.ownerPhone ?? '';
-    final userEmail = _store.activeAuthenticatedUser?.email ?? '';
-    final safeWhIdx = _store.merchantWarehouses.isNotEmpty
-        ? _selectedWarehouseIndex.clamp(
-            0,
-            _store.merchantWarehouses.length - 1,
-          )
+    final authUser = _store.activeAuthenticatedUser;
+    final storeName = mer?.storeName ?? '';
+    final taxCode = mer?.taxCode ?? '';
+    final bankAcc = mer?.bankAccount ?? '';
+    final bankName = mer?.bankName ?? '';
+    final bizType = mer?.businessType ?? '';
+    final repName = mer?.representativeName ?? (authUser?.fullName ?? '');
+    final ownerPhone = mer?.ownerPhone.isNotEmpty == true
+        ? mer!.ownerPhone
+        : (authUser?.phone ?? '');
+    final userEmail = authUser?.email ?? '';
+    final webhookUrl = mer?.webhookUrl ?? '';
+    final personalWhs = _store.merchantPersonalWarehouses;
+    final safeWhIdx = personalWhs.isNotEmpty
+        ? _selectedWarehouseIndex.clamp(0, personalWhs.length - 1)
         : 0;
-    final whKey = _store.merchantWarehouses.isNotEmpty
-        ? '${_store.merchantWarehouses[safeWhIdx].id}|${_store.merchantWarehouses[safeWhIdx].address}'
+    final whKey = personalWhs.isNotEmpty
+        ? '${personalWhs[safeWhIdx].id}|${personalWhs[safeWhIdx].name}|${personalWhs[safeWhIdx].address}|${personalWhs[safeWhIdx].isPrimary}|${personalWhs[safeWhIdx].contactPhone}|${personalWhs[safeWhIdx].openHours}'
         : '';
+    final docsKey = mer?.attachedKycDocs.join(',') ?? '';
     final profileKey =
-        '$storeName|$taxCode|$bankAcc|$repName|$ownerPhone|$userEmail|$whKey';
+        '${mer?.id ?? "NEW"}|$storeName|$taxCode|$bankName|$bankAcc|$bizType|$repName|$ownerPhone|$userEmail|$webhookUrl|$whKey|$docsKey';
     if (_lastSyncedMerchantProfileKey != profileKey) {
       _lastSyncedMerchantProfileKey = profileKey;
       _storeNameCtrl.text = storeName;
       _taxCodeCtrl.text = taxCode;
       _bankAccountCtrl.text = bankAcc;
       _repNameCtrl.text = repName;
-      if (ownerPhone.isNotEmpty) {
-        _shopPhoneCtrl.text = ownerPhone;
+      _businessCategory = bizType.trim();
+      _selectedBankName = bankName.trim();
+      _shopPhoneCtrl.text = ownerPhone;
+      _shopEmailCtrl.text = userEmail;
+      _webhookUrlCtrl.text = webhookUrl;
+      if (mer != null) {
+        _attachedMerchantDocs
+          ..clear()
+          ..addAll(mer.attachedKycDocs);
+      } else {
+        _attachedMerchantDocs.clear();
       }
-      if (userEmail.isNotEmpty) {
-        _shopEmailCtrl.text = userEmail;
-      }
-      if (_store.merchantWarehouses.isNotEmpty) {
-        final wh = _store.merchantWarehouses[safeWhIdx];
+      if (personalWhs.isNotEmpty) {
+        final wh = personalWhs[safeWhIdx];
+        _warehouseNameCtrl.text = wh.name;
+        _warehouseContactCtrl.text = wh.contactName.isNotEmpty
+            ? wh.contactName
+            : repName;
+        _warehouseIsPrimary = wh.isPrimary;
+        _warehousePhoneCtrl.text = wh.contactPhone.isNotEmpty
+            ? wh.contactPhone
+            : ownerPhone;
+        _warehouseOpenHoursCtrl.text = wh.openHours.isNotEmpty
+            ? wh.openHours
+            : '08:00 - 21:00';
         _shopAddressCtrl.text = wh.address;
-        _selectedWarehouseName = '${wh.name} - ${wh.address}';
+        _pinnedWarehouseLocation = null;
+      } else {
+        _warehouseNameCtrl.clear();
+        _warehouseContactCtrl.text = repName;
+        _warehousePhoneCtrl.text = ownerPhone;
+        _shopAddressCtrl.clear();
+        _pinnedWarehouseLocation = null;
       }
     }
-    final firstOrd = _store.activeOrderRecord ?? _store.orders.firstOrNull;
+    final shopOrds = _store.merchantPersonalOrders;
+    final firstOrd = shopOrds.firstOrNull;
     if (firstOrd != null &&
         (_shopComplaintOrderCtrl.text.isEmpty ||
-            !_store.orders.any(
+            !shopOrds.any(
               (o) => o.trackingCode == _shopComplaintOrderCtrl.text.trim(),
             ))) {
       _shopComplaintOrderCtrl.text = firstOrd.trackingCode;
@@ -208,7 +236,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     super.didUpdateWidget(oldWidget);
     if (widget.forcedScreenIndex != null &&
         widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
-      _selectedScreenIndex = widget.forcedScreenIndex!;
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 10);
     }
   }
 
@@ -216,6 +244,30 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     if (!mounted) return;
     _syncMerchantControllersFromDb();
     setState(() {});
+  }
+
+  List<String> _splitCsvLineRFC4180Ui(String line) {
+    final fields = <String>[];
+    final buf = StringBuffer();
+    bool inQuotes = false;
+    for (int i = 0; i < line.length; i++) {
+      final ch = line[i];
+      if (ch == '"') {
+        if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+          buf.write('"');
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch == ',' && !inQuotes) {
+        fields.add(buf.toString().trim());
+        buf.clear();
+      } else {
+        buf.write(ch);
+      }
+    }
+    fields.add(buf.toString().trim());
+    return fields;
   }
 
   void _parseCsvBatch() {
@@ -228,12 +280,13 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       if (lower.contains('nguoi_nhan') || lower.contains('recipient')) {
         continue;
       }
-      final parts = line.split(',').map((p) => p.trim()).toList();
+      final parts = _splitCsvLineRFC4180Ui(line);
       final name = parts.isNotEmpty ? parts[0] : '';
       final phone = parts.length > 1 ? parts[1].replaceAll(' ', '') : '';
       final addr = parts.length > 2 ? parts[2] : '';
 
-      final isFourColCodFormat = parts.length == 4 &&
+      final isFourColCodFormat =
+          parts.length == 4 &&
           double.tryParse(
                 parts[3].replaceAll('.', '').replaceAll('đ', '').trim(),
               ) !=
@@ -242,41 +295,74 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       final desc = isFourColCodFormat
           ? 'Kiện hàng thương mại điện tử'
           : (parts.length > 3 && parts[3].isNotEmpty
-              ? parts[3]
-              : 'Kiện hàng thương mại điện tử');
+                ? parts[3]
+                : 'Kiện hàng thương mại điện tử');
       final weight = isFourColCodFormat
-          ? 1.2
-          : (parts.length > 4 ? (double.tryParse(parts[4]) ?? 1.2) : 1.2);
+          ? 1.5
+          : (parts.length > 4 ? (double.tryParse(parts[4]) ?? 1.5) : 1.5);
       final cod = isFourColCodFormat
           ? (double.tryParse(
                   parts[3].replaceAll('.', '').replaceAll('đ', '').trim(),
                 ) ??
-              0.0)
+                0.0)
           : (parts.length > 5
-              ? (double.tryParse(
-                      parts[5].replaceAll('.', '').replaceAll('đ', '').trim(),
-                    ) ??
-                  0.0)
-              : 0.0);
+                ? (double.tryParse(
+                        parts[5].replaceAll('.', '').replaceAll('đ', '').trim(),
+                      ) ??
+                      0.0)
+                : 0.0);
       final svcStr = !isFourColCodFormat && parts.length > 6
           ? parts[6].toUpperCase()
           : 'STANDARD';
-      final svc = svcStr.contains('EXPRESS')
+      final svc =
+          svcStr.contains('TRUCK') ||
+              svcStr.contains('LARGE') ||
+              svcStr.contains('TAI')
+          ? DeliveryServiceType.truck
+          : svcStr.contains('EXPRESS')
           ? DeliveryServiceType.express30m
           : svcStr.contains('ECONOMY') || svcStr.contains('SAVING')
-              ? DeliveryServiceType.saving
-              : DeliveryServiceType.standard;
+          ? DeliveryServiceType.saving
+          : DeliveryServiceType.standard;
       final customPickup = !isFourColCodFormat && parts.length > 7
           ? parts[7].trim()
           : '';
 
+      final personalWhs = _store.merchantPersonalWarehouses;
+      final defaultPickup = personalWhs.isNotEmpty
+          ? personalWhs[_selectedWarehouseIndex.clamp(
+                  0,
+                  personalWhs.length - 1,
+                )]
+                .address
+          : '';
+      final effectivePickup = customPickup.isNotEmpty
+          ? customPickup
+          : defaultPickup;
+      final pCoord = SmartDispatchEngine.resolveAddressToCoordinate(
+        effectivePickup,
+        fallback: const GeoPoint(latitude: 10.7731, longitude: 106.7012),
+      );
+      final dCoord = SmartDispatchEngine.resolveAddressToCoordinate(
+        addr,
+        fallback: const GeoPoint(latitude: 10.7850, longitude: 106.6880),
+      );
+      final restrictedZone = _store.findActiveRestrictedZoneForRoute(
+        pCoord,
+        dCoord,
+      );
       String? err;
       if (name.isEmpty) {
         err = 'Thiếu tên người nhận';
-      } else if (!RegExp(r'^(\+84|0)\d{8,10}$').hasMatch(phone)) {
+      } else if (!RegExp(r'^(?:\+84|0)[0-9]{9}$').hasMatch(phone)) {
         err = 'SĐT không hợp lệ (Phải đủ 10 chữ số)';
-      } else if (!RegExp(r'\d+').hasMatch(addr) || addr.length < 18) {
-        err = 'Địa chỉ thiếu số nhà hoặc Tỉnh/Thành phố';
+      } else if (addr.trim().length < 10) {
+        err = 'Địa chỉ giao hàng quá ngắn (cần tối thiểu 10 ký tự)';
+      } else if (effectivePickup.isNotEmpty &&
+          addr.trim().toLowerCase() == effectivePickup.trim().toLowerCase()) {
+        err = 'Địa chỉ giao trùng với kho lấy hàng';
+      } else if (restrictedZone != null) {
+        err = 'Nằm trong vùng hạn chế (${restrictedZone.zoneName})';
       } else if (weight <= 0 || weight > 500) {
         err = 'Khối lượng không hợp lệ';
       } else if (cod < 0) {
@@ -311,6 +397,11 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     _shopPhoneCtrl.dispose();
     _shopEmailCtrl.dispose();
     _shopAddressCtrl.dispose();
+    _warehouseNameCtrl.dispose();
+    _warehouseContactCtrl.dispose();
+    _warehousePhoneCtrl.dispose();
+    _warehouseOpenHoursCtrl.dispose();
+    _webhookUrlCtrl.dispose();
     _singleNameCtrl.dispose();
     _singlePhoneCtrl.dispose();
     _singleAddrCtrl.dispose();
@@ -323,8 +414,6 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     _editOrderAddrCtrl.dispose();
     _editOrderCodCtrl.dispose();
     _csvInputCtrl.dispose();
-    _pickupQtyCtrl.dispose();
-    _pickupWeightCtrl.dispose();
     _codWithdrawCtrl.dispose();
     _shopComplaintOrderCtrl.dispose();
     _shopComplaintDescCtrl.dispose();
@@ -381,8 +470,6 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       case 0:
         return const [
           (Icons.location_searching_outlined, 'Theo dõi đơn hàng Shop', 5),
-          (Icons.print_outlined, 'In phiếu gửi hàng A6', 4),
-          (Icons.edit_note_outlined, 'Sửa / Hủy đơn & Giao lại', 6),
         ];
       case 1:
         return const [
@@ -392,7 +479,11 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       case 2:
         return const [
           (Icons.fact_check_outlined, 'Đối soát công nợ COD', 7),
-          (Icons.account_balance_wallet_outlined, 'Rút tiền COD về Ngân hàng', 8),
+          (
+            Icons.account_balance_wallet_outlined,
+            'Rút tiền COD về Ngân hàng',
+            8,
+          ),
         ];
       case 3:
         return const [
@@ -413,8 +504,14 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       builder: (context, constraints) {
         final isWide = constraints.maxWidth >= 860;
         if (isWide) {
-          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(210.0, 290.0);
-          final contentPadding = (constraints.maxWidth * 0.02).clamp(16.0, 32.0);
+          final sidebarWidth = (constraints.maxWidth * 0.185).clamp(
+            210.0,
+            290.0,
+          );
+          final contentPadding = (constraints.maxWidth * 0.02).clamp(
+            16.0,
+            32.0,
+          );
           return Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -423,7 +520,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _buildMerchantOrangeTopHeader(),
+                    _buildMerchantOrangeTopHeader(showLogout: false),
                     _buildMerchantContextualSubTabBar(contentPadding),
                     Expanded(
                       child: SingleChildScrollView(
@@ -442,7 +539,6 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildMerchantOrangeTopHeader(),
-            _buildMerchantContextualSubTabBar(mobilePadding),
             Expanded(
               child: SingleChildScrollView(
                 padding: EdgeInsets.all(mobilePadding),
@@ -464,12 +560,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
         'Theo dõi • In A6 • Xử lý đơn',
         0,
       ),
-      (
-        Icons.add_box_outlined,
-        'Tạo đơn gửi hàng',
-        'Đơn lẻ & Nhập lô CSV',
-        1,
-      ),
+      (Icons.add_box_outlined, 'Tạo đơn gửi hàng', 'Đơn lẻ & Nhập lô CSV', 1),
       (
         Icons.account_balance_wallet_outlined,
         'Đối soát & Ví COD',
@@ -495,9 +586,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       width: sidebarWidth,
       decoration: const BoxDecoration(
         color: AppColors.techBg,
-        border: Border(
-          right: BorderSide(color: AppColors.ink, width: 1.6),
-        ),
+        border: Border(right: BorderSide(color: AppColors.ink, width: 1.6)),
       ),
       child: Material(
         type: MaterialType.transparency,
@@ -548,7 +637,8 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                           ),
                         ),
                         Text(
-                          _store.merchantStoreName,
+                          _store.activeMerchantRecord?.storeName ??
+                              'Chưa đăng ký Cửa hàng',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -643,30 +733,6 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                         ),
                       );
                     }),
-                    const SizedBox(height: 10),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.acid,
-                          foregroundColor: AppColors.techBg,
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          shape: const RoundedRectangleBorder(
-                            borderRadius: BorderRadius.zero,
-                          ),
-                        ),
-                        onPressed: () =>
-                            setState(() => _selectedScreenIndex = 2),
-                        icon: const Icon(Icons.add_box_rounded, size: 16),
-                        label: const Text(
-                          'Tạo vận đơn mới',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            fontSize: 12.5,
-                          ),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -701,7 +767,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     );
   }
 
-  Widget _buildMerchantOrangeTopHeader() {
+  Widget _buildMerchantOrangeTopHeader({bool showLogout = true}) {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 560;
@@ -724,13 +790,12 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  'GHST SHOP • ${_store.merchantStoreName} (Số dư COD: ${CurrencyFormatter.formatVnd(_store.merchantCodBalance)})',
+                  '${_store.activeMerchantRecord?.storeName ?? "Đối tác B2B"} • Số dư COD: ${CurrencyFormatter.formatVnd(_store.activeMerchantRecord?.codBalance ?? 0.0)}',
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w800,
                     fontSize: 13.5,
-                    fontFamily: 'Consolas',
                   ),
                 ),
               ),
@@ -758,7 +823,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                         ),
                         color: AppColors.acid,
                         child: Text(
-                          '${_store.complaints.where((c) => c.status != "Đã giải quyết").length}',
+                          '${_store.merchantPersonalComplaints.where((c) => c.status != "Đã giải quyết").length}',
                           style: const TextStyle(
                             color: AppColors.techBg,
                             fontSize: 10,
@@ -769,40 +834,45 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                     ),
                   ],
                 ),
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      tooltip: 'Thông báo Cửa hàng B2B',
-                      onPressed: () => _showMerchantNotificationsDialog(context),
-                      icon: const Icon(
-                        Icons.notifications_none_rounded,
-                        color: Colors.white,
-                        size: 22,
-                      ),
+              ],
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    visualDensity: isCompact
+                        ? VisualDensity.compact
+                        : VisualDensity.standard,
+                    tooltip: 'Thông báo Cửa hàng B2B',
+                    onPressed: () => _showMerchantNotificationsDialog(context),
+                    icon: const Icon(
+                      Icons.notifications_none_rounded,
+                      color: Colors.white,
+                      size: 21,
                     ),
-                    if (_store.merchantNotifications.any((n) => !n.isRead))
-                      Positioned(
-                        right: 6,
-                        top: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1,
-                          ),
-                          color: AppColors.pink,
-                          child: Text(
-                            '${_store.merchantNotifications.where((n) => !n.isRead).length}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                            ),
+                  ),
+                  if (_store.merchantNotifications.any((n) => !n.isRead))
+                    Positioned(
+                      right: 4,
+                      top: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
+                        color: AppColors.pink,
+                        child: Text(
+                          '${_store.merchantNotifications.where((n) => !n.isRead).length}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
                           ),
                         ),
                       ),
-                  ],
-                ),
+                    ),
+                ],
+              ),
+              if (!isCompact)
                 IconButton(
                   tooltip: 'Tra cứu & In vận đơn A6',
                   onPressed: () => setState(() => _selectedScreenIndex = 4),
@@ -812,8 +882,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                     size: 22,
                   ),
                 ),
-              ],
-              if (widget.onLogout != null) ...[
+              if (showLogout && widget.onLogout != null) ...[
                 const SizedBox(width: 6),
                 TextButton.icon(
                   style: TextButton.styleFrom(
@@ -848,19 +917,23 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
 
   Widget _buildMerchantContextualSubTabBar(double hPad) {
     final subTabs = _subTabsForActivePillar();
+    if (subTabs.length < 2 && _selectedScreenIndex == 5) {
+      return const SizedBox.shrink();
+    }
     return Container(
       padding: EdgeInsets.symmetric(horizontal: hPad, vertical: 8),
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(
-          bottom: BorderSide(color: AppColors.ink, width: 1.2),
-        ),
+        border: Border(bottom: BorderSide(color: AppColors.ink, width: 1.2)),
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
           children: subTabs.map((tab) {
-            final selected = _selectedScreenIndex == tab.$3;
+            final selected =
+                _selectedScreenIndex == tab.$3 ||
+                (tab.$3 == 5 &&
+                    (_selectedScreenIndex == 4 || _selectedScreenIndex == 6));
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: InkWell(
@@ -887,8 +960,9 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                         tab.$2,
                         style: TextStyle(
                           fontSize: 12,
-                          fontWeight:
-                              selected ? FontWeight.w900 : FontWeight.w600,
+                          fontWeight: selected
+                              ? FontWeight.w900
+                              : FontWeight.w600,
                           color: selected ? AppColors.acid : AppColors.ink,
                         ),
                       ),
@@ -916,9 +990,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       height: 62,
       decoration: const BoxDecoration(
         color: AppColors.techBg,
-        border: Border(
-          top: BorderSide(color: AppColors.ink, width: 1.5),
-        ),
+        border: Border(top: BorderSide(color: AppColors.ink, width: 1.5)),
       ),
       child: Row(
         children: List.generate(items.length, (idx) {
@@ -947,8 +1019,9 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                       style: TextStyle(
                         color: color,
                         fontSize: 10.5,
-                        fontWeight:
-                            selected ? FontWeight.w900 : FontWeight.w600,
+                        fontWeight: selected
+                            ? FontWeight.w900
+                            : FontWeight.w600,
                       ),
                     ),
                   ],
@@ -1020,7 +1093,9 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                   ),
                   TextButton(
                     onPressed: () {
-                      _store.markAllNotificationsAsRead();
+                      _store.markAllNotificationsAsRead(
+                        targetGroupScope: 'Cửa hàng B2B',
+                      );
                       setDialogState(() {});
                     },
                     child: const Text(
@@ -1048,18 +1123,23 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                         separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (_, idx) {
                           final n = items[idx];
-                          final orderMatch = RegExp(
-                            r'#DH[0-9A-Za-z-]+',
-                          ).firstMatch(n.title);
+                          final orderMatch = RegExp(r'#DH[0-9A-Za-z-]+')
+                              .firstMatch(n.title);
                           final orderCode = orderMatch?.group(0);
                           return InkWell(
                             onTap: () {
                               _store.markNotificationAsRead(n.id);
                               setDialogState(() {});
                               if (orderCode != null) {
-                                _store.selectDriverOrder(orderCode);
+                                final mIdx = _store.merchantPersonalOrders
+                                    .indexWhere(
+                                      (o) => o.trackingCode == orderCode,
+                                    );
                                 Navigator.of(dialogCtx).pop();
                                 setState(() {
+                                  if (mIdx >= 0) {
+                                    _selectedWaybillOrderIndex = mIdx;
+                                  }
                                   _selectedScreenIndex = 5;
                                 });
                               }
@@ -1147,5 +1227,3 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     setState(fn);
   }
 }
-
-

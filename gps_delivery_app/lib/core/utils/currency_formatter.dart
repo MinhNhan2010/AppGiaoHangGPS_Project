@@ -9,15 +9,20 @@ class CurrencyFormatter {
     decimalDigits: 0,
   );
 
-  static String formatVnd(num amount) => _vndFormat.format(amount);
+  static String formatVnd(num amount) {
+    final safeAmount = (amount is double && !amount.isFinite) ? 0 : amount;
+    return _vndFormat.format(safeAmount);
+  }
 
   static String formatDistanceKm(int distanceMeters) {
-    final km = distanceMeters / 1000.0;
+    final safeMeters = distanceMeters < 0 ? 0 : distanceMeters;
+    final km = safeMeters / 1000.0;
     return '${km.toStringAsFixed(1)} km';
   }
 
   static String formatDurationMinutes(int durationSeconds) {
-    final minutes = (durationSeconds / 60).ceil();
+    final safeSeconds = durationSeconds < 0 ? 0 : durationSeconds;
+    final minutes = (safeSeconds / 60).ceil();
     if (minutes < 60) return '$minutes phút';
     final hours = minutes ~/ 60;
     final rem = minutes % 60;

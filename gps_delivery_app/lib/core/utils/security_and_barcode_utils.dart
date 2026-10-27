@@ -1,12 +1,45 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../data/datasources/local/sqlite_offline_queue_datasource.dart';
 import '../../domain/entities/geo_point.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_theme.dart';
+import 'platform_file_and_browser_bridge.dart';
 
 class SecurityAndBarcodeUtils {
   const SecurityAndBarcodeUtils._();
+
+  static void disposeControllersAfterDialog(
+    List<ChangeNotifier> controllers, [
+    Animation<double>? routeAnimation,
+  ]) {
+    var disposed = false;
+    void disposeAll() {
+      if (disposed) return;
+      disposed = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final c in controllers) {
+          c.dispose();
+        }
+      });
+    }
+
+    if (routeAnimation != null &&
+        routeAnimation.status != AnimationStatus.dismissed) {
+      void onStatus(AnimationStatus status) {
+        if (status == AnimationStatus.dismissed) {
+          routeAnimation.removeStatusListener(onStatus);
+          disposeAll();
+        }
+      }
+
+      routeAnimation.addStatusListener(onStatus);
+      return;
+    }
+    disposeAll();
+  }
 
   /// Che số điện thoại bảo vệ quyền riêng tư: 0912345678 -> 0912***678
   static String maskPhoneNumber(String phone, {required bool shouldMask}) {
@@ -107,7 +140,198 @@ class SecurityAndBarcodeUtils {
     return '$bodyWithoutCrc$crcHex';
   }
 
-  /// Xuất phiếu giao hàng chuẩn khổ A6 (105x148mm) ra file HTML+SVG thực tế trên ổ cứng
+  /// Mở hộp thoại chọn chứng từ / hình ảnh thực tế từ hệ điều hành hoặc Trình duyệt Web
+  static Future<String?> pickLocalDocumentOrImage({
+    String dialogTitle = 'Chọn tệp chứng từ / hình ảnh đính kèm',
+    String filter =
+        'Tệp hình ảnh & PDF (*.png;*.jpg;*.jpeg;*.webp;*.pdf;*.svg)|*.png;*.jpg;*.jpeg;*.webp;*.pdf;*.svg|Tất cả tệp (*.*)|*.*',
+  }) async {
+    if (kIsWeb) {
+      final picked = await pickBrowserFile(
+        accept: '.png,.jpg,.jpeg,.webp,.pdf,.svg,image/*,application/pdf',
+        readAsText: false,
+      );
+      if (picked != null && picked.fileName.trim().isNotEmpty) {
+        return 'web_upload://${picked.fileName.trim()}';
+      }
+      return null;
+    }
+    if (Platform.environment.containsKey('FLUTTER_TEST')) {
+      return null;
+    }
+    if (Platform.isWindows) {
+      try {
+        final escapedTitle = dialogTitle.replaceAll("'", "''");
+        final escapedFilter = filter.replaceAll("'", "''");
+        final script = '''
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+\$dlg = New-Object System.Windows.Forms.OpenFileDialog
+\$dlg.Title = '$escapedTitle'
+\$dlg.Filter = '$escapedFilter'
+\$dlg.Multiselect = \$false
+if (\$dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  Write-Output \$dlg.FileName
+}
+''';
+        final res = await Process.run(
+          'powershell',
+          ['-NoProfile', '-Sta', '-Command', script],
+          stdoutEncoding: utf8,
+          stderrEncoding: utf8,
+        );
+        if (res.exitCode == 0) {
+          final picked = res.stdout.toString().trim();
+          if (picked.isNotEmpty && File(picked).existsSync()) {
+            return picked;
+          }
+        }
+      } catch (_) {}
+    } else if (Platform.isMacOS) {
+      try {
+        final res = await Process.run(
+          'osascript',
+          ['-e', 'POSIX path of (choose file with prompt "$dialogTitle")'],
+          stdoutEncoding: utf8,
+          stderrEncoding: utf8,
+        );
+        if (res.exitCode == 0) {
+          final picked = res.stdout.toString().trim();
+          if (picked.isNotEmpty && File(picked).existsSync()) return picked;
+        }
+      } catch (_) {}
+    } else if (Platform.isLinux) {
+      try {
+        final res = await Process.run(
+          'zenity',
+          ['--file-selection', '--title=$dialogTitle'],
+          stdoutEncoding: utf8,
+          stderrEncoding: utf8,
+        );
+        if (res.exitCode == 0) {
+          final picked = res.stdout.toString().trim();
+          if (picked.isNotEmpty && File(picked).existsSync()) return picked;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Mở hộp thoại chọn tệp CSV/TXT từ máy tính hoặc trình duyệt Web và đọc nội dung UTF-8 thực tế
+  static Future<({String filePath, String content})?> pickLocalCsvFileContent({
+    String dialogTitle = 'Chọn tệp dữ liệu đơn hàng (.csv / .txt)',
+  }) async {
+    if (kIsWeb) {
+      final picked = await pickBrowserFile(
+        accept: '.csv,.txt,text/csv,text/plain',
+        readAsText: true,
+      );
+      if (picked != null && (picked.textContent ?? '').isNotEmpty) {
+        return (
+          filePath: 'web_upload://${picked.fileName}',
+          content: picked.textContent!,
+        );
+      }
+      return null;
+    }
+    final pickedPath = await pickLocalDocumentOrImage(
+      dialogTitle: dialogTitle,
+      filter:
+          'Tệp bảng dữ liệu CSV (*.csv;*.txt)|*.csv;*.txt|Tất cả tệp (*.*)|*.*',
+    );
+    if (pickedPath == null) return null;
+    try {
+      final file = File(pickedPath);
+      if (!file.existsSync()) return null;
+      final raw = await file.readAsString(encoding: utf8);
+      return (filePath: pickedPath, content: raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const List<String> code128Patterns = [
+    '212222', '222122', '222221', '121223', '121322', '131222', '122213',
+    '122312', '132212', '221213', '221312', '231212', '112232', '122132',
+    '122231', '113222', '123122', '123221', '223211', '221132', '221231',
+    '213212', '223112', '312131', '311222', '321122', '321221', '312212',
+    '322112', '322211', '212123', '212321', '232121', '111323', '131123',
+    '131321', '112313', '132113', '132311', '211313', '231113', '231311',
+    '112133', '112331', '132131', '113123', '113321', '133121', '313121',
+    '211331', '231131', '213113', '213311', '213131', '311123', '311321',
+    '331121', '312113', '312311', '332111', '314111', '221411', '431111',
+    '111224', '111422', '121124', '121421', '141122', '141221', '112214',
+    '112412', '122114', '122411', '142112', '142211', '241211', '221114',
+    '413111', '241112', '134111', '111242', '121142', '121241', '114212',
+    '124112', '124211', '411212', '421112', '421211', '212141', '214121',
+    '412121', '111143', '111341', '131141', '114113', '114311', '411113',
+    '411311', '113141', '114131', '311141', '411131', '211412', '211214',
+    '211232', '2331112',
+  ];
+
+  /// Mã hóa chuỗi ASCII chuẩn ISO/IEC 15417 Code-128 Subset B (Start B=104, Data, Mod-103 Checksum, Stop=106)
+  static List<int> encodeCode128BSymbols(String rawData) {
+    final normalized = rawData.trim().isEmpty ? 'DH123456' : rawData.trim();
+    final symbols = <int>[104];
+    int checksum = 104;
+    int pos = 1;
+    for (final rune in normalized.runes) {
+      if (rune < 32 || rune > 126) continue;
+      final value = rune - 32;
+      symbols.add(value);
+      checksum += value * pos;
+      pos++;
+    }
+    symbols.add(checksum % 103);
+    symbols.add(106);
+    return symbols;
+  }
+
+  static String renderCode128BSvg(String rawData, {double height = 44}) {
+    final symbols = encodeCode128BSymbols(rawData);
+    const quietModules = 10;
+    final totalModules =
+        quietModules * 2 + (symbols.length - 1) * 11 + 13;
+    const moduleWidth = 1.6;
+    final svgWidth = (totalModules * moduleWidth).toStringAsFixed(1);
+    final rects = StringBuffer();
+    double x = quietModules * moduleWidth;
+    for (final sym in symbols) {
+      final pattern = code128Patterns[sym];
+      for (var i = 0; i < pattern.length; i++) {
+        final w = (pattern.codeUnitAt(i) - 48) * moduleWidth;
+        if (i.isEven) {
+          rects.write(
+            '<rect x="${x.toStringAsFixed(2)}" y="0" width="${w.toStringAsFixed(2)}" height="${height.toStringAsFixed(0)}" fill="#15131E"/>',
+          );
+        }
+        x += w;
+      }
+    }
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="$svgWidth" height="${height.toStringAsFixed(0)}" viewBox="0 0 $svgWidth ${height.toStringAsFixed(0)}">$rects</svg>';
+  }
+
+  static String renderQrMatrixSvg(String payload, {double size = 64}) {
+    final matrix = _QrMatrixPainter._encodeIso18004Matrix(payload);
+    final dim = matrix.length;
+    const quietZone = 2;
+    final totalGrid = dim + quietZone * 2;
+    final cell = size / totalGrid;
+    final rects = StringBuffer();
+    for (var r = 0; r < dim; r++) {
+      for (var c = 0; c < dim; c++) {
+        if (matrix[r][c]) {
+          rects.write(
+            '<rect x="${((c + quietZone) * cell).toStringAsFixed(2)}" y="${((r + quietZone) * cell).toStringAsFixed(2)}" width="${(cell + 0.25).toStringAsFixed(2)}" height="${(cell + 0.25).toStringAsFixed(2)}" fill="#15131E"/>',
+          );
+        }
+      }
+    }
+    final sz = size.toStringAsFixed(0);
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="$sz" height="$sz" viewBox="0 0 $sz $sz"><rect width="100%" height="100%" fill="#FFFFFF"/>$rects</svg>';
+  }
+
+  /// Xuất phiếu giao hàng chuẩn khổ A6 (105x148mm) ra file HTML+SVG thực tế trên ổ cứng / trình duyệt
   static Future<String> exportA6LabelToHtmlFile({
     required String trackingCode,
     required String storeName,
@@ -117,40 +341,90 @@ class SecurityAndBarcodeUtils {
     required String dropoffAddress,
     required String packageDescription,
     required double codAmount,
+    double recipientShippingFee = 0,
+    String? barcodePayload,
+    String? qrPayload,
   }) async {
+    const esc = HtmlEscape();
     final safeCode = trackingCode.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '');
-    final file = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}phieu_van_don_A6_$safeCode.html',
-    );
+    final totalCollect = codAmount + recipientShippingFee;
+    final effectiveBarcode =
+        (barcodePayload != null && barcodePayload.trim().isNotEmpty)
+            ? barcodePayload.trim()
+            : trackingCode;
+    final effectiveQr = (qrPayload != null && qrPayload.trim().isNotEmpty)
+        ? qrPayload.trim()
+        : '$trackingCode|$recipientPhone|${totalCollect.toStringAsFixed(0)}';
+    final barcodeSvg = renderCode128BSvg(effectiveBarcode, height: 46);
+    final qrSvg = renderQrMatrixSvg(effectiveQr, size: 64);
+    final eTracking = esc.convert(trackingCode);
+    final eBarcodeText = esc.convert(effectiveBarcode);
+    final eStore = esc.convert(storeName);
+    final eWh = esc.convert(warehouseAddress);
+    final eRecName = esc.convert(recipientName);
+    final eRecPhone = esc.convert(recipientPhone);
+    final eDropoff = esc.convert(dropoffAddress);
+    final ePkg = esc.convert(packageDescription);
     final html = '''<!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="UTF-8" />
-  <title>Phiếu Vận Đơn A6 - $trackingCode</title>
+  <title>Phiếu Vận Đơn A6 - $eTracking</title>
   <style>
     @page { size: 105mm 148mm; margin: 4mm; }
     body { font-family: Arial, sans-serif; width: 97mm; border: 2px solid #1F4E79; padding: 8px; }
     .hdr { display: flex; justify-content: space-between; border-bottom: 2px solid #1F4E79; padding-bottom: 6px; }
-    .cod { font-size: 18px; font-weight: bold; color: #FF6B00; margin-top: 8px; }
+    .codes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0 6px; padding: 6px 0; border-bottom: 1px dashed #94A3B8; }
+    .bar { flex: 1; text-align: center; }
+    .bar-code { font-family: monospace; font-size: 11px; font-weight: bold; letter-spacing: 1.5px; margin-top: 3px; }
+    .qr { border: 1px solid #CBD5E1; padding: 3px; background: #FFF; }
+    .cod { font-size: 15px; font-weight: bold; color: #FF6B00; margin-top: 8px; }
+    .tot { font-size: 17px; font-weight: 800; color: #1F4E79; margin-top: 4px; border-top: 1px dashed #94A3B8; padding-top: 6px; }
   </style>
 </head>
 <body>
   <div class="hdr">
-    <strong>FLASH GPS EXPRESS (A6: 105x148mm)</strong>
-    <span>$trackingCode</span>
+    <strong>GIAO HÀNG SIÊU TỐC GHST (A6: 105x148mm)</strong>
+    <span>$eTracking</span>
   </div>
-  <p><strong>Từ Shop:</strong> $storeName ($warehouseAddress)</p>
-  <p><strong>Người nhận:</strong> $recipientName ($recipientPhone)</p>
-  <p><strong>Địa chỉ giao:</strong> $dropoffAddress</p>
-  <p><strong>Hàng hóa:</strong> $packageDescription</p>
-  <div class="cod">THU HỘ COD: ${codAmount.toStringAsFixed(0)} VNĐ</div>
+  <div class="codes">
+    <div class="bar">
+      $barcodeSvg
+      <div class="bar-code">$eBarcodeText</div>
+    </div>
+    <div class="qr">$qrSvg</div>
+  </div>
+  <p><strong>Từ Shop:</strong> $eStore ($eWh)</p>
+  <p><strong>Người nhận:</strong> $eRecName ($eRecPhone)</p>
+  <p><strong>Địa chỉ giao:</strong> $eDropoff</p>
+  <p><strong>Hàng hóa:</strong> $ePkg</p>
+  <div class="cod">THU HỘ COD: ${codAmount.toStringAsFixed(0)} VNĐ | CƯỚC NGƯỜI NHẬN TRẢ: ${recipientShippingFee.toStringAsFixed(0)} VNĐ</div>
+  <div class="tot">TỔNG THU NGƯỜI NHẬN: ${totalCollect.toStringAsFixed(0)} VNĐ</div>
 </body>
 </html>''';
+    if (kIsWeb) {
+      final fileName = 'phieu_van_don_A6_$safeCode.html';
+      final virtualPath = 'localStorage://exports/$fileName';
+      await SqliteOfflineQueueDatasource.instance.upsertEntityRecord(
+        tableName: 'exported_waybills_a6',
+        recordId: safeCode,
+        payload: {'fileName': virtualPath, 'html': html},
+      );
+      triggerBrowserFileDownload(
+        fileName: fileName,
+        content: html,
+        mimeType: 'text/html;charset=utf-8',
+      );
+      return virtualPath;
+    }
+    final file = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}phieu_van_don_A6_$safeCode.html',
+    );
     await file.writeAsString(html, flush: true);
     return file.path;
   }
 
-  /// Xuất chứng từ ảnh bằng chứng giao hàng POD đóng dấu Watermark GPS thực tế ra file SVG trên ổ cứng
+  /// Xuất chứng từ ảnh bằng chứng giao hàng POD đóng dấu Watermark GPS thực tế ra file SVG trên ổ cứng / trình duyệt
   static Future<String> exportPodWatermarkToSvgFile({
     required String orderCode,
     required GeoPoint driverLocation,
@@ -158,6 +432,7 @@ class SecurityAndBarcodeUtils {
     required String otpCode,
     required double distanceMeters,
   }) async {
+    const esc = HtmlEscape();
     final safeCode = orderCode.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '');
     final nowIso = DateTime.now().toIso8601String();
     final sig = generatePaymentSignature(
@@ -165,18 +440,36 @@ class SecurityAndBarcodeUtils {
       amount: distanceMeters,
       method: otpCode,
     );
-    final file = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}pod_watermark_$safeCode.svg',
-    );
+    final eOrderCode = esc.convert(orderCode);
+    final eRecipient = esc.convert(recipientName);
+    final eOtp = esc.convert(otpCode);
     final svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="600" height="260">
   <rect width="100%" height="100%" fill="#0F172A" rx="12"/>
   <text x="20" y="40" fill="#28A745" font-size="18" font-family="monospace" font-weight="bold">CHỨNG TỪ ẢNH XÁC NHẬN GIAO HÀNG ĐÓNG DẤU GPS</text>
-  <text x="20" y="80" fill="#FFFFFF" font-size="14" font-family="monospace">Mã vận đơn : $orderCode | Người nhận: $recipientName</text>
+  <text x="20" y="80" fill="#FFFFFF" font-size="14" font-family="monospace">Mã vận đơn : $eOrderCode | Người nhận: $eRecipient</text>
   <text x="20" y="115" fill="#00B4D8" font-size="14" font-family="monospace">Tọa độ GPS : (${driverLocation.latitude.toStringAsFixed(6)}, ${driverLocation.longitude.toStringAsFixed(6)}) SRID=4326</text>
-  <text x="20" y="150" fill="#FFC107" font-size="14" font-family="monospace">Khoảng cách: ${distanceMeters.toStringAsFixed(1)}m (&lt;= 100m Geofence) | Mã OTP: $otpCode</text>
+  <text x="20" y="150" fill="#FFC107" font-size="14" font-family="monospace">Khoảng cách: ${distanceMeters.toStringAsFixed(1)}m (&lt;= 100m Geofence) | Mã OTP: $eOtp</text>
   <text x="20" y="185" fill="#CBD5E1" font-size="13" font-family="monospace">Thời gian  : $nowIso</text>
   <text x="20" y="220" fill="#94A3B8" font-size="12" font-family="monospace">Chữ ký toàn vẹn SHA/FNV: $sig</text>
 </svg>''';
+    if (kIsWeb) {
+      final fileName = 'pod_watermark_$safeCode.svg';
+      final virtualPath = 'localStorage://exports/$fileName';
+      await SqliteOfflineQueueDatasource.instance.upsertEntityRecord(
+        tableName: 'exported_pod_watermarks',
+        recordId: safeCode,
+        payload: {'fileName': virtualPath, 'svg': svg},
+      );
+      triggerBrowserFileDownload(
+        fileName: fileName,
+        content: svg,
+        mimeType: 'image/svg+xml;charset=utf-8',
+      );
+      return virtualPath;
+    }
+    final file = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}pod_watermark_$safeCode.svg',
+    );
     await file.writeAsString(svg, flush: true);
     return file.path;
   }
@@ -231,28 +524,22 @@ class _Code128Painter extends CustomPainter {
       ..color = AppColors.textPrimary
       ..style = PaintingStyle.fill;
 
-    final bytes = utf8.encode(data.isEmpty ? 'GHN-987654321' : data);
-    final totalModules = bytes.length * 11 + 24;
-    final moduleWidth = (size.width / totalModules).clamp(1.2, 4.0);
-    var currentX = 4.0;
+    final symbols = SecurityAndBarcodeUtils.encodeCode128BSymbols(data);
+    const quietModules = 6;
+    final totalModules =
+        quietModules * 2 + (symbols.length - 1) * 11 + 13;
+    final moduleWidth = (size.width / totalModules).clamp(0.85, 3.6);
+    final totalRenderedWidth = totalModules * moduleWidth;
+    var currentX =
+        ((size.width - totalRenderedWidth) * 0.5).clamp(0.0, size.width) +
+            quietModules * moduleWidth;
 
-    // Chuỗi vạch khởi đầu chuẩn Code-128 Start B (11010010000)
-    const startPattern = [2, 1, 1, 2, 3, 2];
-    for (var i = 0; i < startPattern.length; i++) {
-      final w = startPattern[i] * moduleWidth;
-      if (i.isEven) {
-        canvas.drawRect(Rect.fromLTWH(currentX, 0, w, size.height), paint);
-      }
-      currentX += w;
-    }
-
-    // Vẽ các dải vạch mã hóa dữ liệu ký tự ASCII
-    for (final b in bytes) {
-      for (var bit = 0; bit < 8; bit++) {
-        final isBlack = ((b >> bit) & 1) == 1 || bit == 0;
-        final w = (((b + bit) % 2) + 1) * moduleWidth;
-        if (currentX + w > size.width - 8) break;
-        if (isBlack && bit.isEven) {
+    for (final sym in symbols) {
+      final pattern = SecurityAndBarcodeUtils.code128Patterns[sym];
+      for (var i = 0; i < pattern.length; i++) {
+        final w = (pattern.codeUnitAt(i) - 48) * moduleWidth;
+        if (currentX + w > size.width) break;
+        if (i.isEven) {
           canvas.drawRect(Rect.fromLTWH(currentX, 0, w, size.height), paint);
         }
         currentX += w;
@@ -553,9 +840,9 @@ class _QrMatrixPainter extends CustomPainter {
       oldDelegate.payload != payload;
 }
 
-/// Khung ảnh bằng chứng giao hàng POD có đóng dấu Watermark GPS & Timestamp
+/// Receipt preview populated from the recipient input and recorded GPS.
 class PodGpsWatermarkPhotoCard extends StatelessWidget {
-  final GeoPoint driverLocation;
+  final GeoPoint? driverLocation;
   final String recipientName;
   final String otpCode;
   final double distanceToDropoffMeters;
@@ -570,7 +857,7 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isWithinGeofence = distanceToDropoffMeters <= 100.0;
+    final isWithinGeofence = driverLocation != null && distanceToDropoffMeters <= 100.0;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -589,25 +876,35 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              Icon(
-                Icons.photo_camera_back_outlined,
-                color: isWithinGeofence ? AppColors.success : AppColors.warning,
-                size: 28,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'ẢNH XÁC NHẬN GIAO HÀNG ĐÓNG DẤU GPS (POD)',
-                  style: TextStyle(
-                    color: isWithinGeofence
-                        ? AppColors.success
-                        : AppColors.warning,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.receipt_long_outlined,
+                    color:
+                        isWithinGeofence ? AppColors.success : AppColors.warning,
+                    size: 24,
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'BIÊN NHẬN GIAO HÀNG (POD)',
+                      style: TextStyle(
+                        color: isWithinGeofence
+                            ? AppColors.success
+                            : AppColors.warning,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -618,7 +915,7 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text(
-                  distanceToDropoffMeters >= 1000
+                  driverLocation == null ? 'Chưa có vị trí GPS' : distanceToDropoffMeters >= 1000
                       ? 'Cách điểm giao: ${(distanceToDropoffMeters / 1000.0).toStringAsFixed(1)}km'
                       : 'Cách điểm giao: ${distanceToDropoffMeters.toStringAsFixed(0)}m',
                   style: TextStyle(
@@ -632,7 +929,7 @@ class PodGpsWatermarkPhotoCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '• Tọa độ GPS: (${driverLocation.latitude.toStringAsFixed(5)}, ${driverLocation.longitude.toStringAsFixed(5)}) • SRID=4326',
+            driverLocation == null ? 'Đang chờ vị trí GPS' : 'Tọa độ GPS: (${driverLocation!.latitude.toStringAsFixed(5)}, ${driverLocation!.longitude.toStringAsFixed(5)})',
             style: const TextStyle(
               color: Colors.white,
               fontFamily: 'monospace',

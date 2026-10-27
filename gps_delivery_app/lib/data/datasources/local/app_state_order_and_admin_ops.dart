@@ -2,15 +2,34 @@ part of 'app_state_store.dart';
 
 extension AppStateOrderAndAdminOps on AppStateStore {
   bool hasAdminPermission(String permKey) {
-    final role =
-        rbacRoles.where((r) => r.roleName == currentAdminRoleName).firstOrNull;
+    final role = rbacRoles
+        .where((r) => r.roleName == currentAdminRoleName)
+        .firstOrNull;
     if (role == null) return true;
     return role.permissions[permKey] ?? false;
   }
 
-  void setAdminActiveRole(String roleName) {
+  bool setAdminActiveRole(
+    String roleName, {
+    String? adminPassword,
+    bool requirePasswordVerification = false,
+  }) {
+    final activeUser = activeAuthenticatedUser;
+    final isNonRootUserWithoutSecurity =
+        !hasAdminPermission('Hệ thống: Bảo mật') &&
+        activeUser != null &&
+        activeUser.id != 'USR-04';
+    if (isNonRootUserWithoutSecurity ||
+        requirePasswordVerification ||
+        adminPassword != null) {
+      if (adminPassword == null || !verifySuperAdminPassword(adminPassword)) {
+        return false;
+      }
+    }
     currentAdminRoleName = roleName;
+    _persistMutation('SET_ADMIN_ACTIVE_ROLE', {'roleName': roleName});
     _notifyStoreChanged();
+    return true;
   }
 
   void addCustomGeofenceZone({
@@ -19,6 +38,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required double surchargeRate,
     required List<GeoPoint> vertices,
   }) {
+    if (!hasAdminPermission('Hệ thống: Cài đặt')) return;
     if (vertices.length < 3) return;
     final newZone = GeofenceZoneRecord(
       id: 'GEO-0${geofenceZones.length + 1}',
@@ -45,14 +65,20 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _notifyStoreChanged();
   }
 
-  void addCustomerAddress(String label, String address) {
-    final resolved = SmartDispatchEngine.resolveAddressToCoordinate(
-      address,
-      fallback: const GeoPoint(latitude: 10.7785, longitude: 106.6980),
-    );
+  void addCustomerAddress(
+    String label,
+    String address, {
+    GeoPoint? customLocation,
+  }) {
+    final resolved =
+        customLocation ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          address,
+          fallback: const GeoPoint(latitude: 10.7785, longitude: 106.6980),
+        );
     final normUserPhone = _normalizePhone(customerPhone);
     final newAddr = SavedAddressRecord(
-      id: 'ADDR-0${savedAddresses.length + 1}',
+      id: allocateUniqueId('ADDR-', savedAddresses.map((a) => a.id)),
       userPhone: normUserPhone,
       label: label,
       fullAddress: address,
@@ -94,46 +120,83 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     int? customDistanceMeters,
     int? customDurationSeconds,
     bool? isPrepaidConfirmed,
+    bool? isFragileTag,
+    bool? isKeepColdTag,
+    String? customCustomerName,
+    GeoPoint? customPickupLocation,
+    GeoPoint? customDropoffLocation,
+    List<Map<String, dynamic>> additionalStops = const [],
   }) {
-    final pickupPt = SmartDispatchEngine.resolveAddressToCoordinate(
-      pickupAddress,
-      fallback: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
-    );
-    final dropoffPt = SmartDispatchEngine.resolveAddressToCoordinate(
-      dropoffAddress,
-      fallback: const GeoPoint(latitude: 10.7550, longitude: 106.6750),
-    );
-
-    final rawAirMeters = GeoMath.distanceMeters(pickupPt, dropoffPt);
-    final isDefaultRoute = pickupAddress.contains('Phố Huế') &&
-        dropoffAddress.contains('Lê Trọng Tấn');
-    final distMeters = customDistanceMeters ??
-        (isDefaultRoute
-            ? 14500
-            : (rawAirMeters * 1.28).round().clamp(1500, 45000));
-    final durationSec = customDurationSeconds ??
-        (isDefaultRoute
-            ? 2700
-            : ((distMeters / 1000.0) * 180).round());
-
-    double geofenceFee = 0;
-    for (final z in geofenceZones) {
-      if (z.isActive &&
-          z.surchargeRate > 0 &&
-          GeoMath.isPointInPolygon(dropoffPt, z.boundary)) {
-        geofenceFee += z.surchargeRate;
-      }
+    final pickupPt =
+        customPickupLocation ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          pickupAddress,
+          fallback: const GeoPoint(latitude: 10.7769, longitude: 106.6953),
+        );
+    final firstDropoffPt =
+        customDropoffLocation ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          dropoffAddress,
+          fallback: const GeoPoint(latitude: 10.7550, longitude: 106.6750),
+        );
+    final normalizedStops = <Map<String, dynamic>>[
+      {
+        'stopType': 'DROPOFF',
+        'address': dropoffAddress,
+        'latitude': firstDropoffPt.latitude,
+        'longitude': firstDropoffPt.longitude,
+        'recipientName': recipientName,
+        'recipientPhone': recipientPhone,
+        'codAmount': codAmount,
+      },
+      ...additionalStops.where((stop) {
+        return (stop['address'] ?? '').toString().trim().isNotEmpty;
+      }),
+    ];
+    var lastDropoffPt = firstDropoffPt;
+    var lastDropoffAddress = dropoffAddress;
+    var routeMeters = 0.0;
+    var previousPoint = pickupPt;
+    for (final stop in normalizedStops) {
+      final stopAddress = stop['address'].toString().trim();
+      final stopPoint = stop['latitude'] is num && stop['longitude'] is num
+          ? GeoPoint(
+              latitude: (stop['latitude'] as num).toDouble(),
+              longitude: (stop['longitude'] as num).toDouble(),
+            )
+          : SmartDispatchEngine.resolveAddressToCoordinate(
+              stopAddress,
+              fallback: lastDropoffPt,
+            );
+      routeMeters += GeoMath.distanceMeters(previousPoint, stopPoint) * 1.28;
+      previousPoint = stopPoint;
+      lastDropoffPt = stopPoint;
+      lastDropoffAddress = stopAddress;
+      stop['latitude'] = stopPoint.latitude;
+      stop['longitude'] = stopPoint.longitude;
     }
+
+    final rawAirMeters = routeMeters;
+    final distMeters =
+        customDistanceMeters ?? rawAirMeters.round().clamp(1500, 45000);
+    final durationSec =
+        customDurationSeconds ?? ((distMeters / 1000.0) * 180).round();
+
+    double geofenceFee = computeGeofenceSurchargeForPoint(lastDropoffPt);
     if (isWeatherSurchargeActive) {
       geofenceFee += badWeatherSurchargeConfig;
     }
     if (weightKg > 5.0) {
       geofenceFee += ((weightKg - 5.0) * 3000).roundToDouble();
     }
-    if (packageDescription.toLowerCase().contains('dễ vỡ')) {
+    final applyFragile =
+        isFragileTag ?? packageDescription.toLowerCase().contains('dễ vỡ');
+    final applyKeepCold =
+        isKeepColdTag ?? packageDescription.toLowerCase().contains('giữ lạnh');
+    if (applyFragile) {
       geofenceFee += 5000;
     }
-    if (packageDescription.toLowerCase().contains('giữ lạnh')) {
+    if (applyKeepCold) {
       geofenceFee += 10000;
     }
 
@@ -149,15 +212,18 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       voucherDiscount: 0,
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
+      configuredStandardPeakSurcharge: peakHourSurchargeConfig,
     );
 
     double discount = 0;
     if (voucherCode != null && voucherCode.trim().isNotEmpty) {
       final matched = vouchers
-          .where((v) => v.code.toUpperCase() == voucherCode.trim().toUpperCase())
+          .where(
+            (v) => v.code.toUpperCase() == voucherCode.trim().toUpperCase(),
+          )
           .firstOrNull;
       if (matched != null &&
-          matched.status == 'Đang hoạt động' &&
+          matched.isUsable &&
           (preDiscountEst.totalAmount + codAmount) >= matched.minOrderValue) {
         if (matched.isPercentage) {
           final rawPct =
@@ -166,6 +232,21 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         } else {
           discount = matched.discountValue;
         }
+        matched.usedCount += 1;
+        _sqliteDb.updateRows(
+          'vouchers',
+          {'usage_limit': matched.usageLimit, 'used_count': matched.usedCount},
+          where: 'code = ?',
+          whereArgs: [matched.code],
+        );
+        _sqliteDb.upsertEntityRecord(
+          tableName: 'voucher_meta',
+          recordId: matched.code,
+          payload: {
+            'usageLimit': matched.usageLimit,
+            'usedCount': matched.usedCount,
+          },
+        );
       }
     }
 
@@ -178,18 +259,36 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       voucherDiscount: discount,
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
+      configuredStandardPeakSurcharge: peakHourSurchargeConfig,
     );
 
+    final resolvedCustomerName =
+        (customCustomerName != null && customCustomerName.trim().isNotEmpty)
+        ? customCustomerName.trim()
+        : customerFullName;
+
+    final now = DateTime.now();
+    final todayFormatted =
+        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
+    final isCashMethod =
+        paymentMethod.contains('Tiền mặt') ||
+        paymentMethod == 'Người nhận trả phí' ||
+        paymentMethod == 'Người gửi trả phí';
     final record = ActiveOrderRecord(
-      id: 'ORD-${DateTime.now().millisecondsSinceEpoch}-${orders.length + 1}',
-      trackingCode: '#DH${100000 + orders.length * 1423}',
-      customerName: customerFullName,
+      id: allocateUniqueId(
+        'ORD-',
+        orders.map((o) => o.id),
+        minNumber: 101,
+        padDigits: 3,
+      ),
+      trackingCode: allocateUniqueTrackingCode(),
+      customerName: resolvedCustomerName,
       recipientName: recipientName,
       recipientPhone: recipientPhone,
       pickupAddress: pickupAddress,
-      dropoffAddress: dropoffAddress,
+      dropoffAddress: lastDropoffAddress,
       pickupLocation: pickupPt,
-      dropoffLocation: dropoffPt,
+      dropoffLocation: lastDropoffPt,
       serviceType: serviceType,
       packageDescription: packageDescription,
       weightKg: weightKg,
@@ -202,52 +301,156 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       codAmount: codAmount,
       totalAmount: est.totalAmount,
       paymentMethod: paymentMethod,
-      paymentStatus: (paymentMethod == 'Tiền mặt (COD)' ||
-              paymentMethod == 'Người nhận trả phí' ||
-              paymentMethod == 'Người gửi trả phí' ||
+      paymentStatus:
+          ((isCashMethod && isPrepaidConfirmed != true) ||
               isPrepaidConfirmed == false)
           ? 'UNPAID'
           : 'PAID',
       status: OrderStatus.searching,
-      createdDateLabel: 'Hôm nay',
+      createdDateLabel: todayFormatted,
+      createdAtMs: now.millisecondsSinceEpoch,
     );
     orders.insert(0, record);
     selectedCustomerOrderCode = record.trackingCode;
     _sqliteDb.upsertRow('orders', record.toSqlRow());
+    unawaited(
+      saveOrderStops(
+        orderId: record.id,
+        stops: [
+          {
+            'stopType': 'PICKUP',
+            'address': pickupAddress,
+            'latitude': pickupPt.latitude,
+            'longitude': pickupPt.longitude,
+          },
+          ...normalizedStops,
+        ],
+      ),
+    );
     activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
       pickupPt,
-      dropoffPt,
+      lastDropoffPt,
       segments: 10,
     );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+                  resolvedCustomerName.toLowerCase() ||
+              m.representativeName.trim().toLowerCase() ==
+                  resolvedCustomerName.toLowerCase(),
+        )
+        .firstOrNull;
+    final resolvedCustomerUserId = owningMer != null
+        ? (findUserByPhone(owningMer.ownerPhone)?.id ?? 'USR-03')
+        : (activeAuthenticatedUser?.id ?? 'USR-01');
     _pushRealtimeNotification(
       category: 'Đơn hàng',
       title:
           'Đơn hàng ${record.trackingCode} đã được khởi tạo (${est.totalAmount.toStringAsFixed(0)}đ). Hệ thống đang tìm tài xế.',
-      targetGroup: 'Khách hàng',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? resolvedCustomerName,
     );
-    if (isOfflineMode) offlineQueueCount++;
-    _persistMutation('CREATE_ORDER', {'trackingCode': record.trackingCode});
+    _dispatchMerchantOrderWebhookIfConfigured(
+      record,
+      eventName: 'ORDER_CREATED',
+    );
+    _persistMutation('CREATE_ORDER', {
+      'table': 'orders',
+      'trackingCode': record.trackingCode,
+      'record': <String, Object?>{
+        ...record.toSqlRow(),
+        'customer_id': resolvedCustomerUserId,
+        if (owningMer != null) 'merchant_id': owningMer.id,
+      },
+    });
+    unawaited(
+      recordAuditEvent(
+        action: 'CREATE_ORDER',
+        entityType: 'ORDER',
+        entityId: record.id,
+        after: record.toSqlRow(),
+      ),
+    );
     _notifyStoreChanged();
     return record;
+  }
+
+  void _dispatchMerchantOrderWebhookIfConfigured(
+    ActiveOrderRecord ord, {
+    required String eventName,
+  }) {
+    final custLower = ord.customerName.trim().toLowerCase();
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() == custLower ||
+              m.representativeName.trim().toLowerCase() == custLower,
+        )
+        .firstOrNull;
+    if (owningMer == null) return;
+    final rawUrl = owningMer.webhookUrl.trim();
+    if (rawUrl.isEmpty) return;
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null ||
+        !(uri.scheme == 'http' || uri.scheme == 'https') ||
+        uri.host.isEmpty) {
+      return;
+    }
+    final sig = SecurityAndBarcodeUtils.generatePaymentSignature(
+      orderCode: ord.trackingCode,
+      amount: ord.codAmount,
+      method: owningMer.id,
+    );
+    final payload = <String, dynamic>{
+      'event': eventName,
+      'merchantId': owningMer.id,
+      'storeName': owningMer.storeName,
+      'trackingCode': ord.trackingCode,
+      'status': ord.status.dbCode,
+      'paymentStatus': ord.paymentStatus,
+      'codAmount': ord.codAmount,
+      'totalAmount': ord.totalAmount,
+      'assignedDriverName': ord.assignedDriverName,
+      'timestamp': DateTime.now().toIso8601String(),
+      'signature': sig,
+    };
+    unawaited(
+      queueWebhookDelivery(
+        endpointUrl: rawUrl,
+        eventType: eventName,
+        aggregateId: ord.id,
+        payload: payload,
+        signature: sig,
+      ),
+    );
+    if ((!kIsWeb && Platform.environment.containsKey('FLUTTER_TEST')) ||
+        isOfflineMode) {
+      return;
+    }
+    unawaited(processDueWebhookDeliveries(maxItems: 10));
   }
 
   void _pushRealtimeNotification({
     required String category,
     required String title,
     String targetGroup = 'Khách hàng',
+    String? recipientKey,
   }) {
     final noti = NotificationRecord(
       id: 'NOTI-${DateTime.now().millisecondsSinceEpoch}-${notifications.length + 1}',
       category: category,
       title: title,
       targetGroup: targetGroup,
+      recipientKey: recipientKey,
       timeAgo: 'Vừa xong',
     );
     notifications.insert(0, noti);
     _sqliteDb.upsertRow('chat_messages_and_notifications', {
       'id': noti.id,
       'record_type': 'NOTIFICATION',
-      'order_id': null,
+      'order_id': recipientKey,
+      'recipient_key': recipientKey,
       'sender_name': 'Hệ thống',
       'is_customer': 0,
       'category': noti.category,
@@ -258,6 +461,137 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'is_read': 0,
       'created_at_ms': DateTime.now().millisecondsSinceEpoch,
     });
+  }
+
+  void _recordWalletLedgerEntry({
+    required String idPrefix,
+    required String ownerId,
+    required String ownerName,
+    required String ownerRole,
+    required double amount,
+    required String bankName,
+    required String accountMasked,
+    required String status,
+  }) {
+    final now = DateTime.now();
+    final dateStr =
+        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+    final entry = WithdrawalRequestRecord(
+      id: '$idPrefix-${now.millisecondsSinceEpoch}-${withdrawalRequests.length + 1}',
+      ownerId: ownerId,
+      ownerName: ownerName,
+      ownerRole: ownerRole,
+      amount: amount,
+      bankName: bankName,
+      accountMasked: accountMasked,
+      requestDate: dateStr,
+      status: status,
+    );
+    withdrawalRequests.insert(0, entry);
+    _sqliteDb.upsertRow('wallets_and_transactions', {
+      'id': entry.id,
+      'owner_id': entry.ownerId,
+      'owner_name': entry.ownerName,
+      'owner_role': entry.ownerRole,
+      'amount': entry.amount,
+      'bank_name': entry.bankName,
+      'account_masked': entry.accountMasked,
+      'request_date': entry.requestDate,
+      'status': entry.status,
+      'created_at_ms': now.millisecondsSinceEpoch,
+    });
+    if (ownerId.isNotEmpty) {
+      _sqliteDb.upsertEntityRecord(
+        tableName: 'withdrawal_meta',
+        recordId: entry.id,
+        payload: {'ownerId': ownerId},
+      );
+    }
+  }
+
+  void _syncMerchantCodReconciliation(MerchantApplicantRecord mer) {
+    final now = DateTime.now();
+    final period = 'Kỳ ${now.month.toString().padLeft(2, '0')}/${now.year}';
+    final merStoreLower = mer.storeName.trim().toLowerCase();
+    final merRepLower = mer.representativeName.trim().toLowerCase();
+    final shopOrders = orders.where((o) {
+      final custLower = o.customerName.trim().toLowerCase();
+      return (merStoreLower.isNotEmpty && custLower == merStoreLower) ||
+          (merRepLower.isNotEmpty && custLower == merRepLower);
+    }).toList();
+    final deliveredShopOrders = shopOrders
+        .where(
+          (o) =>
+              o.status == OrderStatus.delivered &&
+              o.paymentStatus != 'RETURNED',
+        )
+        .toList();
+    final returnedShopOrders = shopOrders
+        .where(
+          (o) =>
+              o.status == OrderStatus.delivered &&
+              o.paymentStatus == 'RETURNED',
+        )
+        .toList();
+
+    double totalCod = 0;
+    double totalFees = 0;
+    for (final o in deliveredShopOrders) {
+      totalCod += o.codAmount;
+      final isRecipientOrPrepaid =
+          o.paymentMethod == 'Người nhận trả phí' ||
+          o.paymentMethod.contains('MoMo') ||
+          o.paymentMethod.contains('VNPay') ||
+          o.paymentMethod.contains('ZaloPay') ||
+          o.paymentMethod.contains('thanh toán trước');
+      final shipFee = isRecipientOrPrepaid ? 0.0 : o.totalAmount;
+      final codHandling = o.codAmount > 2000000
+          ? (o.codAmount * 0.005).roundToDouble()
+          : 0.0;
+      totalFees += shipFee + codHandling;
+    }
+    double totalReturnFee = 0;
+    for (final rOrd in returnedShopOrders) {
+      totalReturnFee += ((rOrd.deliveryFee + rOrd.surchargeFee) * 0.50)
+          .roundToDouble();
+    }
+    final netPayout = totalCod - totalFees - totalReturnFee;
+    final existingIdx = codReconciliations.indexWhere(
+      (r) => r.merchantId == mer.id,
+    );
+    final recId = existingIdx >= 0
+        ? codReconciliations[existingIdx].id
+        : 'REC-${mer.id}';
+    final rec = CodReconciliationRecord(
+      id: recId,
+      merchantId: mer.id,
+      periodLabel: period,
+      totalCodCollected: totalCod,
+      totalServiceFee: totalFees,
+      returnCancelFee: totalReturnFee,
+      netPayoutAmount: netPayout,
+      status: 'RECONCILED',
+    );
+    if (existingIdx >= 0) {
+      codReconciliations[existingIdx] = rec;
+    } else {
+      codReconciliations.add(rec);
+    }
+    _sqliteDb.upsertRow('cod_reconciliations', {
+      'id': rec.id,
+      'merchant_id': rec.merchantId,
+      'period_label': rec.periodLabel,
+      'total_cod_collected': rec.totalCodCollected,
+      'total_service_fee': rec.totalServiceFee,
+      'return_cancel_fee': rec.returnCancelFee,
+      'net_payout_amount': rec.netPayoutAmount,
+      'status': rec.status,
+    });
+    _sqliteDb.upsertEntityRecord(
+      tableName: 'cod_reconciliation_meta',
+      recordId: rec.id,
+      payload: {'returnCancelFee': rec.returnCancelFee},
+    );
   }
 
   void _recordOrderStatusHistory(
@@ -288,15 +622,29 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     if (ord == null) return;
     if (!ord.status.canTransitionTo(OrderStatus.accepted)) return;
     if (!isDriverOnline) return;
-    final activeDrv =
-        drivers.where((d) => d.id == activeDriverId).firstOrNull ??
-            drivers.firstOrNull;
-    if (activeDrv != null && activeDrv.approvalStatus != 'Đã duyệt') return;
+    final activeDrv = activeDriverRecord;
+    final linkedUser = activeDrv != null
+        ? findUserByPhone(activeDrv.phone)
+        : null;
+    if (activeDrv == null ||
+        activeDrv.approvalStatus != 'Đã duyệt' ||
+        activeDrv.walletBalance < 200000 ||
+        linkedUser?.status == 'LOCKED') {
+      return;
+    }
+    if (ord.serviceType == DeliveryServiceType.truck) {
+      final vLower = activeDrv.vehicleType.toLowerCase();
+      final isTruckCapable =
+          vLower.contains('tải') ||
+          vLower.contains('van') ||
+          vLower.contains('truck');
+      if (!isTruckCapable) {
+        return;
+      }
+    }
     ord.status = OrderStatus.accepted;
-    ord.assignedDriverName =
-        customDriverName ?? activeDrv?.fullName ?? activeDriverName;
-    ord.assignedDriverPlate =
-        customPlate ?? activeDrv?.licensePlate ?? '59-P1 123.45';
+    ord.assignedDriverName = customDriverName ?? activeDrv.fullName;
+    ord.assignedDriverPlate = customPlate ?? activeDrv.licensePlate;
     selectedDriverOrderCode = trackingCode;
     activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
       ord.pickupLocation,
@@ -304,6 +652,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       segments: 10,
     );
     activeDriverLocation = ord.pickupLocation;
+    activeDrv.location = ord.pickupLocation;
     routeProgressStep = 0;
     _sqliteDb.updateRows(
       'orders',
@@ -320,13 +669,26 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       ord.status,
       'Tài xế ${ord.assignedDriverName} (${ord.assignedDriverPlate}) đã nhận đơn',
     );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+              ord.customerName.trim().toLowerCase(),
+        )
+        .firstOrNull;
     _pushRealtimeNotification(
       category: 'Đơn hàng',
       title:
           'Tài xế ${ord.assignedDriverName} (${ord.assignedDriverPlate}) đã nhận đơn ${ord.trackingCode}.',
-      targetGroup: 'Khách hàng',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? ord.customerName,
     );
-    _persistMutation('DRIVER_ACCEPT_ORDER', {'trackingCode': trackingCode});
+    _dispatchMerchantOrderWebhookIfConfigured(ord, eventName: 'ORDER_ACCEPTED');
+    _persistMutation('DRIVER_ACCEPT_ORDER', {
+      'table': 'orders',
+      'trackingCode': trackingCode,
+      'record': ord.toSqlRow(),
+    });
     _notifyStoreChanged();
   }
 
@@ -334,16 +696,39 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String trackingCode,
     required DriverApplicantRecord driver,
   }) {
+    if (!hasAdminPermission('Đơn: Sửa')) return false;
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return false;
     if (ord.status == OrderStatus.delivered ||
-        ord.status == OrderStatus.cancelled) {
+        ord.status == OrderStatus.cancelled ||
+        ord.status == OrderStatus.returning ||
+        ord.paymentStatus == 'RETURNED') {
       return false;
     }
-    if (driver.approvalStatus != 'Đã duyệt' || !driver.isOnline) return false;
-    if (ord.status == OrderStatus.searching ||
-        ord.status == OrderStatus.draft ||
-        ord.status == OrderStatus.failed) {
+    if (driver.approvalStatus != 'Đã duyệt' ||
+        !driver.isOnline ||
+        driver.walletBalance < 200000) {
+      return false;
+    }
+    final linkedUser = findUserByPhone(driver.phone);
+    if (linkedUser != null && linkedUser.status == 'LOCKED') {
+      return false;
+    }
+    if (ord.serviceType == DeliveryServiceType.truck) {
+      final vLower = driver.vehicleType.toLowerCase();
+      final isTruckCapable =
+          vLower.contains('tải') ||
+          vLower.contains('van') ||
+          vLower.contains('truck');
+      if (!isTruckCapable) {
+        return false;
+      }
+    }
+    if (ord.status == OrderStatus.failed) {
+      ord.status = OrderStatus.inTransit;
+      ord.cancelReason = null;
+    } else if (ord.status == OrderStatus.searching ||
+        ord.status == OrderStatus.draft) {
       ord.status = OrderStatus.accepted;
       ord.cancelReason = null;
     }
@@ -373,6 +758,31 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       ord.status,
       'Quản trị viên gán/điều phối lại cho tài xế ${driver.fullName} (${driver.licensePlate})',
     );
+    _pushRealtimeNotification(
+      category: 'Đơn hàng',
+      title:
+          'Điều phối viên đã gán đơn ${ord.trackingCode} cho tài xế ${driver.fullName}.',
+      targetGroup: 'Tài xế',
+      recipientKey: driver.id,
+    );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+              ord.customerName.trim().toLowerCase(),
+        )
+        .firstOrNull;
+    _pushRealtimeNotification(
+      category: 'Đơn hàng',
+      title:
+          'Đơn hàng ${ord.trackingCode} đã được điều phối cho tài xế ${driver.fullName} (${driver.licensePlate}).',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? ord.customerName,
+    );
+    _dispatchMerchantOrderWebhookIfConfigured(
+      ord,
+      eventName: 'ORDER_DRIVER_ASSIGNED',
+    );
     _persistMutation('ADMIN_ASSIGN_DRIVER', {
       'trackingCode': trackingCode,
       'driverId': driver.id,
@@ -382,75 +792,207 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     return true;
   }
 
-  void driverAdvanceOrderStatus(String trackingCode, {String? podNote}) {
+  void driverAdvanceOrderStatus(
+    String trackingCode, {
+    String? podNote,
+    bool allowAdminOverride = false,
+  }) {
+    if (allowAdminOverride && !hasAdminPermission('Đơn: Sửa')) return;
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return;
-    final activeDrv =
-        drivers.where((d) => d.id == activeDriverId).firstOrNull ??
-            drivers.firstOrNull;
+    if (!allowAdminOverride && !isDriverOnline) return;
+    final activeDrv = activeDriverRecord;
+    final linkedUser = activeDrv != null
+        ? findUserByPhone(activeDrv.phone)
+        : null;
+    if (!allowAdminOverride &&
+        (activeDrv == null ||
+            activeDrv.approvalStatus != 'Đã duyệt' ||
+            activeDrv.walletBalance < 200000 ||
+            linkedUser?.status == 'LOCKED')) {
+      return;
+    }
+    final currentDrvName = (activeDrv?.fullName ?? activeDriverName)
+        .trim()
+        .toLowerCase();
+    if (!allowAdminOverride &&
+        ord.assignedDriverName != null &&
+        ord.assignedDriverName!.trim().isNotEmpty &&
+        currentDrvName.isNotEmpty &&
+        ord.assignedDriverName!.trim().toLowerCase() != currentDrvName) {
+      return;
+    }
+    final assignedDrv =
+        (ord.assignedDriverName != null
+            ? drivers
+                  .where(
+                    (d) =>
+                        d.fullName.trim().toLowerCase() ==
+                        ord.assignedDriverName!.trim().toLowerCase(),
+                  )
+                  .firstOrNull
+            : null) ??
+        activeDrv;
     switch (ord.status) {
       case OrderStatus.searching:
       case OrderStatus.draft:
+        if (!allowAdminOverride &&
+            ord.serviceType == DeliveryServiceType.truck) {
+          final vLower = (assignedDrv?.vehicleType ?? '').toLowerCase();
+          final isTruckCapable =
+              vLower.contains('tải') ||
+              vLower.contains('van') ||
+              vLower.contains('truck');
+          if (!isTruckCapable) return;
+        }
         ord.status = OrderStatus.accepted;
-        ord.assignedDriverName = activeDrv?.fullName ?? activeDriverName;
-        ord.assignedDriverPlate = activeDrv?.licensePlate ?? '59-P1 123.45';
+        ord.assignedDriverName = assignedDrv?.fullName ?? activeDriverName;
+        ord.assignedDriverPlate = assignedDrv?.licensePlate ?? '';
       case OrderStatus.accepted:
         ord.status = OrderStatus.arrivingPickup;
       case OrderStatus.arrivingPickup:
         ord.status = OrderStatus.inTransit;
       case OrderStatus.inTransit:
         ord.status = OrderStatus.delivered;
+        ord.deliveredAtMs = DateTime.now().millisecondsSinceEpoch;
         ord.paymentStatus = 'PAID';
         ord.podImageNote =
             podNote ?? 'Đã chụp ảnh kiện hàng kèm Watermark GPS & OTP 4 số';
-        final driverNetEarning =
-            ((ord.deliveryFee + ord.surchargeFee) * 0.80).roundToDouble();
-        driverWalletBalance += driverNetEarning;
-        if (ord.codAmount > 0) {
+        final driverNetEarning = ((ord.deliveryFee + ord.surchargeFee) * 0.80)
+            .roundToDouble();
+        if (assignedDrv != null) {
+          assignedDrv.totalTrips += 1;
+          assignedDrv.walletBalance += driverNetEarning;
+          if (assignedDrv.id == activeDriverId ||
+              assignedDrv.fullName.trim().toLowerCase() ==
+                  activeDriverName.trim().toLowerCase()) {
+            driverWalletBalance = assignedDrv.walletBalance;
+          }
+          _recordWalletLedgerEntry(
+            idPrefix: 'EARN',
+            ownerId: assignedDrv.id,
+            ownerName: assignedDrv.fullName,
+            ownerRole: 'Tài xế (Thu nhập chuyến)',
+            amount: driverNetEarning,
+            bankName: 'Ví tài xế (80% cước)',
+            accountMasked: ord.trackingCode,
+            status: 'Đã cộng ví',
+          );
+        } else {
+          driverWalletBalance += driverNetEarning;
+        }
+        final ordOwnerLower = ord.customerName.trim().toLowerCase();
+        final matchedMer = merchantApplicants
+            .where(
+              (m) =>
+                  m.storeName.trim().toLowerCase() == ordOwnerLower ||
+                  m.representativeName.trim().toLowerCase() == ordOwnerLower,
+            )
+            .firstOrNull;
+        if (matchedMer != null) {
           final codHandlingFee = ord.codAmount > 2000000
               ? (ord.codAmount * 0.005).roundToDouble()
               : 0.0;
           final isShipPrepaidOrRecipientPaid =
               ord.paymentMethod == 'Người nhận trả phí' ||
-                  ord.paymentMethod.contains('MoMo') ||
-                  ord.paymentMethod.contains('VNPay') ||
-                  ord.paymentMethod.contains('ZaloPay');
-          final shipDeduct =
-              isShipPrepaidOrRecipientPaid ? 0.0 : ord.totalAmount;
-          final netMerchantCod =
-              (ord.codAmount - shipDeduct - codHandlingFee)
-                  .clamp(0.0, double.infinity);
-          merchantCodBalance += netMerchantCod;
-        }
-        if (activeDrv != null) {
-          activeDrv.totalTrips += 1;
+              ord.paymentMethod.contains('MoMo') ||
+              ord.paymentMethod.contains('VNPay') ||
+              ord.paymentMethod.contains('ZaloPay') ||
+              ord.paymentMethod.contains('thanh toán trước');
+          final shipDeduct = isShipPrepaidOrRecipientPaid
+              ? 0.0
+              : ord.totalAmount;
+          final netMerchantDelta = ord.codAmount - shipDeduct - codHandlingFee;
+          matchedMer.codBalance = (matchedMer.codBalance + netMerchantDelta)
+              .clamp(0.0, double.infinity);
+          if (matchedMer.id == activeMerchantRecord?.id ||
+              matchedMer.storeName.trim().toLowerCase() ==
+                  merchantStoreName.trim().toLowerCase()) {
+            merchantCodBalance = matchedMer.codBalance;
+          }
+          _sqliteDb.updateRows(
+            'merchants',
+            {'cod_balance': matchedMer.codBalance},
+            where: 'id = ?',
+            whereArgs: [matchedMer.id],
+          );
+          _syncMerchantCodReconciliation(matchedMer);
         }
         _sqliteDb.updateRows(
           'drivers',
           {
-            'wallet_balance': driverWalletBalance,
-            if (activeDrv != null) 'total_trips': activeDrv.totalTrips,
+            'wallet_balance': assignedDrv?.walletBalance ?? driverWalletBalance,
+            if (assignedDrv != null) 'total_trips': assignedDrv.totalTrips,
           },
           where: 'id = ?',
-          whereArgs: [activeDrv?.id ?? activeDriverId],
-        );
-        final targetMerId =
-            (activeMerchantRecord ?? merchantApplicants.firstOrNull)?.id ??
-                'MER-01';
-        _sqliteDb.updateRows(
-          'merchants',
-          {'cod_balance': merchantCodBalance},
-          where: 'id = ?',
-          whereArgs: [targetMerId],
+          whereArgs: [assignedDrv?.id ?? activeDriverId],
         );
       case OrderStatus.failed:
         ord.status = OrderStatus.inTransit;
         ord.cancelReason = null;
       case OrderStatus.returning:
         ord.status = OrderStatus.delivered;
+        ord.deliveredAtMs = DateTime.now().millisecondsSinceEpoch;
         ord.paymentStatus = 'RETURNED';
         ord.podImageNote =
             podNote ?? 'Đã hoàn trả kiện hàng về kho Cửa hàng thành công';
+        final returnFee = ((ord.deliveryFee + ord.surchargeFee) * 0.50)
+            .roundToDouble();
+        final driverReturnComp = (returnFee * 0.80).roundToDouble();
+        if (assignedDrv != null && driverReturnComp > 0) {
+          assignedDrv.totalTrips += 1;
+          assignedDrv.walletBalance += driverReturnComp;
+          if (assignedDrv.id == activeDriverId ||
+              assignedDrv.fullName.trim().toLowerCase() ==
+                  activeDriverName.trim().toLowerCase()) {
+            driverWalletBalance = assignedDrv.walletBalance;
+          }
+          _sqliteDb.updateRows(
+            'drivers',
+            {
+              'wallet_balance': assignedDrv.walletBalance,
+              'total_trips': assignedDrv.totalTrips,
+            },
+            where: 'id = ?',
+            whereArgs: [assignedDrv.id],
+          );
+          _recordWalletLedgerEntry(
+            idPrefix: 'RET',
+            ownerId: assignedDrv.id,
+            ownerName: assignedDrv.fullName,
+            ownerRole: 'Tài xế (Phí hoàn hàng)',
+            amount: driverReturnComp,
+            bankName: 'Ví tài xế (80% cước hoàn)',
+            accountMasked: ord.trackingCode,
+            status: 'Đã cộng ví',
+          );
+        }
+        final returnOwnerLower = ord.customerName.trim().toLowerCase();
+        final returnMer = merchantApplicants
+            .where(
+              (m) =>
+                  m.storeName.trim().toLowerCase() == returnOwnerLower ||
+                  m.representativeName.trim().toLowerCase() == returnOwnerLower,
+            )
+            .firstOrNull;
+        if (returnMer != null) {
+          returnMer.codBalance = (returnMer.codBalance - returnFee).clamp(
+            0.0,
+            double.infinity,
+          );
+          if (returnMer.id == activeMerchantRecord?.id ||
+              returnMer.storeName.trim().toLowerCase() ==
+                  merchantStoreName.trim().toLowerCase()) {
+            merchantCodBalance = returnMer.codBalance;
+          }
+          _sqliteDb.updateRows(
+            'merchants',
+            {'cod_balance': returnMer.codBalance},
+            where: 'id = ?',
+            whereArgs: [returnMer.id],
+          );
+          _syncMerchantCodReconciliation(returnMer);
+        }
       default:
         break;
     }
@@ -462,6 +1004,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         'assigned_driver_name': ord.assignedDriverName,
         'assigned_driver_plate': ord.assignedDriverPlate,
         'pod_image_note': ord.podImageNote,
+        'delivered_at_ms': ord.deliveredAtMs,
       },
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
@@ -469,15 +1012,32 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _recordOrderStatusHistory(
       ord.id,
       ord.status,
-      ord.podImageNote ?? 'Cập nhật trạng thái vận đơn sang ${ord.status.displayName}',
+      ord.podImageNote ??
+          'Cập nhật trạng thái vận đơn sang ${ord.status.displayName}',
     );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+              ord.customerName.trim().toLowerCase(),
+        )
+        .firstOrNull;
+    final isReturnedSettled =
+        ord.status == OrderStatus.delivered && ord.paymentStatus == 'RETURNED';
     _pushRealtimeNotification(
       category: 'Đơn hàng',
-      title:
-          'Đơn hàng ${ord.trackingCode}: Trạng thái chuyển sang "${ord.status.displayName}".',
-      targetGroup: 'Khách hàng',
+      title: isReturnedSettled
+          ? 'Đơn hàng ${ord.trackingCode}: Đã hoàn trả kiện hàng về kho thành công.'
+          : 'Đơn hàng ${ord.trackingCode}: Trạng thái chuyển sang "${ord.status.displayName}".',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? ord.customerName,
     );
-    if (isOfflineMode) offlineQueueCount++;
+    _dispatchMerchantOrderWebhookIfConfigured(
+      ord,
+      eventName: isReturnedSettled
+          ? 'ORDER_RETURNED_TO_WAREHOUSE'
+          : 'ORDER_STATUS_UPDATED',
+    );
     _persistMutation('ADVANCE_ORDER_STATUS', {
       'trackingCode': trackingCode,
       'status': ord.status.name,
@@ -485,26 +1045,182 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _notifyStoreChanged();
   }
 
+  /// Tài xế ghi nhận giao hàng thất bại (Khách không nhận / Sai địa chỉ / Không liên lạc được)
+  bool driverMarkDeliveryFailed(String trackingCode, String reason) {
+    final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
+    if (ord == null || !ord.status.canTransitionTo(OrderStatus.failed)) {
+      return false;
+    }
+    final cleanReason = reason.trim().isNotEmpty
+        ? reason.trim()
+        : 'Không liên lạc được với người nhận tại điểm giao';
+    ord.status = OrderStatus.failed;
+    ord.cancelReason = cleanReason;
+    _sqliteDb.updateRows(
+      'orders',
+      {'status': ord.status.name, 'cancel_reason': ord.cancelReason},
+      where: 'tracking_code = ?',
+      whereArgs: [trackingCode],
+    );
+    _recordOrderStatusHistory(
+      ord.id,
+      OrderStatus.failed,
+      'Giao thất bại: $cleanReason',
+    );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+              ord.customerName.trim().toLowerCase(),
+        )
+        .firstOrNull;
+    _pushRealtimeNotification(
+      category: 'Đơn hàng',
+      title:
+          'Đơn hàng ${ord.trackingCode} giao thất bại ($cleanReason). Vui lòng xác nhận Giao lại hoặc Hoàn hàng.',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? ord.customerName,
+    );
+    _dispatchMerchantOrderWebhookIfConfigured(
+      ord,
+      eventName: 'ORDER_DELIVERY_FAILED',
+    );
+    _persistMutation('DRIVER_MARK_FAILED', {
+      'trackingCode': trackingCode,
+      'reason': cleanReason,
+    });
+    _notifyStoreChanged();
+    return true;
+  }
+
   bool cancelOrder(String trackingCode, String reason) {
+    if (activeAuthenticatedUser?.role == SubsystemRole.admin &&
+        !hasAdminPermission('Đơn: Xóa')) {
+      return false;
+    }
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return false;
     if (!ord.status.canTransitionTo(OrderStatus.cancelled)) {
       return false;
     }
+    final previousStatus = ord.status;
+    final hadDriverAccepted =
+        previousStatus == OrderStatus.accepted ||
+        previousStatus == OrderStatus.arrivingPickup;
+    final customerInitiatedLateCancel =
+        hadDriverAccepted &&
+        !reason.contains('Tài xế yêu cầu hủy') &&
+        !reason.startsWith('Admin:');
+    const lateCancelFee = 15000.0;
+    const driverCancelComp = 12000.0;
+
     ord.status = OrderStatus.cancelled;
-    ord.cancelReason = reason;
+    final wasPrepaid = ord.paymentStatus == 'PAID';
+    if (wasPrepaid) {
+      ord.paymentStatus = 'REFUNDED';
+    }
+    if (customerInitiatedLateCancel) {
+      final netRefund = (ord.totalAmount - lateCancelFee).clamp(
+        0.0,
+        double.infinity,
+      );
+      ord.cancelReason = wasPrepaid
+          ? '$reason (Khấu trừ phí hủy 15.000đ • Hoàn ví ${netRefund.toStringAsFixed(0)}đ)'
+          : '$reason (Ghi nhận phí hủy sau nhận chuyến: 15.000đ)';
+      final assignedDrv =
+          (ord.assignedDriverName != null
+              ? drivers
+                    .where(
+                      (d) =>
+                          d.fullName.trim().toLowerCase() ==
+                          ord.assignedDriverName!.trim().toLowerCase(),
+                    )
+                    .firstOrNull
+              : null) ??
+          activeDriverRecord;
+      if (assignedDrv != null) {
+        assignedDrv.walletBalance += driverCancelComp;
+        if (assignedDrv.id == activeDriverId ||
+            assignedDrv.fullName.trim().toLowerCase() ==
+                activeDriverName.trim().toLowerCase()) {
+          driverWalletBalance = assignedDrv.walletBalance;
+        }
+        _sqliteDb.updateRows(
+          'drivers',
+          {'wallet_balance': assignedDrv.walletBalance},
+          where: 'id = ?',
+          whereArgs: [assignedDrv.id],
+        );
+        _recordWalletLedgerEntry(
+          idPrefix: 'COMP',
+          ownerId: assignedDrv.id,
+          ownerName: assignedDrv.fullName,
+          ownerRole: 'Tài xế (Bồi hoàn hủy chuyến)',
+          amount: driverCancelComp,
+          bankName: 'Trích từ phí hủy 15.000đ',
+          accountMasked: ord.trackingCode,
+          status: 'Đã cộng ví',
+        );
+      } else {
+        driverWalletBalance += driverCancelComp;
+      }
+    } else {
+      ord.cancelReason = reason;
+    }
     _sqliteDb.updateRows(
       'orders',
       {
         'status': ord.status.name,
-        'cancel_reason': reason,
+        'payment_status': ord.paymentStatus,
+        'cancel_reason': ord.cancelReason,
       },
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
     );
+    _recordOrderStatusHistory(
+      ord.id,
+      OrderStatus.cancelled,
+      'Hủy đơn hàng: ${ord.cancelReason}',
+    );
+    final owningMer = merchantApplicants
+        .where(
+          (m) =>
+              m.storeName.trim().toLowerCase() ==
+              ord.customerName.trim().toLowerCase(),
+        )
+        .firstOrNull;
+    _pushRealtimeNotification(
+      category: 'Đơn hàng',
+      title: 'Đơn hàng ${ord.trackingCode} đã bị hủy (${ord.cancelReason}).',
+      targetGroup: owningMer != null ? 'Cửa hàng B2B' : 'Khách hàng',
+      recipientKey: owningMer?.id ?? ord.customerName,
+    );
+    if (ord.assignedDriverName != null &&
+        ord.assignedDriverName!.trim().isNotEmpty) {
+      final assignedDrv = drivers
+          .where(
+            (d) =>
+                d.fullName.trim().toLowerCase() ==
+                ord.assignedDriverName!.trim().toLowerCase(),
+          )
+          .firstOrNull;
+      _pushRealtimeNotification(
+        category: 'Đơn hàng',
+        title:
+            'Đơn hàng ${ord.trackingCode} bạn đang nhận đã bị hủy (${ord.cancelReason}).',
+        targetGroup: 'Tài xế',
+        recipientKey: assignedDrv?.id ?? ord.assignedDriverName,
+      );
+    }
+    _dispatchMerchantOrderWebhookIfConfigured(
+      ord,
+      eventName: 'ORDER_CANCELLED',
+    );
     _persistMutation('CANCEL_ORDER', {
+      'table': 'orders',
       'trackingCode': trackingCode,
-      'reason': reason,
+      'reason': ord.cancelReason,
+      'record': ord.toSqlRow(),
     });
     _notifyStoreChanged();
     return true;
@@ -523,43 +1239,70 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       final wasAlreadyRated = ord.ratingStars != null;
       ord.ratingStars = stars;
       ord.ratingComment = comment;
-      if (!wasAlreadyRated && tipVnd > 0) {
-        driverWalletBalance += tipVnd;
-      }
-      final targetDrv = (ord.assignedDriverName != null
+      final targetDrv =
+          (ord.assignedDriverName != null
               ? drivers
-                  .where((d) => d.fullName == ord.assignedDriverName)
-                  .firstOrNull
+                    .where((d) => d.fullName == ord.assignedDriverName)
+                    .firstOrNull
               : null) ??
-          drivers.where((d) => d.id == activeDriverId).firstOrNull ??
+          activeDriverRecord ??
           drivers.firstOrNull;
+      if (!wasAlreadyRated && tipVnd > 0) {
+        if (targetDrv != null) {
+          targetDrv.walletBalance += tipVnd;
+          if (targetDrv.id == activeDriverId ||
+              targetDrv.fullName.trim().toLowerCase() ==
+                  activeDriverName.trim().toLowerCase()) {
+            driverWalletBalance = targetDrv.walletBalance;
+          }
+          _recordWalletLedgerEntry(
+            idPrefix: 'TIP',
+            ownerId: targetDrv.id,
+            ownerName: targetDrv.fullName,
+            ownerRole: 'Tài xế (Tiền tip)',
+            amount: tipVnd,
+            bankName: 'Thưởng khách hàng',
+            accountMasked: ord.trackingCode,
+            status: 'Đã cộng ví',
+          );
+          _pushRealtimeNotification(
+            category: 'Đơn hàng',
+            title:
+                'Khách hàng vừa đánh giá $stars sao & thưởng +${tipVnd.toStringAsFixed(0)}đ cho đơn ${ord.trackingCode}.',
+            targetGroup: 'Tài xế',
+            recipientKey: targetDrv.id,
+          );
+        } else {
+          driverWalletBalance += tipVnd;
+        }
+      }
       final ratedList = orders.where((o) => o.ratingStars != null).toList();
       if (targetDrv != null && ratedList.isNotEmpty) {
         final driverRatedList = ratedList
             .where((o) => o.assignedDriverName == targetDrv.fullName)
             .toList();
-        final relevantOrders =
-            driverRatedList.isNotEmpty ? driverRatedList : ratedList;
+        final relevantOrders = driverRatedList.isNotEmpty
+            ? driverRatedList
+            : ratedList;
         final avg =
             relevantOrders.fold<int>(0, (s, o) => s + o.ratingStars!) /
-                relevantOrders.length;
+            relevantOrders.length;
         targetDrv.rating = double.parse(avg.toStringAsFixed(1));
       }
-      _sqliteDb.updateRows(
-        'drivers',
-        {
-          'wallet_balance': driverWalletBalance,
-          if (targetDrv != null) 'rating': targetDrv.rating,
-        },
-        where: 'id = ?',
-        whereArgs: [targetDrv?.id ?? activeDriverId],
-      );
+      if (targetDrv != null) {
+        _sqliteDb.updateRows(
+          'drivers',
+          {
+            'wallet_balance': targetDrv.walletBalance,
+            'rating': targetDrv.rating,
+          },
+          where: 'id = ?',
+          whereArgs: [targetDrv.id],
+        );
+      }
       _sqliteDb.updateRows(
         'orders',
-        {
-          'rating_stars': stars,
-          'rating_comment': comment,
-        },
+        {'rating_stars': stars, 'rating_comment': comment},
         where: 'tracking_code = ?',
         whereArgs: [trackingCode],
       );
@@ -581,7 +1324,11 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _notifyStoreChanged();
   }
 
-  void sendChatMessage(String orderId, String text, {required bool isCustomer}) {
+  void sendChatMessage(
+    String orderId,
+    String text, {
+    required bool isCustomer,
+  }) {
     if (text.trim().isEmpty) return;
     final msg = ChatMessageRecord(
       id: 'MSG-${DateTime.now().millisecondsSinceEpoch}-${chatMessages.length + 1}',
@@ -596,6 +1343,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'id': msg.id,
       'record_type': 'CHAT',
       'order_id': msg.orderId,
+      'recipient_key': null,
       'sender_name': msg.senderName,
       'is_customer': msg.isCustomer ? 1 : 0,
       'category': 'CHAT_MESSAGE',
@@ -610,6 +1358,47 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _notifyStoreChanged();
   }
 
+  bool topUpDriverWallet({
+    required double amount,
+    String bankName = 'Vietcombank',
+    String accountMasked = '007100****889',
+  }) {
+    if (amount <= 0) return false;
+    final activeDrv = activeDriverRecord;
+    if (activeDrv == null) return false;
+    activeDrv.walletBalance += amount;
+    driverWalletBalance = activeDrv.walletBalance;
+    _sqliteDb.updateRows(
+      'drivers',
+      {'wallet_balance': activeDrv.walletBalance},
+      where: 'id = ?',
+      whereArgs: [activeDrv.id],
+    );
+    _recordWalletLedgerEntry(
+      idPrefix: 'TOPUP',
+      ownerId: activeDrv.id,
+      ownerName: activeDrv.fullName,
+      ownerRole: 'Tài xế (Nạp ký quỹ)',
+      amount: amount,
+      bankName: bankName,
+      accountMasked: accountMasked,
+      status: 'Đã nạp ký quỹ',
+    );
+    _pushRealtimeNotification(
+      category: 'Hệ thống',
+      title:
+          'Đã nạp ${amount.toStringAsFixed(0)}đ vào Ví ký quỹ Tài xế ${activeDrv.fullName}.',
+      targetGroup: 'Tài xế',
+      recipientKey: activeDrv.id,
+    );
+    _persistMutation('TOP_UP_DRIVER_WALLET', {
+      'driverId': activeDrv.id,
+      'amount': amount,
+    });
+    _notifyStoreChanged();
+    return true;
+  }
+
   bool requestWithdrawal({
     required String ownerName,
     required String ownerRole,
@@ -618,41 +1407,88 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String accountMasked,
   }) {
     if (amount <= 0) return false;
-    if (ownerRole == 'Tài xế') {
-      if (driverWalletBalance - amount < 200000) return false;
-      driverWalletBalance -= amount;
-      _sqliteDb.updateRows(
-        'drivers',
-        {'wallet_balance': driverWalletBalance},
-        where: 'id = ?',
-        whereArgs: [activeDriverId],
-      );
-    } else {
-      if (merchantCodBalance < amount) return false;
-      merchantCodBalance -= amount;
-      final targetMerId =
-          (activeMerchantRecord ?? merchantApplicants.firstOrNull)?.id ??
-              'MER-01';
-      _sqliteDb.updateRows(
-        'merchants',
-        {'cod_balance': merchantCodBalance},
-        where: 'id = ?',
-        whereArgs: [targetMerId],
-      );
+    final cleanAccount = accountMasked.trim();
+    if (cleanAccount.isEmpty || cleanAccount.contains('Chưa liên kết')) {
+      return false;
     }
+    String resolvedOwnerId = '';
+    if (ownerRole == 'Tài xế') {
+      final targetDrv =
+          drivers
+              .where(
+                (d) =>
+                    d.fullName.trim().toLowerCase() ==
+                    ownerName.trim().toLowerCase(),
+              )
+              .firstOrNull ??
+          activeDriverRecord;
+      final currentBal = targetDrv?.walletBalance ?? driverWalletBalance;
+      if (currentBal - amount < 200000) return false;
+      if (targetDrv != null) {
+        targetDrv.walletBalance = currentBal - amount;
+        resolvedOwnerId = targetDrv.id;
+        if (targetDrv.id == activeDriverId ||
+            targetDrv.fullName.trim().toLowerCase() ==
+                activeDriverName.trim().toLowerCase()) {
+          driverWalletBalance = targetDrv.walletBalance;
+        }
+        _sqliteDb.updateRows(
+          'drivers',
+          {'wallet_balance': targetDrv.walletBalance},
+          where: 'id = ?',
+          whereArgs: [targetDrv.id],
+        );
+      } else {
+        driverWalletBalance -= amount;
+      }
+    } else {
+      final targetMer =
+          merchantApplicants
+              .where(
+                (m) =>
+                    m.storeName.trim().toLowerCase() ==
+                    ownerName.trim().toLowerCase(),
+              )
+              .firstOrNull ??
+          activeMerchantRecord;
+      final currentCod = targetMer?.codBalance ?? merchantCodBalance;
+      if (currentCod < amount) return false;
+      if (targetMer != null) {
+        targetMer.codBalance = currentCod - amount;
+        resolvedOwnerId = targetMer.id;
+        if (targetMer.id == activeMerchantRecord?.id ||
+            targetMer.storeName.trim().toLowerCase() ==
+                merchantStoreName.trim().toLowerCase()) {
+          merchantCodBalance = targetMer.codBalance;
+        }
+        _sqliteDb.updateRows(
+          'merchants',
+          {'cod_balance': targetMer.codBalance},
+          where: 'id = ?',
+          whereArgs: [targetMer.id],
+        );
+      } else {
+        merchantCodBalance -= amount;
+      }
+    }
+    final now = DateTime.now();
+    final dateStr =
+        '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
     final req = WithdrawalRequestRecord(
-      id: 'WD-${DateTime.now().millisecondsSinceEpoch}-${withdrawalRequests.length + 1}',
+      id: 'WD-${now.millisecondsSinceEpoch}-${withdrawalRequests.length + 1}',
+      ownerId: resolvedOwnerId,
       ownerName: ownerName,
       ownerRole: ownerRole,
       amount: amount,
       bankName: bankName,
       accountMasked: accountMasked,
-      requestDate: 'Vừa xong',
+      requestDate: dateStr,
       status: 'Chờ duyệt',
     );
     withdrawalRequests.insert(0, req);
     _sqliteDb.upsertRow('wallets_and_transactions', {
       'id': req.id,
+      'owner_id': req.ownerId,
       'owner_name': req.ownerName,
       'owner_role': req.ownerRole,
       'amount': req.amount,
@@ -660,9 +1496,17 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'account_masked': req.accountMasked,
       'request_date': req.requestDate,
       'status': req.status,
-      'created_at_ms': DateTime.now().millisecondsSinceEpoch,
+      'created_at_ms': now.millisecondsSinceEpoch,
     });
+    if (resolvedOwnerId.isNotEmpty) {
+      _sqliteDb.upsertEntityRecord(
+        tableName: 'withdrawal_meta',
+        recordId: req.id,
+        payload: {'ownerId': resolvedOwnerId},
+      );
+    }
     _persistMutation('REQUEST_WITHDRAWAL', {
+      'ownerId': resolvedOwnerId,
       'ownerRole': ownerRole,
       'amount': amount,
     });
@@ -671,30 +1515,85 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   void updateWithdrawalStatus(String id, String status) {
+    if (!hasAdminPermission('Tài chính: Thanh toán')) return;
     final req = withdrawalRequests.where((w) => w.id == id).firstOrNull;
     if (req != null && req.status == 'Chờ duyệt') {
       final previousStatus = req.status;
       req.status = status;
+      String? targetRecipientKey = req.ownerId.isNotEmpty ? req.ownerId : null;
       if (previousStatus == 'Chờ duyệt' && status == 'Từ chối') {
         if (req.ownerRole == 'Tài xế') {
-          driverWalletBalance += req.amount;
-          _sqliteDb.updateRows(
-            'drivers',
-            {'wallet_balance': driverWalletBalance},
-            where: 'id = ?',
-            whereArgs: [activeDriverId],
-          );
+          final targetDrv =
+              (req.ownerId.isNotEmpty
+                  ? drivers.where((d) => d.id == req.ownerId).firstOrNull
+                  : null) ??
+              drivers
+                  .where(
+                    (d) =>
+                        d.fullName.trim().toLowerCase() ==
+                        req.ownerName.trim().toLowerCase(),
+                  )
+                  .firstOrNull;
+          if (targetDrv != null) {
+            targetRecipientKey = targetDrv.id;
+            targetDrv.walletBalance += req.amount;
+            if (targetDrv.id == activeDriverId ||
+                targetDrv.fullName.trim().toLowerCase() ==
+                    activeDriverName.trim().toLowerCase()) {
+              driverWalletBalance = targetDrv.walletBalance;
+            }
+            _sqliteDb.updateRows(
+              'drivers',
+              {'wallet_balance': targetDrv.walletBalance},
+              where: 'id = ?',
+              whereArgs: [targetDrv.id],
+            );
+            _recordWalletLedgerEntry(
+              idPrefix: 'REFUND',
+              ownerId: targetDrv.id,
+              ownerName: targetDrv.fullName,
+              ownerRole: 'Tài xế (Hoàn ví rút tiền)',
+              amount: req.amount,
+              bankName: 'Hoàn từ lệnh rút ${req.id} bị từ chối',
+              accountMasked: targetDrv.id,
+              status: 'Đã cộng ví',
+            );
+          } else if (req.ownerName.trim().toLowerCase() ==
+              activeDriverName.trim().toLowerCase()) {
+            driverWalletBalance += req.amount;
+          }
         } else {
-          merchantCodBalance += req.amount;
-          final targetMerId =
-              (activeMerchantRecord ?? merchantApplicants.firstOrNull)?.id ??
-                  'MER-01';
-          _sqliteDb.updateRows(
-            'merchants',
-            {'cod_balance': merchantCodBalance},
-            where: 'id = ?',
-            whereArgs: [targetMerId],
-          );
+          final targetMer =
+              (req.ownerId.isNotEmpty
+                  ? merchantApplicants
+                        .where((m) => m.id == req.ownerId)
+                        .firstOrNull
+                  : null) ??
+              merchantApplicants
+                  .where(
+                    (m) =>
+                        m.storeName.trim().toLowerCase() ==
+                        req.ownerName.trim().toLowerCase(),
+                  )
+                  .firstOrNull;
+          if (targetMer != null) {
+            targetRecipientKey = targetMer.id;
+            targetMer.codBalance += req.amount;
+            if (targetMer.id == activeMerchantRecord?.id ||
+                targetMer.storeName.trim().toLowerCase() ==
+                    merchantStoreName.trim().toLowerCase()) {
+              merchantCodBalance = targetMer.codBalance;
+            }
+            _sqliteDb.updateRows(
+              'merchants',
+              {'cod_balance': targetMer.codBalance},
+              where: 'id = ?',
+              whereArgs: [targetMer.id],
+            );
+          } else if (req.ownerName.trim().toLowerCase() ==
+              merchantStoreName.trim().toLowerCase()) {
+            merchantCodBalance += req.amount;
+          }
         }
       }
       _sqliteDb.updateRows(
@@ -708,6 +1607,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         title:
             'Lệnh rút tiền ${req.id} (${req.amount.toStringAsFixed(0)}đ • ${req.bankName}) đã chuyển sang trạng thái: $status.',
         targetGroup: req.ownerRole == 'Tài xế' ? 'Tài xế' : 'Cửa hàng B2B',
+        recipientKey: targetRecipientKey,
       );
       _persistMutation('UPDATE_WITHDRAWAL', {'id': id, 'status': status});
       _notifyStoreChanged();
@@ -715,19 +1615,26 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   void updateDriverApproval(String id, String status) {
+    if (!hasAdminPermission('Tài xế: Phê duyệt')) return;
     final drv = drivers.where((d) => d.id == id).firstOrNull;
     if (drv != null) {
       drv.approvalStatus = status;
-      drv.isOnline = status == 'Đã duyệt';
-      if (drv.id == activeDriverId) {
+      drv.isOnline = status == 'Đã duyệt' && drv.walletBalance >= 200000;
+      if (drv.id == activeDriverId ||
+          (activeAuthenticatedUser != null &&
+              _normalizePhone(activeAuthenticatedUser!.phone) ==
+                  _normalizePhone(drv.phone))) {
+        if (status == 'Đã duyệt') {
+          activeDriverId = drv.id;
+          activeDriverName = drv.fullName;
+          activeDriverPhone = drv.phone;
+          driverWalletBalance = drv.walletBalance;
+        }
         isDriverOnline = drv.isOnline;
       }
       _sqliteDb.updateRows(
         'drivers',
-        {
-          'approval_status': status,
-          'is_online': drv.isOnline ? 1 : 0,
-        },
+        {'approval_status': status, 'is_online': drv.isOnline ? 1 : 0},
         where: 'id = ?',
         whereArgs: [id],
       );
@@ -736,7 +1643,14 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         if (status == 'Đã duyệt') {
           user.role = SubsystemRole.driver;
         } else if (status == 'Từ chối' && user.role == SubsystemRole.driver) {
-          user.role = SubsystemRole.customer;
+          final hasApprovedShop = merchantApplicants.any(
+            (m) =>
+                _normalizePhone(m.ownerPhone) == _normalizePhone(user.phone) &&
+                m.approvalStatus == 'Đã duyệt',
+          );
+          user.role = hasApprovedShop
+              ? SubsystemRole.merchant
+              : SubsystemRole.customer;
         }
         _sqliteDb.updateRows(
           'users',
@@ -750,13 +1664,111 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         title:
             'Hồ sơ Tài xế ${drv.fullName} (${drv.id} • ${drv.licensePlate}) đã chuyển sang trạng thái: $status.',
         targetGroup: 'Tài xế',
+        recipientKey: drv.id,
       );
       _persistMutation('UPDATE_DRIVER_APPROVAL', {'id': id, 'status': status});
       _notifyStoreChanged();
     }
   }
 
+  bool suspendOrUnsuspendDriver(String driverId) {
+    if (!hasAdminPermission('Tài xế: Đình chỉ')) return false;
+    final drv = drivers.where((d) => d.id == driverId).firstOrNull;
+    if (drv == null) return false;
+    final isSuspended = drv.approvalStatus == 'Đình chỉ';
+    final nextStatus = isSuspended ? 'Đã duyệt' : 'Đình chỉ';
+    drv.approvalStatus = nextStatus;
+    drv.isOnline = nextStatus == 'Đã duyệt' && drv.walletBalance >= 200000;
+    if (drv.id == activeDriverId) {
+      isDriverOnline = drv.isOnline;
+    }
+    _sqliteDb.updateRows(
+      'drivers',
+      {'approval_status': nextStatus, 'is_online': drv.isOnline ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [driverId],
+    );
+    _pushRealtimeNotification(
+      category: 'Hệ thống',
+      title: nextStatus == 'Đình chỉ'
+          ? 'Tài khoản đối tác Tài xế ${drv.fullName} (${drv.licensePlate}) đã bị tạm đình chỉ hoạt động.'
+          : 'Tài khoản đối tác Tài xế ${drv.fullName} (${drv.licensePlate}) đã được khôi phục hoạt động.',
+      targetGroup: 'Tài xế',
+      recipientKey: drv.id,
+    );
+    _persistMutation('SUSPEND_DRIVER_TOGGLE', {
+      'table': 'drivers',
+      'id': driverId,
+      'status': nextStatus,
+      'record': <String, Object?>{
+        'id': drv.id,
+        'phone': drv.phone,
+        'full_name': drv.fullName,
+        'citizen_id': drv.citizenId,
+        'license_plate': drv.licensePlate,
+        'vehicle_type': drv.vehicleType,
+        'is_online': drv.isOnline,
+        'latitude': drv.location.latitude,
+        'longitude': drv.location.longitude,
+        'rating': drv.rating,
+        'rejected_count': drv.rejectedCount,
+        'bank_name': drv.bankName,
+        'bank_account': drv.bankAccount,
+        'approval_status': nextStatus,
+        'wallet_balance': drv.walletBalance,
+      },
+    });
+    _notifyStoreChanged();
+    return true;
+  }
+
+  bool adminUpdateDriverVehicleInfo({
+    required String driverId,
+    required String vehicleType,
+    required String licensePlate,
+  }) {
+    if (!hasAdminPermission('Tài xế: Chỉnh sửa')) return false;
+    final drv = drivers.where((d) => d.id == driverId).firstOrNull;
+    if (drv == null ||
+        vehicleType.trim().isEmpty ||
+        licensePlate.trim().isEmpty) {
+      return false;
+    }
+    drv.vehicleType = vehicleType.trim();
+    drv.licensePlate = licensePlate.trim();
+    _sqliteDb.updateRows(
+      'drivers',
+      {'vehicle_type': drv.vehicleType, 'license_plate': drv.licensePlate},
+      where: 'id = ?',
+      whereArgs: [driverId],
+    );
+    final drvNameLower = drv.fullName.trim().toLowerCase();
+    for (final ord in orders) {
+      if (ord.status != OrderStatus.delivered &&
+          ord.status != OrderStatus.cancelled &&
+          ord.paymentStatus != 'RETURNED' &&
+          ord.assignedDriverName != null &&
+          ord.assignedDriverName!.trim().toLowerCase() == drvNameLower) {
+        ord.assignedDriverPlate = drv.licensePlate;
+        _sqliteDb.updateRows(
+          'orders',
+          {'assigned_driver_plate': drv.licensePlate},
+          where: 'id = ?',
+          whereArgs: [ord.id],
+        );
+      }
+    }
+    _persistMutation('ADMIN_UPDATE_DRIVER_VEHICLE', {
+      'id': driverId,
+      'vehicleType': drv.vehicleType,
+      'licensePlate': drv.licensePlate,
+    });
+    _notifyStoreChanged();
+    return true;
+  }
+
   void updateMerchantApproval(String id, String status) {
+    if (!hasAdminPermission('Tài xế: Phê duyệt')) return;
     final mer = merchantApplicants.where((m) => m.id == id).firstOrNull;
     if (mer != null) {
       mer.approvalStatus = status;
@@ -770,15 +1782,27 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       if (user != null && user.role != SubsystemRole.admin) {
         if (status == 'Đã duyệt') {
           user.role = SubsystemRole.merchant;
-          merchantStoreName = mer.storeName;
-          merchantBusinessType = mer.businessType;
-          merchantTaxCode = mer.taxCode;
-          merchantRepresentative = mer.representativeName;
-          merchantOpenHours = mer.openHours;
-          merchantBankName = mer.bankName;
-          merchantBankAccount = mer.bankAccount;
+          if (activeAuthenticatedUser == null ||
+              _normalizePhone(activeAuthenticatedUser!.phone) ==
+                  _normalizePhone(mer.ownerPhone)) {
+            merchantStoreName = mer.storeName;
+            merchantBusinessType = mer.businessType;
+            merchantTaxCode = mer.taxCode;
+            merchantRepresentative = mer.representativeName;
+            merchantOpenHours = mer.openHours;
+            merchantBankName = mer.bankName;
+            merchantBankAccount = mer.bankAccount;
+            merchantCodBalance = mer.codBalance;
+          }
         } else if (status == 'Từ chối' && user.role == SubsystemRole.merchant) {
-          user.role = SubsystemRole.customer;
+          final hasApprovedDrv = drivers.any(
+            (d) =>
+                _normalizePhone(d.phone) == _normalizePhone(user.phone) &&
+                d.approvalStatus == 'Đã duyệt',
+          );
+          user.role = hasApprovedDrv
+              ? SubsystemRole.driver
+              : SubsystemRole.customer;
         }
         _sqliteDb.updateRows(
           'users',
@@ -792,6 +1816,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         title:
             'Hồ sơ Cửa hàng B2B ${mer.storeName} (${mer.id}) đã chuyển sang trạng thái: $status.',
         targetGroup: 'Cửa hàng B2B',
+        recipientKey: mer.id,
       );
       _persistMutation('UPDATE_MERCHANT_APPROVAL', {
         'id': id,
@@ -806,16 +1831,24 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String reporterName,
     required String issueType,
     required String description,
+    List<String> evidenceFiles = const [],
   }) {
+    final ord = orders.where((o) => o.trackingCode == orderId).firstOrNull;
+    final resolvedDriverName =
+        ord?.assignedDriverName ??
+        (reporterName.startsWith('Tài xế')
+            ? activeDriverName
+            : 'Chưa gán tài xế');
     final item = ComplaintTicketRecord(
       ticketCode: 'KN-00${complaints.length + 1}',
       orderId: orderId,
       customerName: reporterName,
-      driverName: activeDriverName,
+      driverName: resolvedDriverName,
       issueType: issueType,
       description: description,
       status: 'Mới',
       replies: ['$reporterName: $description'],
+      evidenceFiles: List<String>.from(evidenceFiles),
     );
     complaints.insert(0, item);
     _sqliteDb.upsertRow('incidents_and_complaints', {
@@ -827,11 +1860,20 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'description': item.description,
       'status': item.status,
       'replies_json': jsonEncode(item.replies),
+      'evidence_files_json': jsonEncode(item.evidenceFiles),
       'created_at_ms': DateTime.now().millisecondsSinceEpoch,
     });
+    if (item.evidenceFiles.isNotEmpty) {
+      _sqliteDb.upsertEntityRecord(
+        tableName: 'complaint_meta',
+        recordId: item.ticketCode,
+        payload: {'evidenceFiles': item.evidenceFiles},
+      );
+    }
     if (reporterName.startsWith('Tài xế') &&
         (issueType == 'Hàng bị hỏng' ||
             issueType == 'Khách không nhận hàng' ||
+            issueType == 'Sai địa chỉ giao' ||
             issueType == 'Tai nạn / Xe hỏng')) {
       final ord = orders.where((o) => o.trackingCode == orderId).firstOrNull;
       if (ord != null && ord.status.canTransitionTo(OrderStatus.failed)) {
@@ -839,12 +1881,13 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         ord.cancelReason = '$issueType: $description';
         _sqliteDb.updateRows(
           'orders',
-          {
-            'status': ord.status.name,
-            'cancel_reason': ord.cancelReason,
-          },
+          {'status': ord.status.name, 'cancel_reason': ord.cancelReason},
           where: 'tracking_code = ?',
           whereArgs: [orderId],
+        );
+        _dispatchMerchantOrderWebhookIfConfigured(
+          ord,
+          eventName: 'ORDER_DELIVERY_FAILED',
         );
       }
     }
@@ -853,42 +1896,105 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   void replyComplaint(String ticketCode, String replyText, String nextStatus) {
-    final item =
-        complaints.where((c) => c.ticketCode == ticketCode).firstOrNull;
+    if (!hasAdminPermission('Khiếu nại: Xử lý')) return;
+    final item = complaints
+        .where((c) => c.ticketCode == ticketCode)
+        .firstOrNull;
     if (item != null) {
       final wasResolved = item.status == 'Đã giải quyết';
+      if (wasResolved && nextStatus != 'Đã giải quyết') {
+        return;
+      }
       item.status = nextStatus;
       if (replyText.trim().isNotEmpty) {
         item.replies.add('Admin: ${replyText.trim()}');
       }
-      if (!wasResolved && nextStatus == 'Đã giải quyết') {
+      String targetNotiGroup = 'Khách hàng';
+      String? targetNotiRecipient = item.customerName;
+      if (item.customerName.startsWith('Tài xế')) {
+        targetNotiGroup = 'Tài xế';
+        final drv = drivers
+            .where((d) => item.customerName.contains(d.fullName))
+            .firstOrNull;
+        targetNotiRecipient = drv?.id;
+      }
+
+      final alreadyCompensated = item.replies.any(
+        (r) =>
+            r.startsWith('Hệ thống: Đã cộng ') ||
+            r.startsWith('Hệ thống: Đã cấp mã bồi thường '),
+      );
+      if (!wasResolved &&
+          !alreadyCompensated &&
+          nextStatus == 'Đã giải quyết') {
         final lowerIssue = item.issueType.toLowerCase();
-        final isCompensableIssue = lowerIssue.contains('hỏng') ||
+        final isCompensableIssue =
+            lowerIssue.contains('hỏng') ||
             lowerIssue.contains('mất') ||
             lowerIssue.contains('thiếu') ||
             lowerIssue.contains('cod') ||
             lowerIssue.contains('sai phí') ||
             lowerIssue.contains('sai cước');
         if (isCompensableIssue) {
-          final relatedOrder =
-              orders.where((o) => o.trackingCode == item.orderId).firstOrNull;
+          final relatedOrder = orders
+              .where((o) => o.trackingCode == item.orderId)
+              .firstOrNull;
           final compensation =
               relatedOrder != null && relatedOrder.codAmount > 0
-                  ? (relatedOrder.codAmount * 0.20).clamp(50000.0, 500000.0)
-                  : 100000.0;
-          merchantCodBalance += compensation;
-          final targetMerId =
-              (activeMerchantRecord ?? merchantApplicants.firstOrNull)?.id ??
-                  'MER-01';
-          _sqliteDb.updateRows(
-            'merchants',
-            {'cod_balance': merchantCodBalance},
-            where: 'id = ?',
-            whereArgs: [targetMerId],
-          );
-          item.replies.add(
-            'Hệ thống: Đã cộng ${compensation.toStringAsFixed(0)}đ tiền bồi thường vào ví đối soát.',
-          );
+              ? (relatedOrder.codAmount * 0.20).clamp(50000.0, 500000.0)
+              : 100000.0;
+          final ownerHint = (relatedOrder?.customerName ?? item.customerName)
+              .trim()
+              .toLowerCase();
+          final matchedMer = merchantApplicants
+              .where(
+                (m) =>
+                    m.storeName.trim().toLowerCase() == ownerHint ||
+                    m.representativeName.trim().toLowerCase() == ownerHint,
+              )
+              .firstOrNull;
+          final isMerchantComplaint =
+              matchedMer != null || item.issueType.startsWith('Shop KN');
+          if (isMerchantComplaint) {
+            final targetMer = matchedMer ?? activeMerchantRecord;
+            targetNotiGroup = 'Cửa hàng B2B';
+            targetNotiRecipient = targetMer?.id;
+            if (targetMer != null) {
+              targetMer.codBalance += compensation;
+              if (targetMer.id == activeMerchantRecord?.id ||
+                  targetMer.storeName.trim().toLowerCase() ==
+                      merchantStoreName.trim().toLowerCase()) {
+                merchantCodBalance = targetMer.codBalance;
+              }
+              _sqliteDb.updateRows(
+                'merchants',
+                {'cod_balance': targetMer.codBalance},
+                where: 'id = ?',
+                whereArgs: [targetMer.id],
+              );
+            }
+            item.replies.add(
+              'Hệ thống: Đã cộng ${compensation.toStringAsFixed(0)}đ tiền bồi thường vào ví đối soát.',
+            );
+          } else {
+            final cleanTicketSuffix = item.ticketCode.toUpperCase().replaceAll(
+              RegExp(r'[^A-Z0-9]'),
+              '',
+            );
+            final compVoucherCode = 'COMP$cleanTicketSuffix';
+            _upsertVoucherInternal(
+              code: compVoucherCode,
+              title: 'Voucher bồi thường sự cố đơn ${item.orderId}',
+              discountValue: 50000,
+              isPercentage: false,
+              minOrderValue: 0,
+              usageLimit: 1,
+              expiryDate: '31/12/2027',
+            );
+            item.replies.add(
+              'Hệ thống: Đã cấp mã bồi thường $compVoucherCode (50.000đ) cho khách hàng ${item.customerName}.',
+            );
+          }
         } else {
           item.replies.add(
             'Hệ thống: Đã xác nhận xử lý và đóng hồ sơ sự cố/khiếu nại.',
@@ -897,10 +2003,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       }
       _sqliteDb.updateRows(
         'incidents_and_complaints',
-        {
-          'status': item.status,
-          'replies_json': jsonEncode(item.replies),
-        },
+        {'status': item.status, 'replies_json': jsonEncode(item.replies)},
         where: 'ticket_code = ?',
         whereArgs: [ticketCode],
       );
@@ -909,7 +2012,8 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         category: 'Hệ thống',
         title:
             'Khiếu nại ${item.ticketCode} (Đơn ${item.orderId}) đã chuyển sang trạng thái: ${item.status}.',
-        targetGroup: 'Tất cả người dùng',
+        targetGroup: targetNotiGroup,
+        recipientKey: targetNotiRecipient,
       );
       _notifyStoreChanged();
     }
@@ -919,6 +2023,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String title,
     required String targetGroup,
   }) {
+    if (!hasAdminPermission('Hệ thống: Cài đặt')) return;
     if (title.trim().isEmpty) return;
     final noti = NotificationRecord(
       id: 'NOTI-${DateTime.now().millisecondsSinceEpoch}-${notifications.length + 1}',
@@ -932,6 +2037,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'id': noti.id,
       'record_type': 'NOTIFICATION',
       'order_id': null,
+      'recipient_key': null,
       'sender_name': 'Hệ thống',
       'is_customer': 0,
       'category': noti.category,
@@ -947,6 +2053,10 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   void toggleRbacPermission(String roleName, String permKey, bool value) {
+    if (!hasAdminPermission('Hệ thống: Bảo mật')) return;
+    if (roleName == 'Super Admin' && permKey == 'Hệ thống: Bảo mật' && !value) {
+      return;
+    }
     final role = rbacRoles.where((r) => r.roleName == roleName).firstOrNull;
     if (role != null) {
       role.permissions[permKey] = value;
@@ -959,12 +2069,16 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         where: 'role_name = ?',
         whereArgs: [roleName],
       );
-      _persistMutation('TOGGLE_RBAC', {'roleName': roleName, 'permKey': permKey});
+      _persistMutation('TOGGLE_RBAC', {
+        'roleName': roleName,
+        'permKey': permKey,
+      });
       _notifyStoreChanged();
     }
   }
 
   void toggleGeofenceZone(String id, bool active) {
+    if (!hasAdminPermission('Hệ thống: Cài đặt')) return;
     final z = geofenceZones.where((g) => g.id == id).firstOrNull;
     if (z != null) {
       z.isActive = active;
@@ -988,6 +2102,25 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     } else {
       isCustomerTwoFactorEnabled = linked;
     }
+    final normPhone = _normalizePhone(
+      activeAuthenticatedUser?.phone ?? customerPhone,
+    );
+    if (normPhone.isNotEmpty) {
+      final prefs = Map<String, dynamic>.from(
+        userPreferencesByPhone[normPhone] ?? const <String, dynamic>{},
+      );
+      prefs['gender'] = prefs['gender'] ?? customerGender;
+      prefs['avatarBadgeIndex'] =
+          prefs['avatarBadgeIndex'] ?? customerAvatarBadgeIndex;
+      prefs['googleLinked'] = isCustomerGoogleLinked;
+      prefs['twoFactorEnabled'] = isCustomerTwoFactorEnabled;
+      userPreferencesByPhone[normPhone] = prefs;
+      _sqliteDb.upsertEntityRecord(
+        tableName: 'user_preferences',
+        recordId: normPhone,
+        payload: prefs,
+      );
+    }
     _persistMutation('TOGGLE_SOCIAL_LINK', {
       'provider': provider,
       'linked': linked,
@@ -995,20 +2128,37 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     _notifyStoreChanged();
   }
 
-  void markAllNotificationsAsRead() {
-    for (final n in notifications) {
-      n.isRead = true;
+  void markAllNotificationsAsRead({String? targetGroupScope}) {
+    final List<NotificationRecord> scoped;
+    if (targetGroupScope == 'Khách hàng') {
+      scoped = customerNotifications;
+    } else if (targetGroupScope == 'Tài xế') {
+      scoped = driverNotifications;
+    } else if (targetGroupScope == 'Cửa hàng B2B') {
+      scoped = merchantNotifications;
+    } else {
+      scoped = notifications;
     }
-    _sqliteDb.updateRows(
-      'chat_messages_and_notifications',
-      {'is_read': 1},
-      where: 'record_type = ?',
-      whereArgs: ['NOTIFICATION'],
-    );
-    _persistMutation('MARK_ALL_NOTIFICATIONS_READ', {
-      'count': notifications.length,
-    });
-    _notifyStoreChanged();
+    int updatedCount = 0;
+    for (final n in scoped) {
+      if (!n.isRead) {
+        n.isRead = true;
+        updatedCount++;
+        _sqliteDb.updateRows(
+          'chat_messages_and_notifications',
+          {'is_read': 1},
+          where: 'id = ?',
+          whereArgs: [n.id],
+        );
+      }
+    }
+    if (updatedCount > 0) {
+      _persistMutation('MARK_ALL_NOTIFICATIONS_READ', {
+        'scope': targetGroupScope ?? 'ALL',
+        'count': updatedCount,
+      });
+      _notifyStoreChanged();
+    }
   }
 
   void markNotificationAsRead(String id) {
@@ -1028,21 +2178,83 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   PickupWarehouseRecord addMerchantWarehouse({
     required String name,
     required String address,
+    String? contactName,
+    String? contactPhone,
+    String? openHours,
+    bool? isPrimary,
+    GeoPoint? customLocation,
   }) {
-    final pt = SmartDispatchEngine.resolveAddressToCoordinate(
-      address,
-      fallback: const GeoPoint(latitude: 10.7765, longitude: 106.6920),
+    final targetMer =
+        activeMerchantRecord ??
+        (activeAuthenticatedUser == null
+            ? merchantApplicants.firstOrNull
+            : null);
+    final targetMerId = targetMer?.id ?? 'MER-01';
+    final pt =
+        customLocation ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          address,
+          fallback: const GeoPoint(latitude: 10.7765, longitude: 106.6920),
+        );
+    final hasExistingForMer = merchantWarehouses.any(
+      (w) => w.merchantId == targetMerId,
     );
+    final effectivePrimary = !hasExistingForMer ? true : (isPrimary ?? false);
+    if (effectivePrimary) {
+      for (var i = 0; i < merchantWarehouses.length; i++) {
+        final prev = merchantWarehouses[i];
+        if (prev.merchantId == targetMerId && prev.isPrimary) {
+          merchantWarehouses[i] = PickupWarehouseRecord(
+            id: prev.id,
+            merchantId: prev.merchantId,
+            name: prev.name,
+            address: prev.address,
+            location: prev.location,
+            contactName: prev.contactName,
+            contactPhone: prev.contactPhone,
+            openHours: prev.openHours,
+            isPrimary: false,
+            webhookUrl: prev.webhookUrl,
+          );
+          _sqliteDb.updateRows(
+            'merchant_pickup_points',
+            {'is_primary': 0},
+            where: 'id = ?',
+            whereArgs: [prev.id],
+          );
+          _sqliteDb.upsertEntityRecord(
+            tableName: 'warehouse_meta',
+            recordId: prev.id,
+            payload: {
+              'isPrimary': false,
+              'webhookUrl': prev.webhookUrl,
+              'contactName': prev.contactName,
+              'contactPhone': prev.contactPhone,
+              'openHours': prev.openHours,
+            },
+          );
+        }
+      }
+    }
     final wh = PickupWarehouseRecord(
-      id: 'WH-0${merchantWarehouses.length + 1}',
+      id: allocateUniqueId('WH-', merchantWarehouses.map((w) => w.id)),
+      merchantId: targetMerId,
       name: name.trim(),
       address: address.trim(),
       location: pt,
+      contactName: (contactName != null && contactName.trim().isNotEmpty)
+          ? contactName.trim()
+          : (targetMer?.representativeName ?? merchantRepresentative),
+      contactPhone: (contactPhone != null && contactPhone.trim().isNotEmpty)
+          ? contactPhone.trim()
+          : (targetMer?.ownerPhone ?? '0909112233'),
+      openHours: (openHours != null && openHours.trim().isNotEmpty)
+          ? openHours.trim()
+          : (targetMer?.openHours ?? '08:00 - 21:00'),
+      isPrimary: effectivePrimary,
+      webhookUrl: targetMer?.webhookUrl ?? '',
     );
     merchantWarehouses.add(wh);
-    final targetMerId =
-        (activeMerchantRecord ?? merchantApplicants.firstOrNull)?.id ??
-            'MER-01';
     _sqliteDb.upsertRow('merchant_pickup_points', {
       'id': wh.id,
       'merchant_id': targetMerId,
@@ -1050,10 +2262,26 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'full_address': wh.address,
       'latitude': wh.location.latitude,
       'longitude': wh.location.longitude,
+      'contact_phone': wh.contactPhone,
+      'open_hours': wh.openHours,
+      'is_primary': wh.isPrimary ? 1 : 0,
+      'webhook_url': wh.webhookUrl,
       'created_at': DateTime.now().toIso8601String(),
     });
+    _sqliteDb.upsertEntityRecord(
+      tableName: 'warehouse_meta',
+      recordId: wh.id,
+      payload: {
+        'isPrimary': wh.isPrimary,
+        'webhookUrl': wh.webhookUrl,
+        'contactName': wh.contactName,
+        'contactPhone': wh.contactPhone,
+        'openHours': wh.openHours,
+      },
+    );
     _persistMutation('ADD_MERCHANT_WAREHOUSE', {
       'id': wh.id,
+      'merchantId': targetMerId,
       'name': wh.name,
       'address': wh.address,
     });
@@ -1062,14 +2290,63 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   bool deleteMerchantWarehouse(String warehouseId) {
-    if (merchantWarehouses.length <= 1) return false;
-    final existed = merchantWarehouses.any((w) => w.id == warehouseId);
-    if (!existed) return false;
+    final personalList = merchantPersonalWarehouses;
+    if (personalList.length <= 1) return false;
+    final targetMerId = activeMerchantRecord?.id;
+    final targetWh = merchantWarehouses
+        .where((w) => w.id == warehouseId)
+        .firstOrNull;
+    if (targetWh == null) return false;
+    if (targetMerId != null && targetWh.merchantId != targetMerId) {
+      return false;
+    }
     merchantWarehouses.removeWhere((w) => w.id == warehouseId);
+    if (targetWh.isPrimary) {
+      final nextWh = merchantWarehouses
+          .where((w) => targetMerId == null || w.merchantId == targetMerId)
+          .firstOrNull;
+      if (nextWh != null) {
+        final idx = merchantWarehouses.indexOf(nextWh);
+        if (idx >= 0) {
+          merchantWarehouses[idx] = PickupWarehouseRecord(
+            id: nextWh.id,
+            merchantId: nextWh.merchantId,
+            name: nextWh.name,
+            address: nextWh.address,
+            location: nextWh.location,
+            contactPhone: nextWh.contactPhone,
+            openHours: nextWh.openHours,
+            isPrimary: true,
+            webhookUrl: nextWh.webhookUrl,
+          );
+          _sqliteDb.updateRows(
+            'merchant_pickup_points',
+            {'is_primary': 1},
+            where: 'id = ?',
+            whereArgs: [nextWh.id],
+          );
+          _sqliteDb.upsertEntityRecord(
+            tableName: 'warehouse_meta',
+            recordId: nextWh.id,
+            payload: {
+              'isPrimary': true,
+              'webhookUrl': nextWh.webhookUrl,
+              'contactPhone': nextWh.contactPhone,
+              'openHours': nextWh.openHours,
+            },
+          );
+        }
+      }
+    }
     _sqliteDb.deleteRows(
       'merchant_pickup_points',
       where: 'id = ?',
       whereArgs: [warehouseId],
+    );
+    _sqliteDb.deleteRows(
+      'local_relational_entities',
+      where: 'table_name = ? AND record_id = ?',
+      whereArgs: ['warehouse_meta', warehouseId],
     );
     _persistMutation('DELETE_MERCHANT_WAREHOUSE', {'id': warehouseId});
     _notifyStoreChanged();
@@ -1110,33 +2387,42 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String dropoffAddress,
     required double codAmount,
   }) {
+    if (activeAuthenticatedUser?.role == SubsystemRole.admin &&
+        !hasAdminPermission('Đơn: Sửa')) {
+      return false;
+    }
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return false;
     if (ord.status == OrderStatus.delivered ||
-        ord.status == OrderStatus.cancelled) {
+        ord.status == OrderStatus.cancelled ||
+        ord.status == OrderStatus.returning ||
+        ord.paymentStatus == 'RETURNED') {
+      return false;
+    }
+    final candidateDropoffPt = SmartDispatchEngine.resolveAddressToCoordinate(
+      dropoffAddress.trim(),
+      fallback: ord.dropoffLocation,
+    );
+    if (findActiveRestrictedZoneForRoute(
+          ord.pickupLocation,
+          candidateDropoffPt,
+        ) !=
+        null) {
       return false;
     }
     ord.recipientName = recipientName.trim();
     ord.recipientPhone = recipientPhone.trim();
     ord.dropoffAddress = dropoffAddress.trim();
-    ord.dropoffLocation = SmartDispatchEngine.resolveAddressToCoordinate(
-      dropoffAddress.trim(),
-      fallback: ord.dropoffLocation,
+    ord.dropoffLocation = candidateDropoffPt;
+    final newAirMeters = GeoMath.distanceMeters(
+      ord.pickupLocation,
+      ord.dropoffLocation,
     );
-    final newAirMeters =
-        GeoMath.distanceMeters(ord.pickupLocation, ord.dropoffLocation);
     ord.distanceMeters = (newAirMeters * 1.28).round().clamp(1200, 45000);
     ord.durationSeconds = ((ord.distanceMeters / 1000.0) * 180).round();
     ord.codAmount = codAmount;
 
-    double geofenceFee = 0;
-    for (final z in geofenceZones) {
-      if (z.isActive &&
-          z.surchargeRate > 0 &&
-          GeoMath.isPointInPolygon(ord.dropoffLocation, z.boundary)) {
-        geofenceFee += z.surchargeRate;
-      }
-    }
+    double geofenceFee = computeGeofenceSurchargeForPoint(ord.dropoffLocation);
     if (isWeatherSurchargeActive) {
       geofenceFee += badWeatherSurchargeConfig;
     }
@@ -1160,6 +2446,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       voucherDiscount: ord.discountAmount,
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
+      configuredStandardPeakSurcharge: peakHourSurchargeConfig,
     );
     ord.deliveryFee = newEst.baseFare + newEst.distanceFare;
     ord.surchargeFee = newEst.surchargeFee;
@@ -1183,6 +2470,24 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
     );
+    if (ord.assignedDriverName != null &&
+        ord.assignedDriverName!.trim().isNotEmpty) {
+      final assignedDrv = drivers
+          .where(
+            (d) =>
+                d.fullName.trim().toLowerCase() ==
+                ord.assignedDriverName!.trim().toLowerCase(),
+          )
+          .firstOrNull;
+      _pushRealtimeNotification(
+        category: 'Đơn hàng',
+        title:
+            'Đơn ${ord.trackingCode} vừa cập nhật người nhận/địa chỉ giao: ${ord.recipientName} • ${ord.dropoffAddress}.',
+        targetGroup: 'Tài xế',
+        recipientKey: assignedDrv?.id ?? ord.assignedDriverName,
+      );
+    }
+    _dispatchMerchantOrderWebhookIfConfigured(ord, eventName: 'ORDER_UPDATED');
     _persistMutation('UPDATE_ORDER_DETAILS', {
       'trackingCode': trackingCode,
       'recipientName': ord.recipientName,
@@ -1192,28 +2497,60 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     return true;
   }
 
-  VoucherRecord createNewVoucher({
+  VoucherRecord? createNewVoucher({
     required String code,
     required String title,
     required double discountValue,
     required bool isPercentage,
     required double minOrderValue,
-    String expiryDate = '31/12/2026',
+    double? maxDiscount,
+    int usageLimit = 500,
+    String expiryDate = '31/12/2027',
+  }) {
+    if (!hasAdminPermission('Hệ thống: Cài đặt')) return null;
+    final record = _upsertVoucherInternal(
+      code: code,
+      title: title,
+      discountValue: discountValue,
+      isPercentage: isPercentage,
+      minOrderValue: minOrderValue,
+      maxDiscount: maxDiscount,
+      usageLimit: usageLimit,
+      expiryDate: expiryDate,
+    );
+    _notifyStoreChanged();
+    return record;
+  }
+
+  VoucherRecord _upsertVoucherInternal({
+    required String code,
+    required String title,
+    required double discountValue,
+    required bool isPercentage,
+    required double minOrderValue,
+    double? maxDiscount,
+    int usageLimit = 500,
+    String expiryDate = '31/12/2027',
   }) {
     final cleanCode = code.trim().toUpperCase();
     final label = isPercentage
         ? 'Giảm ${discountValue.toStringAsFixed(0)}%'
         : 'Giảm ${(discountValue / 1000).toStringAsFixed(0)}k';
+    final resolvedMax = maxDiscount != null && maxDiscount > 0
+        ? maxDiscount
+        : (isPercentage ? 30000.0 : discountValue);
     final record = VoucherRecord(
       code: cleanCode,
       title: title.trim(),
       discountLabel: label,
       discountValue: discountValue,
       isPercentage: isPercentage,
-      maxDiscount: isPercentage ? 30000 : discountValue,
+      maxDiscount: resolvedMax,
       minOrderValue: minOrderValue,
       expiryDate: expiryDate,
       status: 'Đang hoạt động',
+      usageLimit: usageLimit,
+      usedCount: 0,
     );
     vouchers.removeWhere((v) => v.code == cleanCode);
     vouchers.insert(0, record);
@@ -1227,7 +2564,14 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       'min_order_value': record.minOrderValue,
       'expiry_date': record.expiryDate,
       'status': record.status,
+      'usage_limit': record.usageLimit,
+      'used_count': record.usedCount,
     });
+    _sqliteDb.upsertEntityRecord(
+      tableName: 'voucher_meta',
+      recordId: record.code,
+      payload: {'usageLimit': record.usageLimit, 'usedCount': record.usedCount},
+    );
     _persistMutation('CREATE_VOUCHER', {'code': record.code});
     _pushRealtimeNotification(
       category: 'Khuyến mãi',
@@ -1235,22 +2579,33 @@ extension AppStateOrderAndAdminOps on AppStateStore {
           'Mã ưu đãi mới ${record.code} (${record.discountLabel}): ${record.title} • HSD: ${record.expiryDate}.',
       targetGroup: 'Tất cả người dùng',
     );
-    _notifyStoreChanged();
     return record;
   }
 
   bool requeueOrReturnOrder(String trackingCode, {required bool isReturn}) {
+    if (activeAuthenticatedUser?.role == SubsystemRole.admin &&
+        !hasAdminPermission('Đơn: Sửa')) {
+      return false;
+    }
     final ord = orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
     if (ord == null) return false;
     if (ord.status == OrderStatus.delivered ||
-        ord.status == OrderStatus.cancelled) {
+        ord.status == OrderStatus.cancelled ||
+        ord.paymentStatus == 'RETURNED') {
       return false;
     }
     if (isReturn) {
-      if (ord.status == OrderStatus.returning) return false;
+      if (ord.status != OrderStatus.failed &&
+          ord.status != OrderStatus.inTransit) {
+        return false;
+      }
       ord.status = OrderStatus.returning;
       ord.cancelReason = 'Hoàn hàng về điểm lấy theo yêu cầu Cửa hàng';
     } else {
+      if (ord.status != OrderStatus.failed &&
+          ord.status != OrderStatus.returning) {
+        return false;
+      }
       ord.status = ord.assignedDriverName != null
           ? OrderStatus.inTransit
           : OrderStatus.searching;
@@ -1258,12 +2613,38 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     }
     _sqliteDb.updateRows(
       'orders',
-      {
-        'status': ord.status.name,
-        'cancel_reason': ord.cancelReason,
-      },
+      {'status': ord.status.name, 'cancel_reason': ord.cancelReason},
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
+    );
+    _recordOrderStatusHistory(
+      ord.id,
+      ord.status,
+      isReturn
+          ? 'Yêu cầu hoàn hàng về kho cửa hàng'
+          : 'Yêu cầu giao lại kiện hàng (${ord.status.displayName})',
+    );
+    if (ord.assignedDriverName != null &&
+        ord.assignedDriverName!.trim().isNotEmpty) {
+      final assignedDrv = drivers
+          .where(
+            (d) =>
+                d.fullName.trim().toLowerCase() ==
+                ord.assignedDriverName!.trim().toLowerCase(),
+          )
+          .firstOrNull;
+      _pushRealtimeNotification(
+        category: 'Đơn hàng',
+        title: isReturn
+            ? 'Đơn ${ord.trackingCode} chuyển sang Hoàn kho. Vui lòng hoàn trả về điểm lấy.'
+            : 'Đơn ${ord.trackingCode} được yêu cầu Giao lại cho khách nhận.',
+        targetGroup: 'Tài xế',
+        recipientKey: assignedDrv?.id ?? ord.assignedDriverName,
+      );
+    }
+    _dispatchMerchantOrderWebhookIfConfigured(
+      ord,
+      eventName: isReturn ? 'ORDER_RETURNING' : 'ORDER_REQUEUED',
     );
     _persistMutation(
       isReturn ? 'RETURN_ORDER_TO_WAREHOUSE' : 'REQUEUE_ORDER_DELIVERY',
@@ -1277,11 +2658,31 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     if (!hasAdminPermission('User: Khóa/Mở')) return false;
     final u = users.where((x) => x.id == userId).firstOrNull;
     if (u == null) return false;
-    if (u.id == activeAuthenticatedUser?.id ||
-        u.role == SubsystemRole.admin) {
+    if (u.id == activeAuthenticatedUser?.id || u.id == 'USR-04') {
+      return false;
+    }
+    if (u.role == SubsystemRole.admin &&
+        !hasAdminPermission('Hệ thống: Bảo mật')) {
       return false;
     }
     u.status = u.status == 'ACTIVE' ? 'LOCKED' : 'ACTIVE';
+    if (u.status == 'LOCKED') {
+      final normUserPhone = _normalizePhone(u.phone);
+      for (final d in drivers) {
+        if (_normalizePhone(d.phone) == normUserPhone && d.isOnline) {
+          d.isOnline = false;
+          _sqliteDb.updateRows(
+            'drivers',
+            {'is_online': 0},
+            where: 'id = ?',
+            whereArgs: [d.id],
+          );
+          if (d.id == activeDriverId) {
+            isDriverOnline = false;
+          }
+        }
+      }
+    }
     _sqliteDb.updateRows(
       'users',
       {'status': u.status},
@@ -1294,6 +2695,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
   }
 
   void toggleVoucherStatus(String code) {
+    if (!hasAdminPermission('Hệ thống: Cài đặt')) return;
     final v = vouchers.where((x) => x.code == code).firstOrNull;
     if (v == null) return;
     v.status = v.status == 'Đang hoạt động' ? 'Tạm dừng' : 'Đang hoạt động';
@@ -1314,11 +2716,34 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     required String fileName,
     required String content,
   }) {
+    if (kIsWeb) {
+      triggerBrowserFileDownload(
+        fileName: fileName,
+        content: content,
+        mimeType: 'text/csv;charset=utf-8',
+      );
+      final virtualPath = 'localStorage://exports/$fileName';
+      _sqliteDb.upsertEntityRecord(
+        tableName: 'exported_reports',
+        recordId: fileName,
+        payload: {
+          'fileName': fileName,
+          'content': content,
+          'exportedAt': DateTime.now().toIso8601String(),
+        },
+      );
+      _persistMutation('EXPORT_REPORT_FILE', {
+        'fileName': fileName,
+        'path': virtualPath,
+      });
+      return virtualPath;
+    }
     final sep = Platform.pathSeparator;
     String targetPath;
     try {
-      final exportDir =
-          Directory('${Directory.current.path}${sep}database${sep}exports');
+      final exportDir = Directory(
+        '${Directory.current.path}${sep}database${sep}exports',
+      );
       if (!exportDir.existsSync()) {
         exportDir.createSync(recursive: true);
       }

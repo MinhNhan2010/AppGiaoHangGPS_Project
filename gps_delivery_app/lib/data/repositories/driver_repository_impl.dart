@@ -9,16 +9,28 @@ import '../datasources/remote/supabase_postgis_datasource.dart';
 class DriverRepositoryImpl implements IDriverRepository {
   final SupabasePostgisDatasource remoteDatasource;
   final SqliteOfflineQueueDatasource localOfflineDatasource;
-  final KalmanGpsFilter _kalmanFilter;
-
-  GeoPoint? _lastValidPoint;
-  int? _lastValidTimestampMs;
+  final KalmanGpsFilter? _injectedKalmanFilter;
+  final Map<String, KalmanGpsFilter> _kalmanByDriver = {};
+  final Map<String, GeoPoint> _lastValidPointByDriver = {};
+  final Map<String, int> _lastValidTimestampMsByDriver = {};
 
   DriverRepositoryImpl({
     required this.remoteDatasource,
     required this.localOfflineDatasource,
     KalmanGpsFilter? kalmanFilter,
-  }) : _kalmanFilter = kalmanFilter ?? KalmanGpsFilter();
+  }) : _injectedKalmanFilter = kalmanFilter;
+
+  KalmanGpsFilter _filterForDriver(String driverId) {
+    return _kalmanByDriver.putIfAbsent(driverId, () {
+      if (_injectedKalmanFilter != null && _kalmanByDriver.isEmpty) {
+        return _injectedKalmanFilter;
+      }
+      return KalmanGpsFilter(
+        processNoiseMetersPerSec:
+            _injectedKalmanFilter?.processNoiseMetersPerSec ?? 3.0,
+      );
+    });
+  }
 
   @override
   Future<void> toggleOnlineStatus({
@@ -26,8 +38,16 @@ class DriverRepositoryImpl implements IDriverRepository {
     required bool isOnline,
   }) async {
     if (!isOnline) {
-      _kalmanFilter.reset();
+      _kalmanByDriver[driverId]?.reset();
+      _lastValidPointByDriver.remove(driverId);
+      _lastValidTimestampMsByDriver.remove(driverId);
     }
+    await localOfflineDatasource.updateRows(
+      'drivers',
+      {'is_online': isOnline ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [driverId],
+    );
     try {
       await remoteDatasource.updateDriverOnlineState(
         driverId: driverId,
@@ -37,6 +57,7 @@ class DriverRepositoryImpl implements IDriverRepository {
       await localOfflineDatasource.enqueueAction(
         actionType: 'DRIVER_TOGGLE_ONLINE',
         payload: {
+          'table': 'drivers',
           'driver_id': driverId,
           'is_online': isOnline,
         },
@@ -59,42 +80,82 @@ class DriverRepositoryImpl implements IDriverRepository {
       currentPoint: rawPoint,
       currentTimestampMs: timestampMs,
       isMockFlaggedByOs: isMockLocation,
-      previousPoint: _lastValidPoint,
-      previousTimestampMs: _lastValidTimestampMs,
+      previousPoint: _lastValidPointByDriver[driverId],
+      previousTimestampMs: _lastValidTimestampMsByDriver[driverId],
       reportedSpeedKmh: speedKmh,
+      accuracyMeters: accuracyMeters,
     );
 
-    final smoothedPoint = _kalmanFilter.filter(
+    final smoothedPoint = _filterForDriver(driverId).filter(
       rawPoint: rawPoint,
       accuracyMeters: accuracyMeters,
       timestampMs: timestampMs,
     );
 
-    _lastValidPoint = smoothedPoint;
-    _lastValidTimestampMs = timestampMs;
+    _lastValidPointByDriver[driverId] = smoothedPoint;
+    _lastValidTimestampMsByDriver[driverId] = timestampMs;
+
+    await localOfflineDatasource.updateRows(
+      'drivers',
+      {
+        'latitude': smoothedPoint.latitude,
+        'longitude': smoothedPoint.longitude,
+      },
+      where: 'id = ?',
+      whereArgs: [driverId],
+    );
+
+    final cleanOrderId = activeOrderId?.trim();
+    final hasValidOrder =
+        cleanOrderId != null && cleanOrderId.isNotEmpty && cleanOrderId != 'NO_ORDER';
+
+    final recordedAtIso =
+        DateTime.fromMillisecondsSinceEpoch(timestampMs).toIso8601String();
+    final trackingRow = <String, dynamic>{
+      'order_id': hasValidOrder ? cleanOrderId : 'NO_ORDER',
+      'driver_id': driverId,
+      'latitude': smoothedPoint.latitude,
+      'longitude': smoothedPoint.longitude,
+      'speed': speedKmh,
+      'bearing': bearing,
+      'is_mock_location': isMockLocation ? 1 : 0,
+      'recorded_at': recordedAtIso,
+    };
+    if (hasValidOrder) {
+      await localOfflineDatasource.upsertRow('order_tracking_logs', trackingRow);
+    }
 
     try {
       await remoteDatasource.insertDriverTrackingLog(
         driverId: driverId,
-        orderId: activeOrderId,
+        orderId: hasValidOrder ? cleanOrderId : null,
         smoothedLocation: smoothedPoint,
         speedKmh: speedKmh,
         bearing: bearing,
         isMockLocation: isMockLocation,
       );
     } catch (_) {
-      await localOfflineDatasource.enqueueAction(
-        actionType: 'GPS_PING',
-        payload: {
-          'driver_id': driverId,
-          'order_id': activeOrderId,
-          'lat': smoothedPoint.latitude,
-          'lng': smoothedPoint.longitude,
-          'speed_kmh': speedKmh,
-          'bearing': bearing,
-          'recorded_at_ms': timestampMs,
-        },
-      );
+      if (hasValidOrder) {
+        await localOfflineDatasource.enqueueAction(
+          actionType: 'GPS_PING',
+          payload: {
+            'table': 'order_tracking_logs',
+            'record': trackingRow,
+          },
+        );
+      } else {
+        await localOfflineDatasource.enqueueAction(
+          actionType: 'DRIVER_LOCATION_PING',
+          payload: {
+            'driver_id': driverId,
+            'latitude': smoothedPoint.latitude,
+            'longitude': smoothedPoint.longitude,
+            'speed': speedKmh,
+            'bearing': bearing,
+            'is_mock_location': isMockLocation,
+          },
+        );
+      }
     }
   }
 
@@ -102,7 +163,17 @@ class DriverRepositoryImpl implements IDriverRepository {
   Future<List<DriverEntity>> findNearbyOnlineDrivers(
     GeoPoint pickupPoint,
   ) async {
-    final drivers = await remoteDatasource.fetchOnlineApprovedDrivers();
+    List<DriverEntity> drivers;
+    try {
+      drivers = await remoteDatasource.fetchOnlineApprovedDrivers();
+    } catch (_) {
+      final rows = await localOfflineDatasource.queryRows(
+        'drivers',
+        where: 'is_online = ?',
+        whereArgs: [1],
+      );
+      drivers = rows.map(DriverEntity.fromMap).toList();
+    }
     final scored = <(DriverEntity, double)>[];
     for (final d in drivers) {
       final score = d.computeDispatchScore(pickupPoint);

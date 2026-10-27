@@ -1,12 +1,12 @@
 {
-    "name": "gps_delivery_app",
-    "short_name": "gps_delivery_app",
+    "name": "Giao Hàng Siêu Tốc GHST - Định Vị GPS Đa Nền Tảng",
+    "short_name": "GHST Express",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "background_color": "#080B0F",
+    "theme_color": "#5B33E6",
+    "description": "Hệ thống ứng dụng giao hàng định vị GPS thời gian thực đa nền tảng cho Khách hàng, Tài xế, Cửa hàng B2B và Quản trị viên.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
         {

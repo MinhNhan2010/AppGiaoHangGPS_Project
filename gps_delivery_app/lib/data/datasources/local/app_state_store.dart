@@ -1,13 +1,18 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../../core/config/env_config.dart';
 import '../../../core/gps/gps_integrity_validator.dart';
 import '../../../core/gps/kalman_gps_filter.dart';
 import '../../../core/gps/smart_dispatch_engine.dart';
 import '../../../core/utils/geo_math.dart';
+import '../../../core/utils/platform_file_and_browser_bridge.dart';
 import '../../../core/utils/security_and_barcode_utils.dart';
 import '../../../domain/entities/geo_point.dart';
 import '../../../domain/entities/pricing_estimate.dart';
@@ -23,6 +28,8 @@ export '../../models/app_state_records.dart';
 part 'app_state_seed_and_hydration.dart';
 part 'app_state_auth_and_gps_ops.dart';
 part 'app_state_order_and_admin_ops.dart';
+part 'app_state_demo_cleanup.dart';
+part 'app_state_commercial_ops.dart';
 
 class AppStateStore extends ChangeNotifier {
   static final AppStateStore instance = AppStateStore._internal();
@@ -32,60 +39,91 @@ class AppStateStore extends ChangeNotifier {
   final KalmanGpsFilter _kalmanFilter = KalmanGpsFilter();
   bool isOfflineMode = false;
   int offlineQueueCount = 0;
-  bool isDriverOnline = true;
-  bool isMap3dEnabled = true;
+  bool isDriverOnline = false;
+  bool isMap3dEnabled = false;
   double currentCameraPitch = 55.0;
   int batteryPercent = 85;
-  double currentSpeedKmh = 35.0;
+  double currentSpeedKmh = 0.0;
   bool isDatabaseReady = false;
+  Future<void>? _initializingDbFuture;
 
-  GeoPoint activeDriverLocation =
-      const GeoPoint(latitude: 21.0068, longitude: 105.8421);
-  double activeDriverBearing = 215.0;
-  int routeProgressStep = 4;
+  GeoPoint activeDriverLocation = const GeoPoint(
+    latitude: 10.7776,
+    longitude: 106.6916,
+  );
+  double activeDriverBearing = 0.0;
+  int routeProgressStep = 0;
   List<GeoPoint> activeRoutePolyline = const [];
   String currentAdminRoleName = 'Super Admin';
-  String lastSyncStatusMessage =
-      'Đã kết nối CSDL SQLite 16 bảng & đồng bộ PostgreSQL/PostGIS';
+  String lastSyncStatusMessage = 'Dữ liệu trên thiết bị';
+
+  final Map<String, GeoPoint> verifiedDriverLocations = {};
+
+  GeoPoint? verifiedLocationForOrder(ActiveOrderRecord? order) {
+    if (order == null || order.assignedDriverName == null) return null;
+    final matches = drivers.where(
+      (driver) =>
+          driver.fullName == order.assignedDriverName &&
+          driver.licensePlate == order.assignedDriverPlate,
+    );
+    return matches.length == 1
+        ? verifiedDriverLocations[matches.single.id]
+        : null;
+  }
+
+  GeoPoint? liveDeviceLocation;
+  double? liveDeviceAccuracyMeters;
+  String liveDeviceAddress = '';
+  bool isLiveGpsStreaming = false;
+  bool isAcquiringLiveGps = false;
+  String liveGpsStatusMessage = 'Đang chờ tín hiệu định vị thiết bị...';
+  DateTime? lastLiveGpsFixAt;
+  GeoPoint? _lastReverseGeocodedDevicePoint;
+  bool _hasHardwareKalmanLock = false;
+  StreamSubscription<Position>? _liveGpsStreamSub;
+  Future<GeoPoint?>? _acquiringLiveGpsFuture;
+
+  bool get hasRealDeviceGpsFix => liveDeviceLocation != null;
 
   final Map<String, String> registeredUserPasswordHashes = {};
   final Map<String, String> activeOtpCodesByPhone = {};
   final Map<String, int> otpExpiryEpochMsByPhone = {};
   final Set<String> processedPaymentSignatures = {};
 
-  String customerFullName = 'Nguyễn Thu Hà';
-  String customerPhone = '0912345678';
-  String customerEmail = 'thu.ha@gmail.com';
-  String customerDefaultAddress = '123 Đường Lê Lợi, Quận 1, TP. HCM';
-  String customerGender = 'Nữ';
+  String customerFullName = '';
+  String customerPhone = '';
+  String customerEmail = '';
+  String customerDefaultAddress = '';
+  String customerGender = 'Chưa cập nhật';
   int customerAvatarBadgeIndex = 0;
-  bool isCustomerGoogleLinked = true;
-  bool isCustomerTwoFactorEnabled = true;
+  bool isCustomerGoogleLinked = false;
+  bool isCustomerTwoFactorEnabled = false;
   String? selectedCustomerOrderCode;
 
-  String activeDriverId = 'DV10928';
-  String activeDriverName = 'Nguyễn Văn Nam';
-  String activeDriverPhone = '0987654321';
+  String activeDriverId = '';
+  String activeDriverName = '';
+  String activeDriverPhone = '';
   String? selectedDriverOrderCode;
 
   double baseFareConfig = 25000;
   double pricePerKmConfig = 5000;
   double peakHourSurchargeConfig = 10000;
   double badWeatherSurchargeConfig = 15000;
-  bool isPeakSurchargeActive = true;
+  bool isPeakSurchargeActive = false;
   bool isWeatherSurchargeActive = false;
 
-  String merchantStoreName = 'Cửa hàng Gốm Sứ Việt';
-  String merchantBusinessType = 'Gốm sứ & Nội thất';
-  String merchantTaxCode = '0316892451';
-  String merchantRepresentative = 'Nguyễn Văn A';
-  String merchantOpenHours = '8:00 AM - 9:00 PM (Thứ 2 - Chủ Nhật)';
-  String merchantBankName = 'Ngân hàng VPBank (VPB)';
-  String merchantBankAccount = '123456****789';
-  double merchantCodBalance = 5250000;
-  double driverWalletBalance = 6190000;
+  String merchantStoreName = '';
+  String merchantBusinessType = '';
+  String merchantTaxCode = '';
+  String merchantRepresentative = '';
+  String merchantOpenHours = '';
+  String merchantBankName = '';
+  String merchantBankAccount = '';
+  double merchantCodBalance = 0;
+  double driverWalletBalance = 0;
 
   UserAccountRecord? activeAuthenticatedUser;
+  final Map<String, Map<String, dynamic>> userPreferencesByPhone = {};
   final List<UserAccountRecord> users = [];
   final List<SavedAddressRecord> savedAddresses = [];
   final List<PickupWarehouseRecord> merchantWarehouses = [];
@@ -97,30 +135,26 @@ class AppStateStore extends ChangeNotifier {
   final List<MerchantApplicantRecord> merchantApplicants = [];
   final List<ComplaintTicketRecord> complaints = [];
   final List<WithdrawalRequestRecord> withdrawalRequests = [];
+  final List<CodReconciliationRecord> codReconciliations = [];
   final List<GeofenceZoneRecord> geofenceZones = [];
   final List<RbacRoleRecord> rbacRoles = [];
+  final List<Map<String, dynamic>> systemAuditLogs = [];
 
   AppStateStore._internal() {
-    _populateInitialRelationalRecordsInMemory();
-    final defaultPhone = _normalizePhone(customerPhone);
-    registeredUserPasswordHashes[defaultPhone] =
-        SecurityAndBarcodeUtils.hashPasswordWithSalt('12345678', defaultPhone);
-    for (final u in users) {
-      registeredUserPasswordHashes[_normalizePhone(u.phone)] = u.passwordHash;
-    }
-    if (orders.isNotEmpty) {
-      activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
-        orders.first.pickupLocation,
-        orders.first.dropoffLocation,
-        segments: 10,
-      );
-    }
+    _initializeDefaultRoles();
     initializeDatabase();
   }
 
   /// Đường dẫn tệp cơ sở dữ liệu JSON/SQLite lưu trữ bền vững trên đĩa hệ thống
-  String get snapshotFilePath =>
-      '${Directory.systemTemp.path}${Platform.pathSeparator}gps_delivery_state_snapshot.json';
+  String get snapshotFilePath {
+    if (kIsWeb) {
+      return 'localStorage://gps_delivery_state_snapshot.json';
+    }
+    final suffix = Platform.environment.containsKey('FLUTTER_TEST')
+        ? '_$pid'
+        : '';
+    return '${Directory.systemTemp.path}${Platform.pathSeparator}gps_delivery_state_snapshot$suffix.json';
+  }
 
   String get sqliteDatabasePath => _sqliteDb.databaseFilePath;
 
@@ -138,6 +172,9 @@ class AppStateStore extends ChangeNotifier {
       'customerEmail': customerEmail,
       'customerGender': customerGender,
       'customerAvatarBadgeIndex': customerAvatarBadgeIndex,
+      'isCustomerGoogleLinked': isCustomerGoogleLinked,
+      'isCustomerTwoFactorEnabled': isCustomerTwoFactorEnabled,
+      'userPreferencesByPhone': userPreferencesByPhone,
       'baseFareConfig': baseFareConfig,
       'pricePerKmConfig': pricePerKmConfig,
       'peakHourSurchargeConfig': peakHourSurchargeConfig,
@@ -147,32 +184,115 @@ class AppStateStore extends ChangeNotifier {
       'processedPaymentSignatures': processedPaymentSignatures.toList(),
       'orders': orders.map((o) => o.toSqlRow()).toList(),
     };
+    final shouldEnqueueOffline =
+        isOfflineMode &&
+        actionType != 'TOGGLE_OFFLINE' &&
+        actionType != 'STATE_SNAPSHOT';
+    if (shouldEnqueueOffline) {
+      try {
+        await _sqliteDb.enqueueAction(
+          actionType: actionType,
+          payload: actionPayload ?? {'snapshotSaved': true},
+        );
+      } catch (_) {}
+    }
     try {
-      final file = File(snapshotFilePath);
-      await file.writeAsString(jsonEncode(snapshot), flush: true);
-    } catch (_) {}
-    try {
-      await _sqliteDb.enqueueAction(
-        actionType: actionType,
-        payload: actionPayload ?? {'snapshotSaved': true},
-      );
+      if (kIsWeb) {
+        await _sqliteDb.upsertEntityRecord(
+          tableName: 'web_state_snapshot',
+          recordId: 'MAIN',
+          payload: snapshot,
+        );
+      } else {
+        final file = File(snapshotFilePath);
+        await file.writeAsString(jsonEncode(snapshot), flush: true);
+      }
     } catch (_) {}
     return snapshotFilePath;
+  }
+
+  Future<int> drainOfflineSyncQueue() async {
+    int syncedCount = 0;
+    try {
+      final pending = await _sqliteDb.getPendingSyncItems(limit: 500);
+      final remote = SupabasePostgisDatasource();
+      for (final item in pending) {
+        if (EnvConfig.isSupabaseConfigured) {
+          try {
+            final table = item.payload['table']?.toString();
+            final record = item.payload['record'];
+            if (item.actionType == 'UPDATE_ORDER_STATUS' &&
+                item.payload['order_id'] != null) {
+              await remote.updateOrderStatus(
+                orderId: item.payload['order_id'].toString(),
+                nextStatus: OrderStatus.fromDbCode(
+                  (item.payload['status'] ?? 'IN_TRANSIT').toString(),
+                ),
+                podImageUrl: item.payload['pod_image_url']?.toString(),
+                podOtpCode: item.payload['pod_otp_code']?.toString(),
+              );
+            } else if (item.actionType == 'DRIVER_TOGGLE_ONLINE' &&
+                item.payload['driver_id'] != null) {
+              await remote.updateDriverOnlineState(
+                driverId: item.payload['driver_id'].toString(),
+                isOnline:
+                    item.payload['is_online'] == true ||
+                    item.payload['is_online'] == 1,
+              );
+            } else if (item.actionType == 'DRIVER_LOCATION_PING' &&
+                item.payload['driver_id'] != null &&
+                item.payload['latitude'] is num &&
+                item.payload['longitude'] is num) {
+              await remote.insertDriverTrackingLog(
+                driverId: item.payload['driver_id'].toString(),
+                orderId: null,
+                smoothedLocation: GeoPoint(
+                  latitude: (item.payload['latitude'] as num).toDouble(),
+                  longitude: (item.payload['longitude'] as num).toDouble(),
+                ),
+                speedKmh: (item.payload['speed'] as num? ?? 0.0).toDouble(),
+                bearing: (item.payload['bearing'] as num? ?? 0.0).toDouble(),
+                isMockLocation:
+                    item.payload['is_mock_location'] == true ||
+                    item.payload['is_mock_location'] == 1,
+              );
+            } else if (table != null && record is Map) {
+              await remote.upsertTableRecord(
+                table,
+                Map<String, dynamic>.from(record),
+              );
+            }
+            await _sqliteDb.markSynced(item.id);
+            syncedCount++;
+          } catch (_) {
+            await _sqliteDb.incrementRetry(item.id, item.retryCount);
+          }
+        } else {
+          await _sqliteDb.markSynced(item.id);
+          syncedCount++;
+        }
+      }
+      if (!isOfflineMode) {
+        offlineQueueCount = await _sqliteDb.getPendingQueueCount();
+      }
+    } catch (_) {}
+    return syncedCount;
   }
 
   Future<bool> loadStateSnapshotFromDisk() async {
     await initializeDatabase();
     try {
-      final file = File(snapshotFilePath);
-      if (!await file.exists()) return isDatabaseReady;
-      final raw = await file.readAsString();
-      final decoded = jsonDecode(raw) as Map<String, dynamic>;
-      driverWalletBalance =
-          (decoded['driverWalletBalance'] as num?)?.toDouble() ??
-              driverWalletBalance;
-      merchantCodBalance =
-          (decoded['merchantCodBalance'] as num?)?.toDouble() ??
-              merchantCodBalance;
+      final Map<String, dynamic> decoded;
+      if (kIsWeb) {
+        final rows = await _sqliteDb.getEntityRecords('web_state_snapshot');
+        if (rows.isEmpty) return isDatabaseReady;
+        decoded = rows.first;
+      } else {
+        final file = File(snapshotFilePath);
+        if (!await file.exists()) return isDatabaseReady;
+        final raw = await file.readAsString();
+        decoded = jsonDecode(raw) as Map<String, dynamic>;
+      }
       customerFullName =
           decoded['customerFullName']?.toString() ?? customerFullName;
       customerPhone = decoded['customerPhone']?.toString() ?? customerPhone;
@@ -180,7 +300,30 @@ class AppStateStore extends ChangeNotifier {
       customerGender = decoded['customerGender']?.toString() ?? customerGender;
       customerAvatarBadgeIndex =
           (decoded['customerAvatarBadgeIndex'] as num?)?.toInt() ??
-              customerAvatarBadgeIndex;
+          customerAvatarBadgeIndex;
+      if (decoded.containsKey('isCustomerGoogleLinked')) {
+        isCustomerGoogleLinked = decoded['isCustomerGoogleLinked'] == true;
+      }
+      if (decoded.containsKey('isCustomerTwoFactorEnabled')) {
+        isCustomerTwoFactorEnabled =
+            decoded['isCustomerTwoFactorEnabled'] == true;
+      }
+      final rawPrefs = decoded['userPreferencesByPhone'];
+      if (rawPrefs is Map) {
+        rawPrefs.forEach((k, v) {
+          if (v is Map) {
+            userPreferencesByPhone[k.toString()] = Map<String, dynamic>.from(v);
+          }
+        });
+      }
+      driverWalletBalance =
+          activeDriverRecord?.walletBalance ??
+          (decoded['driverWalletBalance'] as num?)?.toDouble() ??
+          driverWalletBalance;
+      merchantCodBalance =
+          activeMerchantRecord?.codBalance ??
+          (decoded['merchantCodBalance'] as num?)?.toDouble() ??
+          merchantCodBalance;
       final sigs = decoded['processedPaymentSignatures'];
       if (sigs is List) {
         processedPaymentSignatures
@@ -195,6 +338,26 @@ class AppStateStore extends ChangeNotifier {
   }
 
   void _persistMutation(String actionType, Map<String, dynamic> payload) {
+    final nowIso = DateTime.now().toIso8601String();
+    final logEntry = <String, dynamic>{
+      'action': actionType,
+      'actor': activeAuthenticatedUser?.fullName ?? currentAdminRoleName,
+      'role': activeAuthenticatedUser?.roleDbCode ?? 'SYSTEM',
+      'summary': jsonEncode(payload),
+      'timestamp': nowIso,
+    };
+    systemAuditLogs.insert(0, logEntry);
+    if (systemAuditLogs.length > 80) {
+      systemAuditLogs.removeRange(80, systemAuditLogs.length);
+    }
+    _sqliteDb
+        .upsertEntityRecord(
+          tableName: 'system_audit_logs',
+          recordId:
+              'AUDIT-${DateTime.now().millisecondsSinceEpoch}-${systemAuditLogs.length}',
+          payload: logEntry,
+        )
+        .catchError((_) {});
     if (isOfflineMode && actionType != 'TOGGLE_OFFLINE') {
       offlineQueueCount += 1;
       lastSyncStatusMessage =
@@ -210,6 +373,54 @@ class AppStateStore extends ChangeNotifier {
             .catchError((_) => <String, dynamic>{});
       }
     }
+  }
+
+  Future<List<Map<String, dynamic>>> fetchOrderStatusHistories(
+    String orderId,
+  ) async {
+    try {
+      final rows = await _sqliteDb.getEntityRecords('order_status_histories');
+      return rows.where((r) => r['order_id']?.toString() == orderId).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String allocateUniqueId(
+    String prefix,
+    Iterable<String> existingIds, {
+    int minNumber = 1,
+    int padDigits = 2,
+  }) {
+    final existingSet = existingIds.toSet();
+    int maxNum = minNumber - 1;
+    for (final raw in existingSet) {
+      if (raw.startsWith(prefix)) {
+        final suffix = raw.substring(prefix.length);
+        final parsed = int.tryParse(suffix);
+        if (parsed != null && parsed > maxNum) {
+          maxNum = parsed;
+        }
+      }
+    }
+    int next = maxNum + 1;
+    String candidate = '$prefix${next.toString().padLeft(padDigits, '0')}';
+    while (existingSet.contains(candidate)) {
+      next++;
+      candidate = '$prefix${next.toString().padLeft(padDigits, '0')}';
+    }
+    return candidate;
+  }
+
+  String allocateUniqueTrackingCode() {
+    final existingCodes = orders.map((o) => o.trackingCode).toSet();
+    int step = orders.length;
+    String candidate = '#DH${100000 + step * 1423}';
+    while (existingCodes.contains(candidate)) {
+      step++;
+      candidate = '#DH${100000 + step * 1423}';
+    }
+    return candidate;
   }
 
   String _normalizePhone(String phone) {
@@ -245,14 +456,22 @@ class AppStateStore extends ChangeNotifier {
 
   /// Truy vấn bản ghi tài xế đang hoạt động trong bảng `drivers` của CSDL SQLite
   DriverApplicantRecord? get activeDriverRecord {
-    final byId = drivers.where((d) => d.id == activeDriverId).firstOrNull;
-    if (byId != null) return byId;
-    final byPhone = drivers
-        .where(
-          (d) => _normalizePhone(d.phone) == _normalizePhone(activeDriverPhone),
-        )
-        .firstOrNull;
-    return byPhone ?? drivers.firstOrNull;
+    if (activeDriverId.isNotEmpty) {
+      final byId = drivers.where((d) => d.id == activeDriverId).firstOrNull;
+      if (byId != null) return byId;
+    }
+    final normActivePhone = _normalizePhone(activeDriverPhone);
+    if (normActivePhone.isNotEmpty) {
+      final byPhone = drivers
+          .where((d) => _normalizePhone(d.phone) == normActivePhone)
+          .firstOrNull;
+      if (byPhone != null) return byPhone;
+    }
+    if (activeAuthenticatedUser != null &&
+        activeAuthenticatedUser!.role == SubsystemRole.driver) {
+      return null;
+    }
+    return drivers.firstOrNull;
   }
 
   /// Truy vấn bản ghi đối tác cửa hàng đang hoạt động trong bảng `merchants` của CSDL SQLite
@@ -265,11 +484,103 @@ class AppStateStore extends ChangeNotifier {
           )
           .firstOrNull;
       if (byAuth != null) return byAuth;
+      if (activeAuthenticatedUser?.role == SubsystemRole.merchant) {
+        return merchantApplicants
+            .where((m) => m.storeName == merchantStoreName)
+            .firstOrNull;
+      }
+      return null;
     }
     final byStore = merchantApplicants
         .where((m) => m.storeName == merchantStoreName)
         .firstOrNull;
     return byStore ?? merchantApplicants.firstOrNull;
+  }
+
+  /// Kiểm tra một tọa độ GPS có nằm trong vùng cấm giao nhận (`RESTRICTED_ZONE`) đang bật hay không
+  GeofenceZoneRecord? findActiveRestrictedZoneForPoint(GeoPoint pt) {
+    for (final z in geofenceZones) {
+      if (z.isActive &&
+          z.zoneType == 'RESTRICTED_ZONE' &&
+          z.boundary.length >= 3 &&
+          GeoMath.isPointInPolygon(pt, z.boundary)) {
+        return z;
+      }
+    }
+    return null;
+  }
+
+  /// Kiểm tra điểm lấy hoặc điểm giao của lộ trình có vi phạm `RESTRICTED_ZONE` hay không
+  GeofenceZoneRecord? findActiveRestrictedZoneForRoute(
+    GeoPoint pickup,
+    GeoPoint dropoff,
+  ) {
+    return findActiveRestrictedZoneForPoint(pickup) ??
+        findActiveRestrictedZoneForPoint(dropoff);
+  }
+
+  /// Tính tổng phụ phí vùng địa lý (`SURCHARGE_ZONE`) cho tọa độ giao nhận
+  double computeGeofenceSurchargeForPoint(GeoPoint pt) {
+    double surcharge = 0;
+    for (final z in geofenceZones) {
+      if (z.isActive &&
+          z.zoneType != 'RESTRICTED_ZONE' &&
+          z.surchargeRate > 0 &&
+          z.boundary.length >= 3 &&
+          GeoMath.isPointInPolygon(pt, z.boundary)) {
+        surcharge += z.surchargeRate;
+      }
+    }
+    return surcharge;
+  }
+
+  /// Danh sách phân hệ đã mở khóa hợp lệ cho tài khoản đăng nhập hiện tại
+  List<SubsystemRole> unlockedRolesForUser(UserAccountRecord user) {
+    if (user.role == SubsystemRole.admin) {
+      return const [SubsystemRole.admin];
+    }
+    final normPhone = _normalizePhone(user.phone);
+    final roles = <SubsystemRole>[];
+    void addUnique(SubsystemRole r) {
+      if (!roles.contains(r)) roles.add(r);
+    }
+
+    addUnique(user.role);
+    final hasApprovedDriver = drivers.any(
+      (d) =>
+          _normalizePhone(d.phone) == normPhone &&
+          d.approvalStatus == 'Đã duyệt',
+    );
+    final hasApprovedMerchant = merchantApplicants.any(
+      (m) =>
+          _normalizePhone(m.ownerPhone) == normPhone &&
+          m.approvalStatus == 'Đã duyệt',
+    );
+    if (hasApprovedDriver) addUnique(SubsystemRole.driver);
+    if (hasApprovedMerchant) addUnique(SubsystemRole.merchant);
+    addUnique(SubsystemRole.customer);
+    return roles;
+  }
+
+  /// Chuyến hàng đang thực thi dở dang của tài xế đang đăng nhập (nếu có)
+  ActiveOrderRecord? get activeDriverInProgressOrder {
+    return driverPersonalOrders
+        .where(
+          (o) =>
+              o.status == OrderStatus.accepted ||
+              o.status == OrderStatus.arrivingPickup ||
+              o.status == OrderStatus.inTransit ||
+              o.status == OrderStatus.returning,
+        )
+        .firstOrNull;
+  }
+
+  List<PickupWarehouseRecord> get merchantPersonalWarehouses {
+    final merchant = activeMerchantRecord;
+    if (merchant == null) return const [];
+    return merchantWarehouses
+        .where((w) => w.merchantId == merchant.id)
+        .toList();
   }
 
   /// Truy vấn vận đơn đang hoạt động ưu tiên từ bảng `orders` của CSDL SQLite
@@ -282,12 +593,32 @@ class AppStateStore extends ChangeNotifier {
         return selected;
       }
     }
+    final targetDriver = activeDriverName.trim().toLowerCase();
+    if (targetDriver.isNotEmpty) {
+      final myInProgress = orders
+          .where(
+            (o) =>
+                o.assignedDriverName != null &&
+                o.assignedDriverName!.trim().toLowerCase() == targetDriver &&
+                o.paymentStatus != 'RETURNED' &&
+                (o.status == OrderStatus.inTransit ||
+                    o.status == OrderStatus.returning ||
+                    o.status == OrderStatus.arrivingPickup ||
+                    o.status == OrderStatus.accepted ||
+                    o.status == OrderStatus.failed),
+          )
+          .firstOrNull;
+      if (myInProgress != null) return myInProgress;
+    }
     final inProgress = orders
         .where(
           (o) =>
-              o.status == OrderStatus.inTransit ||
-              o.status == OrderStatus.arrivingPickup ||
-              o.status == OrderStatus.accepted,
+              o.paymentStatus != 'RETURNED' &&
+              (o.status == OrderStatus.inTransit ||
+                  o.status == OrderStatus.returning ||
+                  o.status == OrderStatus.arrivingPickup ||
+                  o.status == OrderStatus.accepted ||
+                  o.status == OrderStatus.failed),
         )
         .firstOrNull;
     if (inProgress != null) return inProgress;
@@ -297,16 +628,47 @@ class AppStateStore extends ChangeNotifier {
     return searching ?? orders.firstOrNull;
   }
 
+  /// Vận đơn đang thực hiện hoặc được chọn thuộc riêng về tài xế đang đăng nhập
+  ActiveOrderRecord? get activeDriverPersonalOrderRecord {
+    final myOrders = driverPersonalOrders;
+    if (myOrders.isEmpty) return null;
+    if (selectedDriverOrderCode != null) {
+      final selected = myOrders
+          .where((o) => o.trackingCode == selectedDriverOrderCode)
+          .firstOrNull;
+      if (selected != null) return selected;
+    }
+    final inProgress = myOrders
+        .where(
+          (o) =>
+              o.paymentStatus != 'RETURNED' &&
+              (o.status == OrderStatus.inTransit ||
+                  o.status == OrderStatus.returning ||
+                  o.status == OrderStatus.arrivingPickup ||
+                  o.status == OrderStatus.accepted ||
+                  o.status == OrderStatus.failed),
+        )
+        .firstOrNull;
+    return inProgress ?? myOrders.firstOrNull;
+  }
+
   void selectDriverOrder(String trackingCode) {
     selectedDriverOrderCode = trackingCode;
-    final matched =
-        orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
+    final matched = orders
+        .where((o) => o.trackingCode == trackingCode)
+        .firstOrNull;
     if (matched != null) {
-      activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
-        matched.pickupLocation,
-        matched.dropoffLocation,
-        segments: 10,
-      );
+      activeRoutePolyline = matched.status == OrderStatus.returning
+          ? SmartDispatchEngine.generateRoutePolyline(
+              matched.dropoffLocation,
+              matched.pickupLocation,
+              segments: 10,
+            )
+          : SmartDispatchEngine.generateRoutePolyline(
+              matched.pickupLocation,
+              matched.dropoffLocation,
+              segments: 10,
+            );
     }
     _notifyStoreChanged();
   }
@@ -326,8 +688,17 @@ class AppStateStore extends ChangeNotifier {
   }
 
   /// Số điện thoại hiển thị trên giao diện Khách hàng (rỗng nếu mới đăng nhập Google OAuth chưa nhập SĐT)
-  String get displayCustomerPhone =>
-      hasUserProvidedPhone ? customerPhone : '';
+  String get displayCustomerPhone => hasUserProvidedPhone ? customerPhone : '';
+
+  /// Kiểm tra xem tài khoản theo SĐT có đang bật bảo mật 2 lớp (2FA OTP) hay không
+  bool isUserTwoFactorEnabled(String phone) {
+    final norm = _normalizePhone(phone);
+    final prefs = userPreferencesByPhone[norm];
+    if (prefs != null && prefs.containsKey('twoFactorEnabled')) {
+      return prefs['twoFactorEnabled'] == true;
+    }
+    return false;
+  }
 
   /// Danh sách vận đơn thuộc về khách hàng đang đăng nhập
   List<ActiveOrderRecord> get customerOrders {
@@ -347,13 +718,26 @@ class AppStateStore extends ChangeNotifier {
           .firstOrNull;
       if (matched != null) return matched;
     }
-    return list.firstOrNull;
+    final inProgress = list
+        .where(
+          (o) =>
+              o.paymentStatus != 'RETURNED' &&
+              (o.status == OrderStatus.inTransit ||
+                  o.status == OrderStatus.returning ||
+                  o.status == OrderStatus.arrivingPickup ||
+                  o.status == OrderStatus.accepted ||
+                  o.status == OrderStatus.searching ||
+                  o.status == OrderStatus.failed),
+        )
+        .firstOrNull;
+    return inProgress ?? list.firstOrNull;
   }
 
   void selectCustomerOrder(String trackingCode) {
     selectedCustomerOrderCode = trackingCode;
-    final matched =
-        orders.where((o) => o.trackingCode == trackingCode).firstOrNull;
+    final matched = orders
+        .where((o) => o.trackingCode == trackingCode)
+        .firstOrNull;
     if (matched != null) {
       activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
         matched.pickupLocation,
@@ -376,37 +760,178 @@ class AppStateStore extends ChangeNotifier {
   /// Danh sách thông báo dành cho khách hàng đang đăng nhập
   List<NotificationRecord> get customerNotifications {
     final myCodes = customerOrders.map((o) => o.trackingCode).toSet();
+    final normPhone = _normalizePhone(customerPhone);
+    final lowerName = customerFullName.trim().toLowerCase();
     return notifications.where((n) {
       if (n.targetGroup == 'Tài xế' || n.targetGroup == 'Cửa hàng B2B') {
         return false;
       }
-      if (n.category == 'Đơn hàng' && n.title.contains('#DH')) {
+      final rk = n.recipientKey?.trim().toLowerCase();
+      if (rk != null && rk.isNotEmpty) {
+        return rk == normPhone || (lowerName.isNotEmpty && rk == lowerName);
+      }
+      if (n.title.contains('#DH')) {
         return myCodes.any((code) => n.title.contains(code));
       }
       return true;
     }).toList();
   }
 
-  /// Danh sách thông báo dành cho tài xế
+  /// Danh sách thông báo dành cho tài xế đang đăng nhập
   List<NotificationRecord> get driverNotifications {
-    return notifications
+    final activeDrv = activeDriverRecord;
+    final drvIdLower = (activeDrv?.id ?? activeDriverId).trim().toLowerCase();
+    final drvNameLower = (activeDrv?.fullName ?? activeDriverName)
+        .trim()
+        .toLowerCase();
+    final myCodes = driverPersonalOrders.map((o) => o.trackingCode).toSet();
+    return notifications.where((n) {
+      if (n.targetGroup != 'Tất cả người dùng' && n.targetGroup != 'Tài xế') {
+        return false;
+      }
+      final rk = n.recipientKey?.trim().toLowerCase();
+      if (rk != null && rk.isNotEmpty) {
+        return (drvIdLower.isNotEmpty && rk == drvIdLower) ||
+            (drvNameLower.isNotEmpty && rk == drvNameLower);
+      }
+      if (n.title.contains('#DH')) {
+        return myCodes.any((code) => n.title.contains(code));
+      }
+      return true;
+    }).toList();
+  }
+
+  /// Danh sách vận đơn được gán trực tiếp cho tài xế đang đăng nhập
+  List<ActiveOrderRecord> get driverPersonalOrders {
+    final targetDriver = (activeDriverRecord?.fullName ?? activeDriverName)
+        .trim()
+        .toLowerCase();
+    if (targetDriver.isEmpty) return const [];
+    return orders
         .where(
-          (n) =>
-              n.targetGroup == 'Tất cả người dùng' ||
-              n.targetGroup == 'Tài xế',
+          (o) =>
+              o.assignedDriverName != null &&
+              o.assignedDriverName!.trim().toLowerCase() == targetDriver,
         )
         .toList();
   }
 
-  /// Danh sách thông báo dành cho cửa hàng B2B
+  /// Lịch sử biến động ví & lệnh rút thuộc riêng về tài xế đang đăng nhập
+  List<WithdrawalRequestRecord> get driverPersonalTransactions {
+    final activeDrv = activeDriverRecord;
+    final targetId = activeDrv?.id ?? activeDriverId;
+    final targetName = (activeDrv?.fullName ?? activeDriverName)
+        .trim()
+        .toLowerCase();
+    return withdrawalRequests.where((w) {
+      if (!w.ownerRole.startsWith('Tài xế')) return false;
+      if (w.ownerId.isNotEmpty && targetId.isNotEmpty) {
+        return w.ownerId == targetId;
+      }
+      return targetName.isNotEmpty &&
+          w.ownerName.trim().toLowerCase() == targetName;
+    }).toList();
+  }
+
+  /// Danh sách vận đơn thuộc về cửa hàng B2B đang đăng nhập (không lẫn đơn B2C khách lẻ)
+  List<ActiveOrderRecord> get merchantPersonalOrders {
+    final activeMer = activeMerchantRecord;
+    final storeLower = (activeMer?.storeName ?? merchantStoreName)
+        .trim()
+        .toLowerCase();
+    final repLower = (activeMer?.representativeName ?? '').trim().toLowerCase();
+    if (storeLower.isEmpty && repLower.isEmpty) return const [];
+    return orders.where((o) {
+      final custLower = o.customerName.trim().toLowerCase();
+      return (storeLower.isNotEmpty && custLower == storeLower) ||
+          (repLower.isNotEmpty && custLower == repLower);
+    }).toList();
+  }
+
+  /// Danh sách khiếu nại thuộc về cửa hàng B2B đang đăng nhập
+  List<ComplaintTicketRecord> get merchantPersonalComplaints {
+    final myOrderCodes = merchantPersonalOrders
+        .map((o) => o.trackingCode)
+        .toSet();
+    final activeMer = activeMerchantRecord;
+    final storeLower = (activeMer?.storeName ?? merchantStoreName)
+        .trim()
+        .toLowerCase();
+    return complaints.where((c) {
+      return myOrderCodes.contains(c.orderId) ||
+          (storeLower.isNotEmpty &&
+              c.customerName.trim().toLowerCase() == storeLower);
+    }).toList();
+  }
+
+  /// Danh sách lệnh rút COD thuộc về cửa hàng B2B đang đăng nhập
+  List<WithdrawalRequestRecord> get merchantPersonalWithdrawals {
+    final activeMer = activeMerchantRecord;
+    final targetMerId = activeMer?.id ?? '';
+    final targetStore = (activeMer?.storeName ?? merchantStoreName)
+        .trim()
+        .toLowerCase();
+    return withdrawalRequests.where((w) {
+      if (w.id.startsWith('COMP-') || w.id.startsWith('REFUND-')) {
+        return false;
+      }
+      if (!w.ownerRole.contains('Cửa hàng')) return false;
+      if (w.ownerId.isNotEmpty && targetMerId.isNotEmpty) {
+        return w.ownerId == targetMerId;
+      }
+      return targetStore.isNotEmpty &&
+          w.ownerName.trim().toLowerCase() == targetStore;
+    }).toList();
+  }
+
+  /// Danh sách thông báo dành cho cửa hàng B2B đang đăng nhập
   List<NotificationRecord> get merchantNotifications {
-    return notifications
-        .where(
-          (n) =>
-              n.targetGroup == 'Tất cả người dùng' ||
-              n.targetGroup == 'Cửa hàng B2B',
-        )
-        .toList();
+    final activeMer = activeMerchantRecord;
+    final merIdLower = (activeMer?.id ?? '').trim().toLowerCase();
+    final storeLower = (activeMer?.storeName ?? merchantStoreName)
+        .trim()
+        .toLowerCase();
+    final myCodes = merchantPersonalOrders.map((o) => o.trackingCode).toSet();
+    return notifications.where((n) {
+      if (n.targetGroup != 'Tất cả người dùng' &&
+          n.targetGroup != 'Cửa hàng B2B') {
+        return false;
+      }
+      final rk = n.recipientKey?.trim().toLowerCase();
+      if (rk != null && rk.isNotEmpty) {
+        return (merIdLower.isNotEmpty && rk == merIdLower) ||
+            (storeLower.isNotEmpty && rk == storeLower);
+      }
+      if (n.title.contains('#DH')) {
+        return myCodes.any((code) => n.title.contains(code));
+      }
+      return true;
+    }).toList();
+  }
+
+  /// Tổng tiền bồi thường khiếu nại đã được đối soát cộng trực tiếp vào số dư COD của cửa hàng
+  double computeMerchantCompensationCredits(MerchantApplicantRecord? mer) {
+    final targetMer = mer ?? activeMerchantRecord;
+    if (targetMer == null) return 0.0;
+    final merStoreLower = targetMer.storeName.trim().toLowerCase();
+    final merOrderCodes = orders
+        .where((o) => o.customerName.trim().toLowerCase() == merStoreLower)
+        .map((o) => o.trackingCode)
+        .toSet();
+    final compRegex = RegExp(r'Đã cộng (\d+)đ tiền bồi thường');
+    double totalComp = 0.0;
+    for (final c in complaints) {
+      if (merOrderCodes.contains(c.orderId) ||
+          c.customerName.trim().toLowerCase() == merStoreLower) {
+        for (final rep in c.replies) {
+          final match = compRegex.firstMatch(rep);
+          if (match != null) {
+            totalComp += double.tryParse(match.group(1)!) ?? 0.0;
+          }
+        }
+      }
+    }
+    return totalComp;
   }
 
   void _notifyStoreChanged() => notifyListeners();

@@ -1,30 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'core/config/env_config.dart';
 import 'core/theme/app_theme.dart';
 import 'data/datasources/local/app_state_store.dart';
 import 'data/datasources/local/sqlite_offline_queue_datasource.dart';
 import 'presentation/bloc/system_architecture_cubit.dart';
 import 'presentation/screens/architecture_dashboard_screen.dart';
+import 'presentation/screens/admin_portal_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SqliteOfflineQueueDatasource.ensureDesktopFfiInitialized();
 
   if (EnvConfig.isSupabaseConfigured) {
-    await Supabase.initialize(
-      url: EnvConfig.supabaseUrl,
-      publishableKey: EnvConfig.supabaseAnonKey,
-    );
+    try {
+      await Supabase.initialize(
+        url: EnvConfig.supabaseUrl,
+        publishableKey: EnvConfig.supabaseAnonKey,
+      );
+    } catch (_) {
+      AppStateStore.instance.isOfflineMode = true;
+    }
   }
 
+  try {
+    await AppStateStore.instance.initializeDatabase();
+  } catch (_) {}
   runApp(const GpsDeliveryApp());
-  await AppStateStore.instance.initializeDatabase();
 }
 
 class GpsDeliveryApp extends StatelessWidget {
-  const GpsDeliveryApp({super.key});
+  final String? initialRoute;
+  const GpsDeliveryApp({super.key, this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
@@ -42,13 +51,27 @@ class GpsDeliveryApp extends StatelessWidget {
               ? 1.0
               : (shortest / 390.0).clamp(0.86, 1.0);
           return MediaQuery(
-            data: media.copyWith(
-              textScaler: TextScaler.linear(scaleFactor),
-            ),
+            data: media.copyWith(textScaler: TextScaler.linear(scaleFactor)),
             child: child ?? const SizedBox.shrink(),
           );
         },
-        home: const ArchitectureDashboardScreen(),
+        initialRoute:
+            initialRoute ??
+            (Uri.base.path == '/admin' || Uri.base.path == '/admin/'
+                ? '/admin'
+                : null),
+        onGenerateInitialRoutes: (name) => [
+          MaterialPageRoute<void>(
+            settings: RouteSettings(name: name),
+            builder: (_) => name == '/admin'
+                ? const AdminPortalScreen()
+                : const ArchitectureDashboardScreen(),
+          ),
+        ],
+        routes: {
+          '/': (_) => const ArchitectureDashboardScreen(),
+          '/admin': (_) => const AdminPortalScreen(),
+        },
       ),
     );
   }

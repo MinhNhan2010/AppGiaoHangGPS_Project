@@ -192,17 +192,27 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           ),
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String>(
+                            key: ValueKey(
+                              _businessCategory.trim().isNotEmpty
+                                  ? _businessCategory.trim()
+                                  : '',
+                            ),
                             isExpanded: true,
-                            initialValue: _businessCategory,
+                            initialValue: _businessCategory.trim().isNotEmpty
+                                ? _businessCategory.trim()
+                                : null,
                             decoration: const InputDecoration(
                               labelText: 'Loại hình kinh doanh',
                             ),
-                            items: const [
+                            items: <String>{
                               'Gốm sứ & Nội thất',
                               'Thời trang & Phụ kiện',
                               'Thực phẩm & Đồ uống',
                               'Điện tử & Gia dụng',
-                            ]
+                              'Công ty TNHH',
+                              if (_businessCategory.trim().isNotEmpty)
+                                _businessCategory.trim(),
+                            }
                                 .map(
                                   (e) => DropdownMenuItem(
                                     value: e,
@@ -286,17 +296,24 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                   const SizedBox(height: 10),
                   LayoutBuilder(
                     builder: (context, constraints) {
+                      final trimmedBank = _selectedBankName.trim().isNotEmpty
+                          ? _selectedBankName.trim()
+                          : '';
                       final bankDrop = DropdownButtonFormField<String>(
+                        key: ValueKey(trimmedBank),
                         isExpanded: true,
-                        initialValue: _selectedBankName,
+                        initialValue: trimmedBank.isEmpty ? null : trimmedBank,
                         decoration: const InputDecoration(
                           labelText: 'Ngân hàng',
                         ),
-                        items: const [
+                        items: <String>{
                           'Ngân hàng VPBank (VPB)',
                           'Ngân hàng Vietcombank (VCB)',
                           'Ngân hàng Techcombank (TCB)',
-                        ]
+                          'Ngân hàng ACB',
+                          'Ngân hàng BIDV',
+                          if (trimmedBank.isNotEmpty) trimmedBank,
+                        }
                             .map(
                               (b) => DropdownMenuItem(
                                 value: b,
@@ -381,40 +398,34 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           );
                           return;
                         }
-                        if (_store.activeMerchantRecord == null ||
-                            _store.activeMerchantRecord!.approvalStatus ==
-                                'Từ chối') {
-                          _store.registerOrUpdateMerchantKyc(
-                            ownerPhone: sPhone,
-                            storeName: sName,
-                            businessType: _businessCategory,
-                            taxCode: tCode,
-                            representativeName: repName,
-                            bankName: _selectedBankName,
-                            bankAccount: bAcc,
-                          );
-                        }
                         _store.updateMerchantProfile(
                           storeName: sName,
                           taxCode: tCode,
                           businessType: _businessCategory,
                           representativeName: repName,
                           phone: sPhone,
+                          email: _shopEmailCtrl.text.trim(),
                           bankName: _selectedBankName,
                           bankAccount: bAcc,
                           warehouseAddress: _shopAddressCtrl.text.trim(),
+                          attachedDocs: _attachedMerchantDocs.toList(),
                         );
+                        final updatedStatus =
+                            _store.activeMerchantRecord?.approvalStatus ??
+                                'Chờ duyệt';
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
+                          SnackBar(
                             content: Text(
-                              'Đã lưu hồ sơ đăng ký & xác thực Cửa hàng thành công!',
+                              updatedStatus == 'Đã duyệt'
+                                  ? 'Đã cập nhật hồ sơ & tài khoản ngân hàng Cửa hàng B2B thành công!'
+                                  : 'Đã gửi hồ sơ đăng ký Cửa hàng B2B ($updatedStatus) chờ Admin phê duyệt!',
                             ),
                           ),
                         );
                       },
-                      child: const Text(
-                        'Gửi hồ sơ',
-                        style: TextStyle(
+                      child: Text(
+                        isMerApproved ? 'Cập nhật hồ sơ Shop' : 'Gửi hồ sơ',
+                        style: const TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 15,
                         ),
@@ -475,31 +486,41 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
     required String title,
     required String subtitle,
   }) {
-    final isAttached = _attachedMerchantDocs.contains(title);
+    final matchedDoc = _attachedMerchantDocs
+        .where((d) => d == title || d.startsWith('$title:'))
+        .firstOrNull;
+    final isAttached = matchedDoc != null;
+    final attachedName =
+        (matchedDoc != null && matchedDoc.startsWith('$title:'))
+            ? matchedDoc.substring(title.length + 1).trim()
+            : '';
     return InkWell(
-      onTap: () {
+      onTap: () async {
+        if (isAttached) {
+          _rebuildMerchantUi(() => _attachedMerchantDocs.remove(matchedDoc));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Đã gỡ đính kèm: $title')),
+          );
+          return;
+        }
+        final picked = await SecurityAndBarcodeUtils.pickLocalDocumentOrImage(
+          dialogTitle: 'Tải lên hồ sơ pháp lý Cửa hàng: $title',
+        );
+        if (picked == null || !mounted) return;
         _rebuildMerchantUi(() {
-          if (isAttached) {
-            _attachedMerchantDocs.remove(title);
-          } else {
-            _attachedMerchantDocs.add(title);
-          }
+          _attachedMerchantDocs
+            ..removeWhere((d) => d == title || d.startsWith('$title:'))
+            ..add('$title: $picked');
         });
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              _attachedMerchantDocs.contains(title)
-                  ? 'Đã đính kèm hồ sơ pháp lý: $title'
-                  : 'Đã gỡ đính kèm: $title',
-            ),
-          ),
+          SnackBar(content: Text('Đã đính kèm $title ($picked)!')),
         );
       },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
         decoration: BoxDecoration(
           color: isAttached ? const Color(0xFFDCFCE7) : const Color(0xFFF5F1E8),
-          borderRadius: BorderRadius.all(Radius.zero),
+          borderRadius: const BorderRadius.all(Radius.zero),
           border: Border.all(
             color: isAttached ? AppColors.success : const Color(0xFF15131E),
             width: isAttached ? 1.5 : 1.0,
@@ -519,8 +540,14 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
             ),
             const SizedBox(height: 2),
             Text(
-              isAttached ? subtitle : 'Bấm để chọn tệp tài liệu tải lên',
+              isAttached
+                  ? (attachedName.isNotEmpty
+                      ? 'Đã đính kèm: $attachedName (Bấm để gỡ)'
+                      : subtitle)
+                  : 'Bấm để chọn tệp tài liệu tải lên',
               textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 11.5, color: Color(0xFF4A4754)),
             ),
           ],
@@ -529,15 +556,25 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
     );
   }
 
-  /// UC31: Quản lý Điểm lấy hàng & Cấu hình Kho 3 Cột (Khớp 100% uc31_diem_lay_hang_1791015242689.jpg)
   Widget _buildStoreConfigAndWarehousesView() {
-    final safeWhIdx = _store.merchantWarehouses.isEmpty
+    final personalWhs = _store.merchantPersonalWarehouses;
+    final safeWhIdx = personalWhs.isEmpty
         ? 0
-        : _selectedWarehouseIndex.clamp(
-            0,
-            _store.merchantWarehouses.length - 1,
-          );
-    final wh = _store.merchantWarehouses[safeWhIdx];
+        : _selectedWarehouseIndex.clamp(0, personalWhs.length - 1);
+    final wh = personalWhs.isNotEmpty ? personalWhs[safeWhIdx] : null;
+    final activeWhCoord = _pinnedWarehouseLocation ??
+        wh?.location ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          _shopAddressCtrl.text,
+          fallback: _store.liveDeviceLocation ??
+              const GeoPoint(latitude: 10.7725, longitude: 106.6980),
+        );
+    final activeWhName = _warehouseNameCtrl.text.trim().isNotEmpty
+        ? _warehouseNameCtrl.text.trim()
+        : (wh?.name ?? 'Kho lấy hàng');
+    final activeWhAddr = _shopAddressCtrl.text.trim().isNotEmpty
+        ? _shopAddressCtrl.text.trim()
+        : (wh?.address ?? 'Chạm lên bản đồ để chọn địa chỉ kho lấy hàng');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -556,7 +593,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.all(Radius.zero),
+                borderRadius: const BorderRadius.all(Radius.zero),
                 border: Border.all(color: const Color(0xFF15131E)),
               ),
               child: Column(
@@ -570,7 +607,18 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  ..._store.merchantWarehouses.asMap().entries.map((entry) {
+                  if (personalWhs.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: Text(
+                        'Chưa có điểm lấy hàng nào. Nhấn "Thêm điểm lấy hàng mới" để khởi tạo kho.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: Color(0xFF4A4754),
+                        ),
+                      ),
+                    ),
+                  ...personalWhs.asMap().entries.map((entry) {
                     final idx = entry.key;
                     final w = entry.value;
                     final isSelected = idx == safeWhIdx;
@@ -578,8 +626,16 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       onTap: () {
                         _rebuildMerchantUi(() {
                           _selectedWarehouseIndex = idx;
+                          _warehouseNameCtrl.text = w.name;
+                          _warehouseIsPrimary = w.isPrimary;
+                          _warehousePhoneCtrl.text = w.contactPhone.isNotEmpty
+                              ? w.contactPhone
+                              : _shopPhoneCtrl.text;
+                          _warehouseOpenHoursCtrl.text = w.openHours.isNotEmpty
+                              ? w.openHours
+                              : '08:00 - 21:00';
                           _shopAddressCtrl.text = w.address;
-                          _selectedWarehouseName = '${w.name} - ${w.address}';
+                          _pinnedWarehouseLocation = null;
                         });
                       },
                       child: Container(
@@ -589,7 +645,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           color: isSelected
                               ? const Color(0xFFF5F1E8)
                               : Colors.white,
-                          borderRadius: BorderRadius.all(Radius.zero),
+                          borderRadius: const BorderRadius.all(Radius.zero),
                           border: Border.all(
                             color: isSelected
                                 ? const Color(0xFFFF5E83)
@@ -612,7 +668,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                     ),
                                   ),
                                 ),
-                                if (idx == safeWhIdx) ...[
+                                if (w.isPrimary) ...[
                                   const SizedBox(width: 6),
                                   Container(
                                     padding: const EdgeInsets.symmetric(
@@ -633,7 +689,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                     ),
                                   ),
                                 ],
-                                if (_store.merchantWarehouses.length > 1)
+                                if (personalWhs.length > 1)
                                   IconButton(
                                     visualDensity: VisualDensity.compact,
                                     tooltip: 'Xóa kho lấy hàng này',
@@ -648,14 +704,17 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                       if (removed) {
                                         _rebuildMerchantUi(() {
                                           _selectedWarehouseIndex = 0;
-                                          if (_store
-                                              .merchantWarehouses.isNotEmpty) {
-                                            final firstWh =
-                                                _store.merchantWarehouses.first;
+                                          _pinnedWarehouseLocation = null;
+                                          final updatedWhs =
+                                              _store.merchantPersonalWarehouses;
+                                          if (updatedWhs.isNotEmpty) {
+                                            final firstWh = updatedWhs.first;
+                                            _warehouseNameCtrl.text =
+                                                firstWh.name;
+                                            _warehouseIsPrimary =
+                                                firstWh.isPrimary;
                                             _shopAddressCtrl.text =
                                                 firstWh.address;
-                                            _selectedWarehouseName =
-                                                '${firstWh.name} - ${firstWh.address}';
                                           }
                                         });
                                         ScaffoldMessenger.of(context)
@@ -681,7 +740,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'GPS: ${w.location.latitude.toStringAsFixed(4)}, ${w.location.longitude.toStringAsFixed(4)} • ${_store.merchantOpenHours}',
+                              'GPS: ${w.location.latitude.toStringAsFixed(4)}, ${w.location.longitude.toStringAsFixed(4)} • ${w.contactPhone.isNotEmpty ? "${w.contactPhone} • " : ""}${w.openHours}',
                               style: const TextStyle(
                                 fontSize: 11,
                                 color: Color(0xFF4A4754),
@@ -698,22 +757,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       backgroundColor: const Color(0xFFFF5E83),
                       foregroundColor: Colors.white,
                     ),
-                    onPressed: () {
-                      final nextNum = _store.merchantWarehouses.length + 1;
-                      final created = _store.addMerchantWarehouse(
-                        name: 'Kho chi nhánh #$nextNum',
-                        address: _shopAddressCtrl.text.trim().isNotEmpty
-                            ? _shopAddressCtrl.text.trim()
-                            : '789 Nguyễn Thị Minh Khai, Quận 3, TP. HCM',
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Đã thêm ${created.name} (${created.id}) thành công!',
-                          ),
-                        ),
-                      );
-                    },
+                    onPressed: () => _showAddMerchantWarehouseDialog(context),
                     icon: const Icon(Icons.add, size: 18),
                     label: const Text('Thêm điểm lấy hàng mới'),
                   ),
@@ -724,121 +768,327 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.all(Radius.zero),
+                borderRadius: const BorderRadius.all(Radius.zero),
                 border: Border.all(color: const Color(0xFF15131E)),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text(
-                    'Cập nhật Điểm lấy hàng',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
+              child: Material(
+                color: Colors.transparent,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Cập nhật Điểm lấy hàng',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _storeNameCtrl,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: 'Tên điểm lấy hàng / Thương hiệu',
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _warehouseNameCtrl,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        labelText: 'Tên điểm lấy hàng / Kho nhánh',
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _repNameCtrl,
+                    const SizedBox(height: 10),
+                    LayoutBuilder(
+                      builder: (context, whConstraints) {
+                        final contactField = TextField(
+                          controller: _warehouseContactCtrl,
                           decoration: const InputDecoration(
                             isDense: true,
-                            labelText: 'Người liên hệ',
+                            labelText: 'Người liên hệ tại kho',
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: _shopPhoneCtrl,
+                        );
+                        final phoneField = TextField(
+                          controller: _warehousePhoneCtrl,
                           decoration: const InputDecoration(
                             isDense: true,
-                            labelText: 'SĐT liên hệ',
+                            labelText: 'SĐT kho lấy hàng',
                           ),
+                        );
+                        final addrField = TextField(
+                          controller: _shopAddressCtrl,
+                          onChanged: (_) => _rebuildMerchantUi(() {
+                            _pinnedWarehouseLocation = null;
+                          }),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Địa chỉ kho chi tiết',
+                          ),
+                        );
+                        final hoursField = TextField(
+                          controller: _warehouseOpenHoursCtrl,
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            labelText: 'Giờ mở cửa',
+                          ),
+                        );
+                        if (whConstraints.maxWidth < 520) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              contactField,
+                              const SizedBox(height: 10),
+                              phoneField,
+                              const SizedBox(height: 10),
+                              addrField,
+                              const SizedBox(height: 10),
+                              hoursField,
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(child: contactField),
+                                const SizedBox(width: 10),
+                                Expanded(child: phoneField),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(flex: 2, child: addrField),
+                                const SizedBox(width: 10),
+                                Expanded(child: hoursField),
+                              ],
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: _warehouseIsPrimary,
+                      title: const Text(
+                        'Đặt làm kho lấy hàng mặc định',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: _shopAddressCtrl,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      labelText: 'Địa chỉ chi tiết (08:00 - 21:00)',
+                      onChanged: (v) {
+                        if (v != null) {
+                          _rebuildMerchantUi(() => _warehouseIsPrimary = v);
+                        }
+                      },
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF5E83),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 13),
-                    ),
-                    onPressed: () {
-                      if (_storeNameCtrl.text.trim().isEmpty ||
-                          _shopAddressCtrl.text.trim().isEmpty) {
+                    const SizedBox(height: 6),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFF5E83),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                      ),
+                      onPressed: () {
+                        if (_warehouseNameCtrl.text.trim().isEmpty ||
+                            _shopAddressCtrl.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Vui lòng nhập Tên điểm lấy hàng và Địa chỉ chi tiết!',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        if (wh != null) {
+                          _store.updateMerchantWarehouseDetails(
+                            warehouseId: wh.id,
+                            name: _warehouseNameCtrl.text.trim(),
+                            address: _shopAddressCtrl.text.trim(),
+                            setPrimary: _warehouseIsPrimary,
+                            contactName: _warehouseContactCtrl.text.trim(),
+                            contactPhone: _warehousePhoneCtrl.text.trim(),
+                            openHours: _warehouseOpenHoursCtrl.text.trim(),
+                            customLocation: _pinnedWarehouseLocation,
+                          );
+                        } else {
+                          _store.addMerchantWarehouse(
+                            name: _warehouseNameCtrl.text.trim(),
+                            address: _shopAddressCtrl.text.trim(),
+                            contactName: _warehouseContactCtrl.text.trim(),
+                            contactPhone: _warehousePhoneCtrl.text.trim(),
+                            openHours: _warehouseOpenHoursCtrl.text.trim(),
+                            isPrimary: _warehouseIsPrimary,
+                            customLocation: _pinnedWarehouseLocation,
+                          );
+                        }
+                        _rebuildMerchantUi(() {
+                          _pinnedWarehouseLocation = null;
+                        });
+                        _parseCsvBatch();
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
+                          SnackBar(
                             content: Text(
-                              'Vui lòng nhập Tên điểm lấy hàng và Địa chỉ chi tiết!',
+                              'Đã lưu cấu hình điểm lấy hàng "${_warehouseNameCtrl.text.trim()}"!',
                             ),
                           ),
                         );
-                        return;
-                      }
-                      _store.updateMerchantProfile(
-                        storeName: _storeNameCtrl.text.trim(),
-                        taxCode: _taxCodeCtrl.text.trim(),
-                        businessType: _businessCategory,
-                        representativeName: _repNameCtrl.text.trim(),
-                        phone: _shopPhoneCtrl.text.trim(),
-                        bankName: _selectedBankName,
-                        bankAccount: _bankAccountCtrl.text.trim(),
-                        warehouseAddress: _shopAddressCtrl.text.trim(),
-                        warehouseIndex: safeWhIdx,
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Đã lưu cấu hình Điểm lấy hàng mặc định!',
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text(
-                      'Lưu thay đổi',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                      },
+                      child: const Text(
+                        'Lưu thay đổi',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
-                  ),
-                ],
+                    const Divider(height: 24),
+                    const Text(
+                      'Webhook API trạng thái vận đơn (HMAC-SHA256)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _webhookUrlCtrl,
+                      decoration: const InputDecoration(
+                        isDense: true,
+                        labelText: 'Endpoint nhận sự kiện (HTTPS POST)',
+                        hintText: 'https://erp.shop.vn/webhooks/gomau',
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _isTestingWebhook
+                          ? null
+                          : () async {
+                              _rebuildMerchantUi(
+                                () => _isTestingWebhook = true,
+                              );
+                              final msg =
+                                  await _store.saveAndTestMerchantWebhook(
+                                webhookUrl: _webhookUrlCtrl.text,
+                              );
+                              if (!context.mounted) return;
+                              _rebuildMerchantUi(
+                                () => _isTestingWebhook = false,
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(msg)),
+                              );
+                            },
+                      icon: const Icon(Icons.webhook_rounded, size: 16),
+                      label: Text(
+                        _isTestingWebhook
+                            ? 'Đang gửi gói tin chữ ký số...'
+                            : 'Lưu & Test Webhook',
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
-            final col3 = Container(
+            final mapCard = Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
                 color: Colors.white,
-                borderRadius: BorderRadius.all(Radius.zero),
+                borderRadius: const BorderRadius.all(Radius.zero),
                 border: Border.all(color: const Color(0xFF15131E)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    'Bản đồ vị trí',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 15,
-                    ),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 10,
+                    runSpacing: 6,
+                    children: [
+                      const Text(
+                        'Bản đồ Tọa độ Kho lấy hàng (Chạm lên bản đồ để ghim vị trí mới)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                        ),
+                      ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                            ),
+                            onPressed: () async {
+                              _rebuildMerchantUi(() {
+                                _isReverseGeocodingWarehouse = true;
+                              });
+                              final pos =
+                                  await _store.acquireCustomerDeviceGps();
+                              if (!mounted || !context.mounted) return;
+                              if (pos == null) {
+                                _rebuildMerchantUi(() {
+                                  _isReverseGeocodingWarehouse = false;
+                                });
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    backgroundColor: AppColors.danger,
+                                    content: Text(_store.liveGpsStatusMessage),
+                                    action: SnackBarAction(
+                                      label: 'Mở Cài đặt',
+                                      textColor: AppColors.acid,
+                                      onPressed: () {
+                                        unawaited(
+                                          _store.openDeviceLocationSettings(),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
+                              final addr =
+                                  _store.liveDeviceAddress.trim().isNotEmpty
+                                      ? _store.liveDeviceAddress.trim()
+                                      : await SmartDispatchEngine
+                                          .reverseGeocodeCoordinate(pos);
+                              if (!mounted) return;
+                              _rebuildMerchantUi(() {
+                                _pinnedWarehouseLocation = pos;
+                                _shopAddressCtrl.text = addr;
+                                _isReverseGeocodingWarehouse = false;
+                              });
+                            },
+                            icon: const Icon(
+                              Icons.my_location_rounded,
+                              size: 14,
+                            ),
+                            label: const Text(
+                              'Lấy GPS hiện tại cho Kho',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            _isReverseGeocodingWarehouse
+                                ? 'Đang giải mã địa chỉ GPS...'
+                                : (_pinnedWarehouseLocation != null || wh != null
+                                    ? 'Vĩ độ: ${activeWhCoord.latitude.toStringAsFixed(6)} | Kinh độ: ${activeWhCoord.longitude.toStringAsFixed(6)}'
+                                    : 'Chưa chọn vị trí kho'),
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF4A4754),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 10),
                   Container(
@@ -848,56 +1098,54 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                     clipBehavior: Clip.antiAlias,
                     child: Map3dPerspectiveWidget(
-                      height: 195,
+                      height: 430,
                       mode: MapViewMode.customerPreview,
                       is3dMode: _store.isMap3dEnabled,
                       speedKmh: 0,
                       onToggle3d: _store.toggleMap3d,
-                      routePoints: [
-                        wh.location,
-                        GeoPoint(
-                          latitude: wh.location.latitude + 0.0045,
-                          longitude: wh.location.longitude + 0.0055,
-                        ),
-                      ],
-                      pickupLabel: '📍 ${wh.name}',
-                      dropoffLabel: 'Vùng giao',
-                      nextTurnInstruction: 'Vị trí Kho lấy hàng: ${wh.name}',
-                      roadName: wh.address,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Kinh độ: ${wh.location.longitude.toStringAsFixed(6)} | Vĩ độ: ${wh.location.latitude.toStringAsFixed(6)}',
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF4A4754),
+                      routePoints: const [],
+                      singlePinPoint: _pinnedWarehouseLocation != null || wh != null
+                          ? activeWhCoord : null,
+                      singlePinLabel: '📍 $activeWhName',
+                      nextTurnInstruction:
+                          'Vị trí Kho lấy hàng: $activeWhName',
+                      roadName: activeWhAddr,
+                      onTapGeoPoint: (pt) async {
+                        _rebuildMerchantUi(() {
+                          _pinnedWarehouseLocation = pt;
+                          _isReverseGeocodingWarehouse = true;
+                        });
+                        final addr = await SmartDispatchEngine
+                            .reverseGeocodeCoordinate(pt);
+                        if (!mounted) return;
+                        _rebuildMerchantUi(() {
+                          _shopAddressCtrl.text = addr;
+                          _isReverseGeocodingWarehouse = false;
+                        });
+                      },
                     ),
                   ),
                 ],
               ),
             );
-            if (constraints.maxWidth < 860) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (constraints.maxWidth < 860) ...[
                   col1,
                   const SizedBox(height: 16),
                   col2,
-                  const SizedBox(height: 16),
-                  col3,
-                ],
-              );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 3, child: col1),
-                const SizedBox(width: 16),
-                Expanded(flex: 4, child: col2),
-                const SizedBox(width: 16),
-                Expanded(flex: 3, child: col3),
+                ] else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(flex: 4, child: col1),
+                      const SizedBox(width: 16),
+                      Expanded(flex: 6, child: col2),
+                    ],
+                  ),
+                const SizedBox(height: 16),
+                mapCard,
               ],
             );
           },
@@ -906,50 +1154,200 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
     );
   }
 
-  /// UC32: Tạo đơn gửi hàng (Khớp 100% uc32_tao_don_gui_1791015282651.jpg)
+  void _showAddMerchantWarehouseDialog(BuildContext context) {
+    final nameCtrl = TextEditingController();
+    final addrCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController(
+      text: _shopPhoneCtrl.text.trim(),
+    );
+    final openHoursCtrl = TextEditingController(text: '08:00 - 21:00');
+    bool setPrimary = _store.merchantPersonalWarehouses.isEmpty;
+    Animation<double>? dialogRouteAnim;
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        dialogRouteAnim ??= ModalRoute.of(dialogCtx)?.animation;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return AlertDialog(
+              title: const Text(
+                'Thêm Điểm lấy hàng / Kho nhánh mới',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Tên điểm lấy hàng',
+                        hintText: 'VD: Kho Quận 3 / Cửa hàng chi nhánh 2',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: addrCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Địa chỉ kho chi tiết',
+                        hintText: 'Nhập số nhà, tên đường, phường/quận, TP',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'SĐT liên hệ tại kho',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: openHoursCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Khung giờ mở cửa',
+                        hintText: '08:00 - 21:00',
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: setPrimary,
+                      title: const Text(
+                        'Đặt làm kho lấy hàng mặc định',
+                        style: TextStyle(fontSize: 12.5),
+                      ),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => setPrimary = v);
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogCtx).pop(),
+                  child: const Text('Hủy'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFF5E83),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () {
+                    final wName = nameCtrl.text.trim();
+                    final wAddr = addrCtrl.text.trim();
+                    if (wName.isEmpty || wAddr.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Vui lòng nhập đầy đủ Tên kho và Địa chỉ chi tiết!',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    final created = _store.addMerchantWarehouse(
+                      name: wName,
+                      address: wAddr,
+                      contactPhone: phoneCtrl.text.trim(),
+                      openHours: openHoursCtrl.text.trim().isNotEmpty
+                          ? openHoursCtrl.text.trim()
+                          : '08:00 - 21:00',
+                      isPrimary: setPrimary,
+                    );
+                    Navigator.of(dialogCtx).pop();
+                    final updatedList = _store.merchantPersonalWarehouses;
+                    final newIdx =
+                        updatedList.indexWhere((x) => x.id == created.id);
+                    _rebuildMerchantUi(() {
+                      if (newIdx >= 0) {
+                        _selectedWarehouseIndex = newIdx;
+                      }
+                      _warehouseNameCtrl.text = created.name;
+                      _shopAddressCtrl.text = created.address;
+                      _warehousePhoneCtrl.text = created.contactPhone;
+                      _warehouseOpenHoursCtrl.text = created.openHours;
+                      _warehouseIsPrimary = created.isPrimary;
+                      _pinnedWarehouseLocation = null;
+                    });
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Đã thêm điểm lấy hàng "${created.name}" (${created.id}) thành công!',
+                        ),
+                      ),
+                    );
+                  },
+                  child: const Text('Lưu điểm lấy hàng'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      SecurityAndBarcodeUtils.disposeControllersAfterDialog(
+        [nameCtrl, addrCtrl, phoneCtrl, openHoursCtrl],
+        dialogRouteAnim,
+      );
+    });
+  }
+
   Widget _buildSingleOrderCreateView() {
-    final warehouseOptions = _store.merchantWarehouses
-        .map((w) => '${w.name} - ${w.address}')
-        .toList();
-    final activeWarehouseLabel =
-        warehouseOptions.contains(_selectedWarehouseName)
-            ? _selectedWarehouseName
-            : (warehouseOptions.isNotEmpty
-                ? warehouseOptions.first
-                : _selectedWarehouseName);
-    final selectedWhObj = _store.merchantWarehouses
-        .where((w) => '${w.name} - ${w.address}' == activeWarehouseLabel)
-        .firstOrNull;
+    final personalWhs = _store.merchantPersonalWarehouses;
+    final safeWhSelectIdx = personalWhs.isEmpty
+        ? 0
+        : _selectedWarehouseIndex.clamp(0, personalWhs.length - 1);
+    final selectedWhObj =
+        personalWhs.isNotEmpty ? personalWhs[safeWhSelectIdx] : null;
+    final String? activeWarehouseId = selectedWhObj?.id;
+    final String? activeWarehouseLabel = selectedWhObj != null
+        ? '${selectedWhObj.name} - ${selectedWhObj.address}'
+        : null;
     final pickupAddr = selectedWhObj?.address ??
-        (_store.merchantWarehouses.isNotEmpty
-            ? _store.merchantWarehouses.first.address
+        (personalWhs.isNotEmpty
+            ? personalWhs.first.address
             : _shopAddressCtrl.text);
-    final pCoord = SmartDispatchEngine.resolveAddressToCoordinate(
-      pickupAddr,
-      fallback: const GeoPoint(latitude: 10.7731, longitude: 106.7012),
-    );
-    final dCoord = SmartDispatchEngine.resolveAddressToCoordinate(
-      _singleAddrCtrl.text,
-      fallback: const GeoPoint(latitude: 10.7850, longitude: 106.6880),
-    );
-    final rawAirMeters = GeoMath.distanceMeters(pCoord, dCoord);
-    final distMeters = (rawAirMeters * 1.28).round().clamp(1500, 45000);
-    final durationSec = ((distMeters / 1000.0) * 180).round();
+    final pCoord = selectedWhObj?.location ??
+        SmartDispatchEngine.resolveAddressToCoordinate(
+          pickupAddr,
+          fallback: const GeoPoint(latitude: 10.7725, longitude: 106.6980),
+        );
+    final hasDropoffInput = _pinnedSingleDropoffLocation != null ||
+        _singleAddrCtrl.text.trim().isNotEmpty;
+    final dCoord = _pinnedSingleDropoffLocation ??
+        (hasDropoffInput
+            ? SmartDispatchEngine.resolveAddressToCoordinate(
+                _singleAddrCtrl.text,
+                fallback: const GeoPoint(latitude: 10.7850, longitude: 106.6880),
+              )
+            : null);
+    final rawAirMeters =
+        dCoord != null ? GeoMath.distanceMeters(pCoord, dCoord) : 0.0;
+    final distMeters = dCoord != null
+        ? (rawAirMeters * 1.28).round().clamp(1500, 45000)
+        : 0;
+    final durationSec =
+        dCoord != null ? ((distMeters / 1000.0) * 180).round() : 0;
     final distKm = distMeters / 1000.0;
-    final etaMins = _merchantServiceType == DeliveryServiceType.express30m
-        ? (15 + (distKm * 3.5).round())
-        : _merchantServiceType == DeliveryServiceType.standard
-            ? (30 + (distKm * 4.5).round())
-            : (45 + (distKm * 6.0).round());
-    final weightVal = double.tryParse(_singleWeightCtrl.text) ?? 2.5;
-    double geofenceFee = 0;
-    for (final z in _store.geofenceZones) {
-      if (z.isActive &&
-          z.surchargeRate > 0 &&
-          GeoMath.isPointInPolygon(dCoord, z.boundary)) {
-        geofenceFee += z.surchargeRate;
-      }
-    }
+    final etaMins = dCoord == null
+        ? 0
+        : _merchantServiceType == DeliveryServiceType.express30m
+            ? (15 + (distKm * 3.5).round())
+            : _merchantServiceType == DeliveryServiceType.standard
+                ? (30 + (distKm * 4.5).round())
+                : _merchantServiceType == DeliveryServiceType.truck
+                    ? (40 + (distKm * 5.0).round())
+                    : (45 + (distKm * 6.0).round());
+    final weightVal = double.tryParse(_singleWeightCtrl.text) ?? 1.0;
+    double geofenceFee =
+        dCoord != null ? _store.computeGeofenceSurchargeForPoint(dCoord) : 0.0;
     if (_store.isWeatherSurchargeActive) {
       geofenceFee += _store.badWeatherSurchargeConfig;
     }
@@ -971,14 +1369,22 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
       voucherDiscount: 0,
       baseFareScale: (_store.baseFareConfig / 25000.0).clamp(0.4, 5.0),
       pricePerKmScale: (_store.pricePerKmConfig / 5000.0).clamp(0.4, 5.0),
+      configuredStandardPeakSurcharge: _store.peakHourSurchargeConfig,
     );
-    final codVal = double.tryParse(_singleCodCtrl.text.trim()) ?? 0.0;
-    final totalEstimated = merchantEst.totalAmount;
-    final previewMerchantRoute = SmartDispatchEngine.generateRoutePolyline(
-      pCoord,
-      dCoord,
-      segments: 10,
-    );
+    final cleanCodPreview =
+        _singleCodCtrl.text.trim().replaceAll('.', '').replaceAll(',', '');
+    final codVal = double.tryParse(cleanCodPreview) ?? 0.0;
+    final totalEstimated = dCoord != null ? merchantEst.totalAmount : 0.0;
+    final previewMerchantRoute = dCoord == null
+        ? const <GeoPoint>[]
+        : (_singleLiveOsrmPolyline != null &&
+                _singleLiveOsrmPolyline!.length >= 2
+            ? _singleLiveOsrmPolyline!
+            : SmartDispatchEngine.generateRoutePolyline(
+                pCoord,
+                dCoord,
+                segments: 10,
+              ));
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1018,26 +1424,31 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                     const SizedBox(height: 6),
                     DropdownButtonFormField<String>(
+                      key: ValueKey(
+                        '${personalWhs.length}_${activeWarehouseId ?? "NONE"}',
+                      ),
                       isExpanded: true,
-                      initialValue: activeWarehouseLabel,
+                      initialValue: activeWarehouseId,
                       decoration: const InputDecoration(
                         hintText: 'Chọn điểm lấy hàng',
                       ),
-                      items: warehouseOptions
+                      items: personalWhs
                           .map(
                             (w) => DropdownMenuItem(
-                              value: w,
-                              child: Text(w, overflow: TextOverflow.ellipsis),
+                              value: w.id,
+                              child: Text(
+                                '${w.name} - ${w.address}',
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           )
                           .toList(),
-                      onChanged: (v) {
-                        if (v != null) {
-                          final idx = warehouseOptions.indexOf(v);
+                      onChanged: (whId) {
+                        if (whId != null) {
+                          final idx =
+                              personalWhs.indexWhere((w) => w.id == whId);
                           _rebuildMerchantUi(() {
-                            _selectedWarehouseName = v;
-                            if (idx >= 0 &&
-                                idx < _store.merchantWarehouses.length) {
+                            if (idx >= 0 && idx < personalWhs.length) {
                               _selectedWarehouseIndex = idx;
                             }
                           });
@@ -1050,44 +1461,35 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _singleNameCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Tên người nhận',
-                            ),
+                    LayoutBuilder(
+                      builder: (context, formConstraints) {
+                        final isNarrowForm = formConstraints.maxWidth < 520;
+                        final nameField = TextField(
+                          controller: _singleNameCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Tên người nhận',
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _singlePhoneCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'SĐT',
-                            ),
+                        );
+                        final phoneField = TextField(
+                          controller: _singlePhoneCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'SĐT',
                           ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _singleAddrCtrl,
-                            onChanged: (_) => _rebuildMerchantUi(() {}),
-                            decoration: const InputDecoration(
-                              labelText:
-                                  'Địa chỉ giao (Thành phố, Quận/Huyện/Phường)',
-                              suffixIcon:
-                                  Icon(Icons.keyboard_arrow_down_rounded),
-                            ),
+                        );
+                        final addrField = TextField(
+                          controller: _singleAddrCtrl,
+                          onChanged: (_) => _rebuildMerchantUi(() {
+                            _pinnedSingleDropoffLocation = null;
+                            _singleLiveOsrmPolyline = null;
+                          }),
+                          decoration: const InputDecoration(
+                            labelText:
+                                'Địa chỉ giao (Hoặc chạm lên bản đồ bên cạnh)',
+                            suffixIcon:
+                                Icon(Icons.keyboard_arrow_down_rounded),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        OutlinedButton.icon(
+                        );
+                        final osmBtn = OutlinedButton.icon(
                           onPressed: _isSearchingMerchantNominatim
                               ? null
                               : () async {
@@ -1110,8 +1512,42 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                 ? 'Đang tìm...'
                                 : 'Tra cứu OSM',
                           ),
-                        ),
-                      ],
+                        );
+                        if (isNarrowForm) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              nameField,
+                              const SizedBox(height: 10),
+                              phoneField,
+                              const SizedBox(height: 10),
+                              addrField,
+                              const SizedBox(height: 8),
+                              osmBtn,
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(child: nameField),
+                                const SizedBox(width: 12),
+                                Expanded(child: phoneField),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(child: addrField),
+                                const SizedBox(width: 8),
+                                osmBtn,
+                              ],
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 6),
                     Wrap(
@@ -1129,9 +1565,11 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            onPressed: () => _rebuildMerchantUi(
-                              () => _singleAddrCtrl.text = place.fullAddress,
-                            ),
+                            onPressed: () => _rebuildMerchantUi(() {
+                              _singleAddrCtrl.text = place.fullAddress;
+                              _pinnedSingleDropoffLocation = place.location;
+                              _singleLiveOsrmPolyline = null;
+                            }),
                           ),
                         ),
                         ...SmartDispatchEngine.searchAddressSuggestions(
@@ -1143,9 +1581,11 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                               place.title,
                               style: const TextStyle(fontSize: 11),
                             ),
-                            onPressed: () => _rebuildMerchantUi(
-                              () => _singleAddrCtrl.text = place.fullAddress,
-                            ),
+                            onPressed: () => _rebuildMerchantUi(() {
+                              _singleAddrCtrl.text = place.fullAddress;
+                              _pinnedSingleDropoffLocation = place.location;
+                              _singleLiveOsrmPolyline = null;
+                            }),
                           ),
                         ),
                       ],
@@ -1156,75 +1596,96 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: DropdownButtonFormField<String>(
-                            isExpanded: true,
-                            initialValue: _singlePkgCategory,
-                            decoration: const InputDecoration(
-                              labelText: 'Loại hàng',
-                            ),
-                            items: const [
-                              'Quần áo, Điện tử',
-                              'Gốm sứ & Đồ dễ vỡ',
-                              'Thực phẩm khô',
-                              'Tài liệu / Hợp đồng',
-                            ]
-                                .map(
-                                  (c) => DropdownMenuItem(
-                                    value: c,
-                                    child: Text(
-                                      c,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
+                    LayoutBuilder(
+                      builder: (context, pkgConstraints) {
+                        final isNarrowPkg = pkgConstraints.maxWidth < 520;
+                        final catField = DropdownButtonFormField<String>(
+                          key: ValueKey(_singlePkgCategory),
+                          isExpanded: true,
+                          initialValue: _singlePkgCategory,
+                          decoration: const InputDecoration(
+                            labelText: 'Loại hàng',
+                          ),
+                          items: const [
+                            'Quần áo, Điện tử',
+                            'Gốm sứ & Đồ dễ vỡ',
+                            'Thực phẩm khô',
+                            'Tài liệu / Hợp đồng',
+                          ]
+                              .map(
+                                (c) => DropdownMenuItem(
+                                  value: c,
+                                  child: Text(
+                                    c,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                )
-                                .toList(),
-                            onChanged: (v) {
-                              if (v != null) {
-                                _rebuildMerchantUi(() => _singlePkgCategory = v);
-                              }
-                            },
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            if (v != null) {
+                              _rebuildMerchantUi(() => _singlePkgCategory = v);
+                            }
+                          },
+                        );
+                        final weightField = TextField(
+                          controller: _singleWeightCtrl,
+                          onChanged: (_) => _rebuildMerchantUi(() {}),
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Trọng lượng (kg)',
                           ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _singleWeightCtrl,
-                            onChanged: (_) => _rebuildMerchantUi(() {}),
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Trọng lượng (kg)',
+                        );
+                        final dimField = TextField(
+                          controller: _singleDimCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Kích thước (cm) (D x R x C)',
+                          ),
+                        );
+                        final codField = TextField(
+                          controller: _singleCodCtrl,
+                          onChanged: (_) => _rebuildMerchantUi(() {}),
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Tiền thu hộ COD',
+                            suffixText: 'VND',
+                          ),
+                        );
+                        if (isNarrowPkg) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              catField,
+                              const SizedBox(height: 10),
+                              weightField,
+                              const SizedBox(height: 10),
+                              dimField,
+                              const SizedBox(height: 10),
+                              codField,
+                            ],
+                          );
+                        }
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(child: catField),
+                                const SizedBox(width: 12),
+                                Expanded(child: weightField),
+                              ],
                             ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _singleDimCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Kích thước (cm) (D x R x C)',
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(child: dimField),
+                                const SizedBox(width: 12),
+                                Expanded(child: codField),
+                              ],
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            controller: _singleCodCtrl,
-                            onChanged: (_) => _rebuildMerchantUi(() {}),
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Tiền thu hộ COD',
-                              suffixText: 'VND',
-                            ),
-                          ),
-                        ),
-                      ],
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -1297,40 +1758,59 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       onChanged: (v) {
                         if (v != null) _rebuildMerchantUi(() => _merchantServiceType = v);
                       },
-                      child: const Row(
+                      child: const Column(
                         children: [
-                          Expanded(
-                            child: RadioListTile<DeliveryServiceType>(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              value: DeliveryServiceType.express30m,
-                              title: Text(
-                                'Giao nhanh',
-                                style: TextStyle(fontSize: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: RadioListTile<DeliveryServiceType>(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  value: DeliveryServiceType.express30m,
+                                  title: Text(
+                                    'Giao nhanh',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
                               ),
-                            ),
+                              Expanded(
+                                child: RadioListTile<DeliveryServiceType>(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  value: DeliveryServiceType.standard,
+                                  title: Text(
+                                    'Tiêu chuẩn',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          Expanded(
-                            child: RadioListTile<DeliveryServiceType>(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              value: DeliveryServiceType.standard,
-                              title: Text(
-                                'Tiêu chuẩn',
-                                style: TextStyle(fontSize: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: RadioListTile<DeliveryServiceType>(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  value: DeliveryServiceType.saving,
+                                  title: Text(
+                                    'Tiết kiệm',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                          Expanded(
-                            child: RadioListTile<DeliveryServiceType>(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              value: DeliveryServiceType.saving,
-                              title: Text(
-                                'Tiết kiệm',
-                                style: TextStyle(fontSize: 12),
+                              Expanded(
+                                child: RadioListTile<DeliveryServiceType>(
+                                  dense: true,
+                                  contentPadding: EdgeInsets.zero,
+                                  value: DeliveryServiceType.truck,
+                                  title: Text(
+                                    'Xe tải / Lớn',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
                               ),
-                            ),
+                            ],
                           ),
                         ],
                       ),
@@ -1351,17 +1831,42 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: Map3dPerspectiveWidget(
-                    height: 225,
+                    height: 420,
                     mode: MapViewMode.customerPreview,
                     is3dMode: _store.isMap3dEnabled,
                     speedKmh: 0,
                     onToggle3d: _store.toggleMap3d,
                     routePoints: previewMerchantRoute,
-                    pickupLabel: '[A] Kho Shop',
+                    singlePinPoint: dCoord == null && pickupAddr.trim().isNotEmpty ? pCoord : null,
+                    singlePinLabel: dCoord == null
+                        ? '[A] ${selectedWhObj?.name ?? "Kho lấy hàng"}'
+                        : null,
+                    pickupLabel: '[A] ${selectedWhObj?.name ?? "Kho Shop"}',
                     dropoffLabel: '[B] Điểm giao',
-                    nextTurnInstruction:
-                        'Lộ trình Kho → Điểm giao (${distKm.toStringAsFixed(1)} km)',
-                    roadName: _selectedWarehouseName,
+                    nextTurnInstruction: _isReverseGeocodingSingleDropoff
+                        ? 'Đang giải mã địa chỉ giao & tính lộ trình OSRM...'
+                        : (dCoord == null
+                            ? 'Chạm trực tiếp lên bản đồ để chọn điểm giao hàng [B]'
+                            : 'Lộ trình Kho → Điểm giao (${distKm.toStringAsFixed(1)} km)'),
+                    roadName: activeWarehouseLabel ?? pickupAddr,
+                    onTapGeoPoint: (pt) async {
+                      _rebuildMerchantUi(() {
+                        _pinnedSingleDropoffLocation = pt;
+                        _isReverseGeocodingSingleDropoff = true;
+                      });
+                      final addrFuture =
+                          SmartDispatchEngine.reverseGeocodeCoordinate(pt);
+                      final routeFuture =
+                          SmartDispatchEngine.fetchLiveOsrmRoute(pCoord, pt);
+                      final addr = await addrFuture;
+                      final routeRes = await routeFuture;
+                      if (!mounted) return;
+                      _rebuildMerchantUi(() {
+                        _singleAddrCtrl.text = addr;
+                        _singleLiveOsrmPolyline = routeRes.polylinePoints;
+                        _isReverseGeocodingSingleDropoff = false;
+                      });
+                    },
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -1451,6 +1956,22 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       ),
                     ),
                     onPressed: () {
+                      final activeMer = _store.activeMerchantRecord;
+                      if (activeMer == null ||
+                          activeMer.approvalStatus != 'Đã duyệt') {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              activeMer == null
+                                  ? 'Vui lòng gửi hồ sơ pháp lý Cửa hàng B2B và chờ Admin duyệt trước khi tạo đơn!'
+                                  : 'Hồ sơ cửa hàng B2B đang ở trạng thái "${activeMer.approvalStatus}". Vui lòng chờ Admin duyệt KYC trước khi tạo đơn!',
+                            ),
+                          ),
+                        );
+                        _rebuildMerchantUi(() => _selectedScreenIndex = 0);
+                        return;
+                      }
                       final rName = _singleNameCtrl.text.trim();
                       final rPhone =
                           _singlePhoneCtrl.text.trim().replaceAll(' ', '');
@@ -1465,11 +1986,82 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         );
                         return;
                       }
-                      if (!RegExp(r'^(\+84|0)[0-9]{8,10}$').hasMatch(rPhone)) {
+                      if (pickupAddr.trim().toLowerCase() ==
+                          rAddr.trim().toLowerCase()) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              'Địa chỉ giao hàng không được trùng với địa chỉ kho lấy hàng!',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      final targetDropoffCoord = dCoord ??
+                          SmartDispatchEngine.resolveAddressToCoordinate(
+                            rAddr,
+                            fallback: const GeoPoint(
+                              latitude: 10.7725,
+                              longitude: 106.6980,
+                            ),
+                          );
+                      final restrictedZone =
+                          _store.findActiveRestrictedZoneForRoute(
+                        pCoord,
+                        targetDropoffCoord,
+                      );
+                      if (restrictedZone != null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              'Không thể tạo đơn: Lộ trình đi qua khu vực hạn chế giao nhận (${restrictedZone.zoneName})!',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      if (!RegExp(r'^(?:\+84|0)[0-9]{9}$').hasMatch(rPhone)) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text(
                               'Số điện thoại người nhận không hợp lệ (gồm 10 chữ số)!',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      final parsedWeight =
+                          double.tryParse(_singleWeightCtrl.text.trim());
+                      if (parsedWeight == null ||
+                          parsedWeight <= 0 ||
+                          parsedWeight > 500) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              'Khối lượng kiện hàng phải lớn hơn 0 và tối đa 500 kg!',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      final cleanCodText = _singleCodCtrl.text
+                          .trim()
+                          .replaceAll('.', '')
+                          .replaceAll(',', '');
+                      final parsedCod = double.tryParse(
+                        cleanCodText.isEmpty ? '0' : cleanCodText,
+                      );
+                      if (parsedCod == null || parsedCod < 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppColors.danger,
+                            content: Text(
+                              parsedCod == null
+                                  ? 'Số tiền thu hộ COD không hợp lệ (chỉ nhập chữ số)!'
+                                  : 'Số tiền thu hộ COD không được là số âm!',
                             ),
                           ),
                         );
@@ -1494,6 +2086,16 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         serviceType: _merchantServiceType,
                         codAmount: codVal,
                         paymentMethod: _feePayer,
+                        customDistanceMeters: distMeters > 0 ? distMeters : null,
+                        customDurationSeconds:
+                            durationSec > 0 ? durationSec : null,
+                        isFragileTag: _isFragile,
+                        isKeepColdTag: _isKeepCold,
+                        customCustomerName:
+                            _store.activeMerchantRecord?.storeName ??
+                                _store.merchantStoreName,
+                        customPickupLocation: pCoord,
+                        customDropoffLocation: targetDropoffCoord,
                       );
                       _rebuildMerchantUi(() {
                         _singleNameCtrl.clear();
@@ -1501,6 +2103,8 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         _singleAddrCtrl.clear();
                         _singleNoteCtrl.clear();
                         _singleCodCtrl.text = '0';
+                        _pinnedSingleDropoffLocation = null;
+                        _singleLiveOsrmPolyline = null;
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
@@ -1572,6 +2176,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
 
   /// UC33: Tạo đơn hàng loạt từ Excel/CSV & Kiểm lỗi tự động (Chuẩn uc33_don_hang_loat_v2)
   Widget _buildBatchCsvUploadAndValidationView() {
+    final personalWhs = _store.merchantPersonalWarehouses;
     final validCount = _parsedRows.where((r) => r.isValid).length;
     final errorCount = _parsedRows.length - validCount;
 
@@ -1636,11 +2241,15 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                     OutlinedButton.icon(
                       onPressed: () {
+                        final sample4Cols = _csvInputCtrl.text.trim().isNotEmpty
+                            ? _csvInputCtrl.text.trim()
+                            : 'Phạm Thị Bảy,0902345678,45 Lê Duẩn Quận 1 TP.HCM,450000\n'
+                                'Nguyễn Minh Quân,0913456789,210 Điện Biên Phủ Quận 3 TP.HCM,320000';
                         final path = _store.exportReportFileToDisk(
                           fileName: 'Mau_Tao_Don_4_Cot.csv',
                           content:
                               'ten_nguoi_nhan,sdt_nguoi_nhan,dia_chi_giao,tien_cod_vnd\n'
-                              '${_csvInputCtrl.text}',
+                              '$sample4Cols',
                         );
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
@@ -1653,15 +2262,38 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       icon: const Icon(Icons.description_outlined, size: 16),
                       label: const Text('Tải mẫu Rút gọn (4 cột .csv)'),
                     ),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final picked = await SecurityAndBarcodeUtils
+                            .pickLocalCsvFileContent();
+                        if (!mounted || picked == null) return;
+                        _rebuildMerchantUi(() {
+                          _csvInputCtrl.text = picked.content.trim();
+                          _parseCsvBatch();
+                        });
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Đã nạp tệp CSV từ máy: ${picked.filePath}',
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.folder_open_outlined, size: 16),
+                      label: const Text('Chọn tệp CSV từ máy'),
+                    ),
                   ],
                 ),
-                if (_store.merchantWarehouses.isNotEmpty) ...[
+                if (personalWhs.isNotEmpty) ...[
                   const SizedBox(height: 12),
                   DropdownButtonFormField<int>(
+                    key: ValueKey(
+                      '${personalWhs.length}_${_selectedWarehouseIndex.clamp(0, personalWhs.length - 1)}',
+                    ),
                     isExpanded: true,
                     initialValue: _selectedWarehouseIndex.clamp(
                       0,
-                      _store.merchantWarehouses.length - 1,
+                      personalWhs.length - 1,
                     ),
                     decoration: const InputDecoration(
                       isDense: true,
@@ -1673,9 +2305,9 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       ),
                     ),
                     items: List.generate(
-                      _store.merchantWarehouses.length,
+                      personalWhs.length,
                       (idx) {
-                        final wh = _store.merchantWarehouses[idx];
+                        final wh = personalWhs[idx];
                         return DropdownMenuItem<int>(
                           value: idx,
                           child: Text(
@@ -1687,11 +2319,45 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                     onChanged: (idx) {
                       if (idx != null) {
-                        _rebuildMerchantUi(() => _selectedWarehouseIndex = idx);
+                        _rebuildMerchantUi(() {
+                          _selectedWarehouseIndex = idx;
+                          _parseCsvBatch();
+                        });
                       }
                     },
                   ),
                 ],
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Text(
+                      'Người trả cước lô CSV:',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Người gửi trả phí'),
+                      selected: _batchFeePayer == 'Người gửi trả phí',
+                      selectedColor: const Color(0xFFEDE9FE),
+                      onSelected: (_) => _rebuildMerchantUi(
+                        () => _batchFeePayer = 'Người gửi trả phí',
+                      ),
+                    ),
+                    ChoiceChip(
+                      label: const Text('Người nhận trả phí'),
+                      selected: _batchFeePayer == 'Người nhận trả phí',
+                      selectedColor: const Color(0xFFEDE9FE),
+                      onSelected: (_) => _rebuildMerchantUi(
+                        () => _batchFeePayer = 'Người nhận trả phí',
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 14),
                 Container(
                   width: double.infinity,
@@ -1806,6 +2472,8 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       DataColumn(label: Text('Người nhận')),
                       DataColumn(label: Text('Số điện thoại')),
                       DataColumn(label: Text('Địa chỉ giao hàng')),
+                      DataColumn(label: Text('KL (kg)')),
+                      DataColumn(label: Text('Dịch vụ')),
                       DataColumn(label: Text('COD (đ)')),
                       DataColumn(label: Text('Trạng thái kiểm lỗi')),
                     ],
@@ -1828,6 +2496,8 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           ),
                           DataCell(Text(r.phone)),
                           DataCell(Text(r.address)),
+                          DataCell(Text('${r.weightKg.toStringAsFixed(1)} kg')),
+                          DataCell(Text(r.serviceType.displayName)),
                           DataCell(
                             Text(CurrencyFormatter.formatVnd(r.codAmount)),
                           ),
@@ -1879,14 +2549,33 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     onPressed: validCount == 0
                         ? null
                         : () {
-                            final safeWhIdx = _store.merchantWarehouses.isEmpty
+                            final activeMer = _store.activeMerchantRecord;
+                            if (activeMer == null ||
+                                activeMer.approvalStatus != 'Đã duyệt') {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  backgroundColor: AppColors.danger,
+                                  content: Text(
+                                    activeMer == null
+                                        ? 'Vui lòng gửi hồ sơ pháp lý Cửa hàng B2B và chờ Admin duyệt trước khi tạo đơn hàng loạt!'
+                                        : 'Hồ sơ cửa hàng B2B đang ở trạng thái "${activeMer.approvalStatus}". Vui lòng chờ Admin duyệt KYC trước khi tạo đơn hàng loạt!',
+                                  ),
+                                ),
+                              );
+                              _rebuildMerchantUi(
+                                () => _selectedScreenIndex = 0,
+                              );
+                              return;
+                            }
+                            final safeWhIdx = personalWhs.isEmpty
                                 ? 0
                                 : _selectedWarehouseIndex.clamp(
                                     0,
-                                    _store.merchantWarehouses.length - 1,
+                                    personalWhs.length - 1,
                                   );
-                            final selectedWhAddr =
-                                _store.merchantWarehouses[safeWhIdx].address;
+                            final selectedWhAddr = personalWhs.isNotEmpty
+                                ? personalWhs[safeWhIdx].address
+                                : _shopAddressCtrl.text.trim();
                             for (final r
                                 in _parsedRows.where((x) => x.isValid)) {
                               _store.createNewOrder(
@@ -1898,18 +2587,24 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                 recipientPhone: r.phone,
                                 packageDescription: r.packageDescription,
                                 weightKg: r.weightKg,
-                                dimensionsCm: '25x20x10 cm',
+                                dimensionsCm: '30 x 20 x 15 cm',
                                 serviceType: r.serviceType,
                                 codAmount: r.codAmount,
-                                paymentMethod: r.codAmount > 0
-                                    ? 'Tiền mặt (COD)'
-                                    : 'Đã thanh toán trước',
+                                paymentMethod: _batchFeePayer,
+                                customCustomerName:
+                                    _store.activeMerchantRecord?.storeName ??
+                                        _store.merchantStoreName,
                               );
                             }
+                            final createdTotal = validCount;
+                            _rebuildMerchantUi(() {
+                              _csvInputCtrl.clear();
+                              _parsedRows = [];
+                            });
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Đã tạo thành công $validCount đơn hàng hợp lệ vào cơ sở dữ liệu!',
+                                  'Đã tạo thành công $createdTotal đơn hàng hợp lệ vào cơ sở dữ liệu!',
                                 ),
                               ),
                             );
@@ -1931,11 +2626,58 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
 
   /// UC34: Quản lý & In phiếu gửi hàng A6 (Chuẩn uc34_in_phieu_v2)
   Widget _buildWaybillA6PrintView() {
+    final shopOrders = _store.merchantPersonalOrders;
+    final personalWhs = _store.merchantPersonalWarehouses;
+    final fallbackWhAddr =
+        personalWhs.isNotEmpty ? personalWhs.first.address : '';
+    final activeStoreName =
+        _store.activeMerchantRecord?.storeName ?? _store.merchantStoreName;
+    if (shopOrders.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.all(Radius.zero),
+          border: Border.all(color: AppColors.divider),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Chưa có vận đơn nào thuộc cửa hàng để in phiếu A6',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Cửa hàng "$activeStoreName" hiện chưa khởi tạo đơn hàng nào. Vui lòng tạo đơn lẻ hoặc tải file CSV hàng loạt trước khi in phiếu gửi hàng.',
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 14),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF5E83),
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () =>
+                  _rebuildMerchantUi(() => _selectedScreenIndex = 2),
+              icon: const Icon(Icons.add_box_outlined, size: 18),
+              label: const Text('Mở Tạo đơn gửi hàng'),
+            ),
+          ],
+        ),
+      );
+    }
     final safeIdx = _selectedWaybillOrderIndex.clamp(
       0,
-      _store.orders.length - 1,
+      shopOrders.length - 1,
     );
-    final ord = _store.orders[safeIdx];
+    final ord = shopOrders[safeIdx];
+    final recipientShipFee =
+        ord.paymentMethod == 'Người nhận trả phí' ? ord.totalAmount : 0.0;
+    final totalCollectFromRecipient = ord.codAmount + recipientShipFee;
     return LayoutBuilder(
       builder: (context, constraints) {
         final colLeft = Container(
@@ -1969,15 +2711,19 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       final savedPath = await SecurityAndBarcodeUtils
                           .exportA6LabelToHtmlFile(
                         trackingCode: ord.trackingCode,
-                        storeName: _store.merchantStoreName,
+                        barcodePayload: 'GOMAU-${ord.id}-${ord.trackingCode}',
+                        qrPayload:
+                            'GOMAU|${ord.trackingCode}|${ord.recipientPhone}|THU:${totalCollectFromRecipient.toStringAsFixed(0)}',
+                        storeName: activeStoreName,
                         warehouseAddress: ord.pickupAddress.isNotEmpty
                             ? ord.pickupAddress
-                            : _store.merchantWarehouses.first.address,
+                            : fallbackWhAddr,
                         recipientName: ord.recipientName,
                         recipientPhone: ord.recipientPhone,
                         dropoffAddress: ord.dropoffAddress,
                         packageDescription: ord.packageDescription,
                         codAmount: ord.codAmount,
+                        recipientShippingFee: recipientShipFee,
                       );
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -2008,7 +2754,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     DataColumn(label: Text('Thu hộ COD')),
                     DataColumn(label: Text('Trạng thái')),
                   ],
-                  rows: _store.orders.asMap().entries.map((entry) {
+                  rows: shopOrders.asMap().entries.map((entry) {
                     final rowIdx = entry.key;
                     final o = entry.value;
                     final isSelected = rowIdx == safeIdx;
@@ -2083,28 +2829,28 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                       children: [
                         Expanded(
                           child: Code128BarcodeWidget(
-                            data: 'GHN-987654321-${ord.trackingCode}',
+                            data: 'GOMAU-${ord.id}-${ord.trackingCode}',
                             height: 42,
                           ),
                         ),
                         const SizedBox(width: 10),
                         QrMatrixPainterWidget(
                           payload:
-                              '${ord.trackingCode}|${ord.recipientPhone}|${ord.codAmount.toStringAsFixed(0)}',
+                              'GOMAU|${ord.trackingCode}|${ord.recipientPhone}|THU:${totalCollectFromRecipient.toStringAsFixed(0)}',
                           size: 62,
                         ),
                       ],
                     ),
                     const Divider(),
                     Text(
-                      'NGƯỜI GỬI: ${_store.merchantStoreName}',
+                      'NGƯỜI GỬI: $activeStoreName',
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 12,
                       ),
                     ),
                     Text(
-                      'Kho lấy: ${ord.pickupAddress.isNotEmpty ? ord.pickupAddress : _store.merchantWarehouses.first.address}',
+                      'Kho lấy: ${ord.pickupAddress.isNotEmpty ? ord.pickupAddress : fallbackWhAddr}',
                       style: const TextStyle(fontSize: 11.5),
                     ),
                     const Divider(),
@@ -2133,12 +2879,32 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         Text(
                           'COD: ${CurrencyFormatter.formatVnd(ord.codAmount)}',
                           style: const TextStyle(
-                            fontWeight: FontWeight.w900,
-                            color: AppColors.danger,
-                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 12,
                           ),
                         ),
                       ],
+                    ),
+                    if (recipientShipFee > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          'Cước người nhận trả: +${CurrencyFormatter.formatVnd(recipientShipFee)}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF5B33E6),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'TỔNG THU NGƯỜI NHẬN: ${CurrencyFormatter.formatVnd(totalCollectFromRecipient)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: AppColors.danger,
+                        fontSize: 13,
+                      ),
                     ),
                   ],
                 ),

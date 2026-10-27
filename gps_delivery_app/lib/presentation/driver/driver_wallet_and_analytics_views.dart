@@ -3,7 +3,40 @@ part of 'driver_subsystem_views.dart';
 extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
   /// UC18: Thu nhập và rút tiền (Khớp 100% anh_sua_lai/uc18_thu_nhap.jpg)
   Widget _buildDriverWalletView() {
-    final deliveredOrders = _store.orders
+    final activeDrv = _store.activeDriverRecord;
+    final isApprovedDriver =
+        activeDrv != null && activeDrv.approvalStatus == 'Đã duyệt';
+    final availableWallet = activeDrv?.walletBalance ?? 0.0;
+    final personalOrders = _store.driverPersonalOrders;
+    final myTransactions = _store.driverPersonalTransactions;
+    final tipByOrderCode = <String, double>{};
+    for (final tx in myTransactions) {
+      if (tx.id.startsWith('TIP-') && tx.accountMasked.isNotEmpty) {
+        tipByOrderCode[tx.accountMasked] =
+            (tipByOrderCode[tx.accountMasked] ?? 0.0) + tx.amount;
+      }
+    }
+    double tripDriverEarning(ActiveOrderRecord o) {
+      final tipBonus = tipByOrderCode[o.trackingCode] ?? 0.0;
+      if (o.paymentStatus == 'RETURNED') {
+        return ((o.deliveryFee + o.surchargeFee) * 0.40).roundToDouble() +
+            tipBonus;
+      }
+      if (o.status == OrderStatus.delivered) {
+        return ((o.deliveryFee + o.surchargeFee) * 0.80).roundToDouble() +
+            tipBonus;
+      }
+      return 0.0;
+    }
+
+    final settledOrders = personalOrders
+        .where(
+          (o) =>
+              o.status == OrderStatus.delivered ||
+              o.paymentStatus == 'RETURNED',
+        )
+        .toList();
+    final deliveredOrders = personalOrders
         .where(
           (o) =>
               o.status == OrderStatus.delivered &&
@@ -11,84 +44,70 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
         )
         .toList();
     final now = DateTime.now();
-    final todayPrefix = now.day.toString().padLeft(2, '0');
-    int? daysSinceDeliveredOrder(ActiveOrderRecord o) {
-      if (o.createdDateLabel == 'Hôm nay' ||
-          o.createdDateLabel.startsWith(todayPrefix)) {
-        return 0;
-      }
-      if (o.createdDateLabel == 'Hôm qua') return 1;
-      final parts = o.createdDateLabel.split('/');
-      if (parts.length == 3) {
-        final d = int.tryParse(parts[0]);
-        final m = int.tryParse(parts[1]);
-        final y = int.tryParse(parts[2]);
-        if (d != null && m != null && y != null) {
-          return DateTime(now.year, now.month, now.day)
-              .difference(DateTime(y, m, d))
-              .inDays
-              .abs();
-        }
-      }
-      return null;
+
+    double sumOrdersInDayRange(int minDaysAgo, int maxDaysAgo) {
+      return settledOrders
+          .where((o) {
+            final d = o.daysAgoFrom(now);
+            return d >= minDaysAgo && d <= maxDaysAgo;
+          })
+          .fold<double>(0, (sum, o) => sum + tripDriverEarning(o));
     }
 
-    final todayMatchedOrders = deliveredOrders
-        .where((o) => daysSinceDeliveredOrder(o) == 0)
-        .toList();
-    final todayDeliveredSum = todayMatchedOrders.fold<double>(
-      0,
-      (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-    );
-    final weekMatchedOrders = deliveredOrders.where((o) {
-      final diff = daysSinceDeliveredOrder(o);
-      return diff != null && diff <= 7;
-    }).toList();
-    final weekDeliveredSum = weekMatchedOrders.fold<double>(
-      0,
-      (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-    );
-    final deliveredSum = deliveredOrders.fold<double>(
-      0,
-      (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-    );
+    final todayDeliveredSum = sumOrdersInDayRange(0, 0);
+    final weekDeliveredSum = sumOrdersInDayRange(0, 6);
+    final monthDeliveredSum = sumOrdersInDayRange(0, 29);
     final periodEarning = _incomePeriod == 'Ngày'
         ? todayDeliveredSum
         : _incomePeriod == 'Tuần'
             ? weekDeliveredSum
-            : deliveredSum;
-    final yesterdaySum = deliveredOrders
-        .where((o) => daysSinceDeliveredOrder(o) == 1)
-        .fold<double>(
-          0,
-          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-        );
-    final olderDeliveredSum = deliveredOrders
-        .where((o) {
-          final diff = daysSinceDeliveredOrder(o);
-          return diff == null || diff > 1;
-        })
-        .fold<double>(
-          0,
-          (sum, o) => sum + ((o.deliveryFee + o.surchargeFee) * 0.80),
-        );
-    final driverWithdrawnSum = _store.withdrawalRequests
-        .where((w) => w.ownerRole == 'Tài xế' && w.status != 'Từ chối')
-        .fold<double>(0, (sum, w) => sum + w.amount);
-    final w1Val = olderDeliveredSum;
-    final w2Val = driverWithdrawnSum;
-    final w3Val = yesterdaySum;
-    final w4Val = todayDeliveredSum;
-    final maxW = [w1Val, w2Val, w3Val, w4Val, 1.0].reduce((a, b) => a > b ? a : b);
+            : monthDeliveredSum;
+
+    final List<(String, double)> rawBuckets = _incomePeriod == 'Ngày'
+        ? [
+            ('3 ngày trước', sumOrdersInDayRange(3, 3)),
+            ('2 ngày trước', sumOrdersInDayRange(2, 2)),
+            ('Hôm qua', sumOrdersInDayRange(1, 1)),
+            ('Hôm nay', todayDeliveredSum),
+          ]
+        : _incomePeriod == 'Tuần'
+            ? [
+                ('Tuần -3', sumOrdersInDayRange(21, 27)),
+                ('Tuần -2', sumOrdersInDayRange(14, 20)),
+                ('Tuần trước', sumOrdersInDayRange(7, 13)),
+                ('Tuần này', weekDeliveredSum),
+              ]
+            : [
+                ('Tuần 1', sumOrdersInDayRange(21, 29)),
+                ('Tuần 2', sumOrdersInDayRange(14, 20)),
+                ('Tuần 3', sumOrdersInDayRange(7, 13)),
+                ('7 ngày qua', weekDeliveredSum),
+              ];
+    final maxW = [
+      for (final b in rawBuckets) b.$2,
+      1.0,
+    ].reduce((a, b) => a > b ? a : b);
     String fmtShort(double v) => v >= 1000000
         ? '${(v / 1000000).toStringAsFixed(2)}M'
         : '${(v / 1000).toStringAsFixed(0)}k';
+    double barRatio(double v) => v <= 0 ? 0.03 : (v / maxW).clamp(0.15, 1.0);
     final weeklyBars = [
-      ('Trước đó', (w1Val / maxW).clamp(0.15, 1.0), fmtShort(w1Val)),
-      ('Đã rút', (w2Val / maxW).clamp(0.15, 1.0), fmtShort(w2Val)),
-      ('Hôm qua', (w3Val / maxW).clamp(0.15, 1.0), fmtShort(w3Val)),
-      ('Hôm nay', (w4Val / maxW).clamp(0.15, 1.0), fmtShort(w4Val)),
+      for (final b in rawBuckets) (b.$1, barRatio(b.$2), fmtShort(b.$2)),
     ];
+    final linkedBankLabel = (activeDrv != null &&
+            activeDrv.bankName.trim().isNotEmpty &&
+            activeDrv.bankAccount.trim().isNotEmpty)
+        ? '${activeDrv.bankName.trim()} - ${activeDrv.bankAccount.trim()}'
+        : '';
+    final bankOptions = <String>{
+      if (linkedBankLabel.isNotEmpty)
+        linkedBankLabel
+      else
+        'Chưa liên kết ngân hàng (Cập nhật tại Hồ sơ KYC)',
+    }.toList();
+    final effectiveBank = bankOptions.contains(_selectedBank)
+        ? _selectedBank
+        : bankOptions.first;
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
       clipBehavior: Clip.antiAlias,
@@ -128,7 +147,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     borderRadius: BorderRadius.all(Radius.zero),
                   ),
                   child: Text(
-                    'Đã hoàn tất ${deliveredOrders.length}/${_store.orders.length} chuyến • Số dư khả dụng: ${CurrencyFormatter.formatVnd(_store.driverWalletBalance)}',
+                    'Đã hoàn tất ${deliveredOrders.length}/${personalOrders.length} chuyến • Số dư khả dụng: ${CurrencyFormatter.formatVnd(availableWallet)}',
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 11.5,
@@ -232,89 +251,139 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     border: Border.all(color: const Color(0xFF15131E)),
                   ),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Row(
+                      Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 10,
                         children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Số dư ví có thể rút',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Color(0xFF4A4754),
-                                  ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Số dư ví có thể rút',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF4A4754),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  CurrencyFormatter.formatVnd(
-                                    _store.driverWalletBalance,
-                                  ),
-                                  style: const TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
-                                    color: Color(0xFF15131E),
-                                  ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                CurrencyFormatter.formatVnd(
+                                  (availableWallet - 200000.0)
+                                      .clamp(0.0, double.infinity),
                                 ),
-                              ],
-                            ),
+                                style: const TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w900,
+                                  color: Color(0xFF15131E),
+                                ),
+                              ),
+                              Text(
+                                'Tổng số dư: ${CurrencyFormatter.formatVnd(availableWallet)} (Giữ tối thiểu 200.000đ ký quỹ)',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Color(0xFF4A4754),
+                                ),
+                              ),
+                            ],
                           ),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF15131E),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 12,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.all(Radius.zero),
-                              ),
-                            ),
-                            onPressed: () {
-                              final amt = double.tryParse(
-                                _withdrawAmountCtrl.text
-                                    .trim()
-                                    .replaceAll(RegExp(r'[^0-9.]'), ''),
-                              );
-                              if (amt == null || amt < 50000) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Vui lòng nhập số tiền rút hợp lệ (Tối thiểu 50.000đ)!',
-                                    ),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF15131E),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                    vertical: 12,
                                   ),
-                                );
-                                return;
-                              }
-                              final parts = _selectedBank.split(' - ');
-                              final parsedBank =
-                                  parts.isNotEmpty ? parts.first.trim() : 'Vietcombank';
-                              final parsedMask = parts.length > 1
-                                  ? parts.last.trim()
-                                  : '007100****889';
-                              final ok = _store.requestWithdrawal(
-                                ownerName: _store.activeDriverName,
-                                ownerRole: 'Tài xế',
-                                amount: amt,
-                                bankName: parsedBank,
-                                accountMasked: parsedMask,
-                              );
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    ok
-                                        ? 'Đã gửi yêu cầu rút ${CurrencyFormatter.formatVnd(amt)} về $_selectedBank!'
-                                        : 'Không thể rút tiền: Số dư ví sau khi rút phải giữ tối thiểu 200.000đ tiền ký quỹ.',
+                                  shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.all(Radius.zero),
                                   ),
                                 ),
-                              );
-                            },
-                            child: const Text(
-                              'Rút tiền',
-                              style: TextStyle(fontWeight: FontWeight.w800),
-                            ),
+                                onPressed: () {
+                                  if (!isApprovedDriver) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        backgroundColor: AppColors.danger,
+                                        content: Text(
+                                          activeDrv == null
+                                              ? 'Vui lòng gửi hồ sơ KYC Tài xế và chờ Admin duyệt trước khi rút tiền!'
+                                              : 'Hồ sơ Tài xế đang ở trạng thái "${activeDrv.approvalStatus}". Chỉ tài khoản Đã duyệt KYC mới được rút tiền!',
+                                        ),
+                                      ),
+                                    );
+                                    _rebuildDriverUi(
+                                      () => _selectedScreenIndex = 0,
+                                    );
+                                    return;
+                                  }
+                                  if (linkedBankLabel.isEmpty) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        backgroundColor: AppColors.warning,
+                                        content: Text(
+                                          'Vui lòng cập nhật Ngân hàng & Số tài khoản nhận tiền tại Hồ sơ KYC trước khi rút tiền!',
+                                        ),
+                                      ),
+                                    );
+                                    _rebuildDriverUi(
+                                      () => _selectedScreenIndex = 0,
+                                    );
+                                    return;
+                                  }
+                                  final amt = double.tryParse(
+                                    _withdrawAmountCtrl.text
+                                        .trim()
+                                        .replaceAll(RegExp(r'\.0+$'), '')
+                                        .replaceAll(RegExp(r'[^0-9]'), ''),
+                                  );
+                                  if (amt == null || amt < 50000) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Vui lòng nhập số tiền rút hợp lệ (Tối thiểu 50.000đ)!',
+                                        ),
+                                      ),
+                                    );
+                                    return;
+                                  }
+                                  final parts = effectiveBank.split(' - ');
+                                  final parsedBank = parts.first.trim();
+                                  final parsedMask = parts.length > 1
+                                      ? parts.last.trim()
+                                      : activeDrv.bankAccount;
+                                  final ok = _store.requestWithdrawal(
+                                    ownerName: activeDrv.fullName,
+                                    ownerRole: 'Tài xế',
+                                    amount: amt,
+                                    bankName: parsedBank,
+                                    accountMasked: parsedMask,
+                                  );
+                                  if (ok) {
+                                    _withdrawAmountCtrl.clear();
+                                  }
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        ok
+                                            ? 'Đã gửi yêu cầu rút ${CurrencyFormatter.formatVnd(amt)} về $effectiveBank!'
+                                            : 'Không thể rút tiền: Số dư ví sau khi rút phải giữ tối thiểu 200.000đ tiền ký quỹ.',
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: const Text(
+                                  'Rút tiền',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -326,20 +395,19 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                             keyboardType: TextInputType.number,
                             decoration: const InputDecoration(
                               isDense: true,
-                              labelText: 'Số tiền rút (VNĐ)',
+                              labelText: 'Số tiền rút / nạp (VNĐ)',
+                              hintText: 'VD: 500000',
                             ),
                           );
                           final bankField = DropdownButtonFormField<String>(
+                            key: ValueKey(effectiveBank),
                             isExpanded: true,
-                            initialValue: _selectedBank,
+                            initialValue: effectiveBank,
                             decoration: const InputDecoration(
                               isDense: true,
                               labelText: 'Ngân hàng liên kết',
                             ),
-                            items: [
-                              'Vietcombank - 007100****889',
-                              'BIDV - 314100****221',
-                            ]
+                            items: bankOptions
                                 .map(
                                   (b) => DropdownMenuItem(
                                     value: b,
@@ -379,27 +447,29 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     ],
                   ),
                 ),
-                if (_store.withdrawalRequests
-                    .any((w) => w.ownerRole == 'Tài xế')) ...[
+                if (myTransactions.isNotEmpty) ...[
                   const SizedBox(height: 14),
                   const Text(
-                    'Lịch sử lệnh rút tiền Ví Tài xế (Đồng bộ Admin UC29)',
+                    'Sổ cái biến động số dư & Lệnh rút tiền Ví Tài xế',
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 14.5,
                     ),
                   ),
                   const SizedBox(height: 8),
-                  ..._store.withdrawalRequests
-                      .where((w) => w.ownerRole == 'Tài xế')
-                      .map((w) {
-                    final isApproved = w.status == 'Đã duyệt';
+                  ...myTransactions.map((w) {
+                    final isCredit = !w.id.startsWith('WD-');
+                    final isApproved =
+                        w.status == 'Đã duyệt' ||
+                        w.status == 'Đã chuyển' ||
+                        isCredit;
                     final isRejected = w.status == 'Từ chối';
                     final statusColor = isApproved
                         ? const Color(0xFF14B866)
                         : isRejected
                             ? AppColors.danger
                             : const Color(0xFFD97706);
+                    final signPrefix = isCredit ? '+' : '-';
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       padding: const EdgeInsets.symmetric(
@@ -418,14 +488,17 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  '#${w.id} • ${CurrencyFormatter.formatVnd(w.amount)}',
-                                  style: const TextStyle(
+                                  '#${w.id} • $signPrefix${CurrencyFormatter.formatVnd(w.amount)}',
+                                  style: TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 13,
+                                    color: isCredit
+                                        ? const Color(0xFF14B866)
+                                        : const Color(0xFF15131E),
                                   ),
                                 ),
                                 Text(
-                                  '${w.bankName} (${w.accountMasked}) • ${w.requestDate}',
+                                  '${w.ownerRole} • ${w.bankName} (${w.accountMasked}) • ${w.requestDate}',
                                   style: const TextStyle(
                                     fontSize: 11.5,
                                     color: Color(0xFF4A4754),
@@ -457,96 +530,12 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     );
                   }),
                 ],
-                const SizedBox(height: 14),
-                const Text(
-                  'Chuyến xe gần đây (Bấm để xem lộ trình)',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: () => _rebuildDriverUi(() => _selectedScreenIndex = 9),
+                  icon: const Icon(Icons.history),
+                  label: const Text('Lịch sử giao hàng'),
                 ),
-                const SizedBox(height: 8),
-                ..._store.orders.map((ord) {
-                  final isCancelledOrFailed =
-                      ord.status == OrderStatus.cancelled ||
-                      ord.status == OrderStatus.failed ||
-                      ord.status == OrderStatus.returning;
-                  final isDone = ord.status == OrderStatus.delivered;
-                  final driverNetFee = isCancelledOrFailed
-                      ? 0.0
-                      : ((ord.deliveryFee + ord.surchargeFee) * 0.80)
-                            .roundToDouble();
-                  return InkWell(
-                    onTap: () {
-                      _store.selectDriverOrder(ord.trackingCode);
-                      _rebuildDriverUi(() => _selectedScreenIndex = 3);
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.all(Radius.zero),
-                        border: Border.all(color: const Color(0xFF15131E)),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Đơn ${ord.trackingCode} • ${ord.serviceType.displayName} (${ord.status.displayName})',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                Text(
-                                  '${ord.pickupAddress} → ${ord.dropoffAddress}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11.5,
-                                    color: Color(0xFF4A4754),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                isCancelledOrFailed
-                                    ? '0 đ'
-                                    : '+${CurrencyFormatter.formatVnd(driverNetFee)}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 14,
-                                  color: isCancelledOrFailed
-                                      ? AppColors.danger
-                                      : const Color(0xFF14B866),
-                                ),
-                              ),
-                              Text(
-                                isCancelledOrFailed
-                                    ? '${ord.status.displayName} / 0%'
-                                    : (isDone ? 'Thực nhận 80%' : 'Dự kiến 80%'),
-                                style: const TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF6B667A),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
               ],
             ),
           ),
@@ -558,36 +547,12 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
   /// UC19: Lịch sử giao hàng của Tài xế (Khớp 100% uc19_lich_su_giao_1791014821234.jpg)
   Widget _buildDriverTripHistoryUc19View() {
     final now = DateTime.now();
-    final todayPrefix = now.day.toString().padLeft(2, '0');
-    int? daysSinceOrder(ActiveOrderRecord o) {
-      if (o.createdDateLabel == 'Hôm nay' ||
-          o.createdDateLabel.startsWith(todayPrefix)) {
-        return 0;
-      }
-      if (o.createdDateLabel == 'Hôm qua') return 1;
-      final parts = o.createdDateLabel.split('/');
-      if (parts.length == 3) {
-        final d = int.tryParse(parts[0]);
-        final m = int.tryParse(parts[1]);
-        final y = int.tryParse(parts[2]);
-        if (d != null && m != null && y != null) {
-          return DateTime(now.year, now.month, now.day)
-              .difference(DateTime(y, m, d))
-              .inDays
-              .abs();
-        }
-      }
-      return null;
-    }
-
+    final personalOrders = _store.driverPersonalOrders;
     final filteredTrips = _driverHistoryPeriod == 'Hôm nay'
-        ? _store.orders.where((o) => daysSinceOrder(o) == 0).toList()
+        ? personalOrders.where((o) => o.daysAgoFrom(now) == 0).toList()
         : _driverHistoryPeriod == 'Tuần này'
-            ? _store.orders.where((o) {
-                final diff = daysSinceOrder(o);
-                return diff != null && diff <= 7;
-              }).toList()
-            : _store.orders;
+            ? personalOrders.where((o) => o.daysAgoFrom(now) <= 6).toList()
+            : personalOrders.where((o) => o.daysAgoFrom(now) <= 29).toList();
     return Card(
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
       clipBehavior: Clip.antiAlias,
@@ -597,17 +562,11 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             color: const Color(0xFF14B866),
-            child: Row(
+            child: const Row(
               children: [
-                InkWell(
-                  onTap: () => _rebuildDriverUi(() => _selectedScreenIndex = 1),
-                  child: const Icon(
-                    Icons.arrow_back_rounded,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
+                Icon(Icons.history_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 10),
+                Expanded(
                   child: Text(
                     'Lịch sử giao hàng',
                     style: TextStyle(
@@ -644,19 +603,37 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                   }).toList(),
                 ),
                 const SizedBox(height: 12),
+                if (filteredTrips.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5F1E8),
+                      border: Border.all(color: const Color(0xFF15131E)),
+                    ),
+                    child: Text(
+                      'Chưa có chuyến giao hàng nào trong khoảng thời gian "$_driverHistoryPeriod".',
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF4A4754),
+                      ),
+                    ),
+                  ),
                 ...filteredTrips.map((ord) {
                   final isReturned = ord.paymentStatus == 'RETURNED';
                   final isCancelledOrFailed =
                       ord.status == OrderStatus.cancelled ||
                       ord.status == OrderStatus.failed ||
-                      ord.status == OrderStatus.returning ||
-                      isReturned;
+                      ord.status == OrderStatus.returning;
                   final statusDisplay =
-                      isReturned ? 'Đã hoàn kho' : ord.status.displayName;
-                  final driverNetFee = isCancelledOrFailed
-                      ? 0.0
-                      : ((ord.deliveryFee + ord.surchargeFee) * 0.80)
-                            .roundToDouble();
+                      isReturned ? 'Đã hoàn kho (Phí hoàn 40%)' : ord.status.displayName;
+                  final driverNetFee = isReturned
+                      ? ((ord.deliveryFee + ord.surchargeFee) * 0.40)
+                            .roundToDouble()
+                      : isCancelledOrFailed
+                          ? 0.0
+                          : ((ord.deliveryFee + ord.surchargeFee) * 0.80)
+                                .roundToDouble();
                   return InkWell(
                     onTap: () => _rebuildDriverUi(() {
                       _store.selectDriverOrder(ord.trackingCode);
@@ -825,14 +802,53 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
 
   /// UC20: Báo cáo sự cố trên đường (Khớp 100% anh_sua_lai/uc20_bao_cao_su_co.jpg)
   Widget _buildRoadIncidentReportView() {
-    final activeOrder = _store.activeOrderRecord ?? _store.orders.first;
-    final driverIncidents = _store.complaints
-        .where(
-          (c) =>
-              c.customerName.startsWith('Tài xế') ||
-              c.driverName == _store.activeDriverName,
-        )
-        .toList();
+    final activeOrder = _store.activeDriverPersonalOrderRecord;
+    final resolvedDrvName = (_store.activeDriverRecord?.fullName ??
+            _store.activeAuthenticatedUser?.fullName ??
+            _store.activeDriverName)
+        .trim();
+    final drvLower = resolvedDrvName.toLowerCase();
+    final driverIncidents = _store.complaints.where((c) {
+      if (drvLower.isEmpty) return false;
+      return c.driverName.trim().toLowerCase() == drvLower ||
+          c.customerName.trim().toLowerCase() == 'tài xế $drvLower';
+    }).toList();
+    if (activeOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Chưa có chuyến giao để báo cáo sự cố',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Tài khoản của bạn hiện chưa nhận cuốc xe nào nên không có vận đơn để gửi báo cáo sự cố trên đường.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF14B866),
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () =>
+                    _rebuildDriverUi(() => _selectedScreenIndex = 2),
+                icon: const Icon(Icons.notifications_active_outlined, size: 18),
+                label: const Text('Mở Nhận đơn mới'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final reasons = [
       'Hàng bị hỏng',
       'Khách không nhận hàng',
@@ -850,14 +866,12 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
             color: const Color(0xFF14B866),
             child: Row(
               children: [
-                InkWell(
-                  onTap: () => _rebuildDriverUi(() => _selectedScreenIndex = 3),
-                  child: const Icon(
-                    Icons.arrow_back_rounded,
-                    color: Colors.white,
-                  ),
+                const Icon(
+                  Icons.report_problem_outlined,
+                  color: Colors.white,
+                  size: 20,
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     'Báo cáo sự cố (${activeOrder.trackingCode})',
@@ -876,7 +890,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (_store.orders.length > 1) ...[
+                if (_store.driverPersonalOrders.length > 1) ...[
                   const Text(
                     'Chọn vận đơn gặp sự cố',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
@@ -885,7 +899,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: _store.orders.map((o) {
+                    children: _store.driverPersonalOrders.map((o) {
                       final isCur = o.trackingCode == activeOrder.trackingCode;
                       return ChoiceChip(
                         visualDensity: VisualDensity.compact,
@@ -913,6 +927,11 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                 ),
                 const SizedBox(height: 6),
                 DropdownButtonFormField<String>(
+                  key: ValueKey(
+                    reasons.contains(_incidentType)
+                        ? _incidentType
+                        : reasons.first,
+                  ),
                   isExpanded: true,
                   initialValue: reasons.contains(_incidentType)
                       ? _incidentType
@@ -948,86 +967,64 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'Hình ảnh minh chứng',
+                  'Hình ảnh / Tệp minh chứng hiện trường',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 13.5),
                 ),
                 const SizedBox(height: 8),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Expanded(
-                      flex: 2,
-                      child: InkWell(
-                        borderRadius: BorderRadius.all(Radius.zero),
-                        onTap: () {
-                          _rebuildDriverUi(() {
-                            _attachedIncidentPhotos =
-                                (_attachedIncidentPhotos % 4) + 1;
-                          });
-                        },
-                        child: Container(
-                          height: 68,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFF5F1E8),
-                            borderRadius: BorderRadius.all(Radius.zero),
-                            border: Border.all(color: const Color(0xFF14B866)),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(
-                                Icons.camera_alt_outlined,
-                                color: Color(0xFF14B866),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF14B866),
+                        side: const BorderSide(color: Color(0xFF14B866)),
+                      ),
+                      onPressed: () async {
+                        if (_driverIncidentEvidenceFiles.length >= 4) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Tối đa 4 tệp minh chứng cho mỗi báo cáo sự cố!',
                               ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Chụp ảnh ($_attachedIncidentPhotos/4)',
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+                            ),
+                          );
+                          return;
+                        }
+                        final picked = await SecurityAndBarcodeUtils
+                            .pickLocalDocumentOrImage(
+                          dialogTitle:
+                              'Đính kèm ảnh hiện trường sự cố (${activeOrder.trackingCode})',
+                        );
+                        if (picked == null || !mounted) return;
+                        _rebuildDriverUi(() {
+                          if (!_driverIncidentEvidenceFiles.contains(picked)) {
+                            _driverIncidentEvidenceFiles.add(picked);
+                          }
+                        });
+                      },
+                      icon: const Icon(Icons.upload_file_rounded, size: 18),
+                      label: Text(
+                        'Chọn tệp minh chứng (${_driverIncidentEvidenceFiles.length}/4)',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                     ),
-                    for (int i = 0; i < 3; i++) ...[
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: InkWell(
-                          borderRadius: BorderRadius.all(Radius.zero),
-                          onTap: () {
-                            _rebuildDriverUi(() {
-                              _attachedIncidentPhotos = i + 2;
-                            });
-                          },
-                          child: Container(
-                            height: 68,
-                            decoration: BoxDecoration(
-                              color: _attachedIncidentPhotos > i + 1
-                                  ? const Color(0xFFDCFCE7)
-                                  : const Color(0xFFF5F1E8),
-                              borderRadius: BorderRadius.all(Radius.zero),
-                              border: Border.all(
-                                color: _attachedIncidentPhotos > i + 1
-                                    ? const Color(0xFF14B866)
-                                    : const Color(0xFF15131E),
-                              ),
-                            ),
-                            child: Center(
-                              child: Icon(
-                                _attachedIncidentPhotos > i + 1
-                                    ? Icons.check_circle_rounded
-                                    : Icons.add,
-                                color: _attachedIncidentPhotos > i + 1
-                                    ? const Color(0xFF14B866)
-                                    : const Color(0xFF4A4754),
-                              ),
-                            ),
+                    ..._driverIncidentEvidenceFiles.map(
+                      (fileName) => InputChip(
+                        label: Text(
+                          fileName,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
+                        backgroundColor: const Color(0xFFDCFCE7),
+                        onDeleted: () => _rebuildDriverUi(() {
+                          _driverIncidentEvidenceFiles.remove(fileName);
+                        }),
                       ),
-                    ],
+                    ),
                   ],
                 ),
                 const SizedBox(height: 12),
@@ -1074,36 +1071,45 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                       ),
                     ),
                     onPressed: activeOrder.status == OrderStatus.delivered ||
-                            activeOrder.status == OrderStatus.cancelled
+                            activeOrder.status == OrderStatus.cancelled ||
+                            activeOrder.paymentStatus == 'RETURNED'
                         ? null
                         : () {
-                            final activeOrd =
-                                _store.activeOrderRecord ?? _store.orders.first;
                             final rawDesc =
                                 _incidentNoteCtrl.text.trim().isEmpty
                                     ? 'Báo cáo sự cố trên lộ trình: $_incidentType'
                                     : _incidentNoteCtrl.text.trim();
                             final gpsTag =
                                 '(${_store.activeDriverLocation.latitude.toStringAsFixed(4)}, ${_store.activeDriverLocation.longitude.toStringAsFixed(4)})';
+                            final evidenceCopy = List<String>.from(
+                              _driverIncidentEvidenceFiles,
+                            );
+                            final evidenceSuffix = evidenceCopy.isNotEmpty
+                                ? ' • Minh chứng: ${evidenceCopy.join(", ")}'
+                                : '';
                             _store.addIncidentOrComplaint(
-                              orderId: activeOrd.trackingCode,
-                              reporterName: 'Tài xế ${_store.activeDriverName}',
+                              orderId: activeOrder.trackingCode,
+                              reporterName: 'Tài xế $resolvedDrvName',
                               issueType: _incidentType,
-                              description:
-                                  '$rawDesc • Đính kèm $_attachedIncidentPhotos/4 ảnh minh chứng • GPS: $gpsTag',
+                              description: '$rawDesc$evidenceSuffix • GPS: $gpsTag',
+                              evidenceFiles: evidenceCopy,
                             );
                             _incidentNoteCtrl.clear();
+                            _rebuildDriverUi(
+                              _driverIncidentEvidenceFiles.clear,
+                            );
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Đã gửi báo cáo sự cố đơn ${activeOrd.trackingCode} ($_attachedIncidentPhotos/4 ảnh) kèm tọa độ GPS về Trung tâm Điều phối!',
+                                  'Đã gửi báo cáo sự cố đơn ${activeOrder.trackingCode} (${evidenceCopy.length} tệp minh chứng) kèm tọa độ GPS về Trung tâm Điều phối!',
                                 ),
                               ),
                             );
                           },
                     child: Text(
                       activeOrder.status == OrderStatus.delivered ||
-                              activeOrder.status == OrderStatus.cancelled
+                              activeOrder.status == OrderStatus.cancelled ||
+                              activeOrder.paymentStatus == 'RETURNED'
                           ? 'Đơn đã hoàn tất / Đã hủy (Không thể báo sự cố)'
                           : 'Gửi báo cáo',
                       style: const TextStyle(
@@ -1138,6 +1144,31 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                               fontSize: 12.5,
                             ),
                           ),
+                          if (inc.evidenceFiles.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: inc.evidenceFiles
+                                  .map(
+                                    (f) => Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
+                                      color: const Color(0xFFDCFCE7),
+                                      child: Text(
+                                        '📎 $f',
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ],
                           const SizedBox(height: 4),
                           ...inc.replies.map(
                             (r) => Padding(
@@ -1163,39 +1194,19 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
 
   /// UC21: Thống kê hoạt động (Dark Mode Analytics - Khớp 100% anh_sua_lai/uc21_thong_ke.jpg)
   Widget _buildDarkModeAnalyticsView() {
-    final allOrders = _store.orders;
+    final activeDrv = _store.activeDriverRecord;
+    final allOrders = _store.driverPersonalOrders;
     final now = DateTime.now();
-    final todayPrefix = now.day.toString().padLeft(2, '0');
-    int? daysSinceStatsOrder(ActiveOrderRecord o) {
-      if (o.createdDateLabel == 'Hôm nay' ||
-          o.createdDateLabel.startsWith(todayPrefix)) {
-        return 0;
-      }
-      if (o.createdDateLabel == 'Hôm qua') return 1;
-      final parts = o.createdDateLabel.split('/');
-      if (parts.length == 3) {
-        final d = int.tryParse(parts[0]);
-        final m = int.tryParse(parts[1]);
-        final y = int.tryParse(parts[2]);
-        if (d != null && m != null && y != null) {
-          return DateTime(now.year, now.month, now.day)
-              .difference(DateTime(y, m, d))
-              .inDays
-              .abs();
-        }
-      }
-      return null;
-    }
 
     final todayOrders =
-        allOrders.where((o) => daysSinceStatsOrder(o) == 0).toList();
-    final weekOrders = allOrders.where((o) {
-      final diff = daysSinceStatsOrder(o);
-      return diff != null && diff <= 7;
-    }).toList();
+        allOrders.where((o) => o.daysAgoFrom(now) == 0).toList();
+    final weekOrders =
+        allOrders.where((o) => o.daysAgoFrom(now) <= 6).toList();
+    final monthOrders =
+        allOrders.where((o) => o.daysAgoFrom(now) <= 29).toList();
     final periodOrders = _statsPeriod == 'Hôm nay'
         ? todayOrders
-        : (_statsPeriod == 'Tuần này' ? weekOrders : allOrders);
+        : (_statsPeriod == 'Tuần này' ? weekOrders : monthOrders);
     final totalOrdersCount = periodOrders.length;
     final safeTotal = totalOrdersCount == 0 ? 1 : totalOrdersCount;
     final deliveredCount = periodOrders
@@ -1214,29 +1225,22 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
               o.paymentStatus != 'RETURNED',
         )
         .length;
-    final acceptRatio = (nonCancelledCount / safeTotal).clamp(0.0, 1.0);
+    final acceptRatio = activeDrv != null
+        ? activeDrv.acceptanceRate
+        : (nonCancelledCount / safeTotal).clamp(0.0, 1.0);
     final acceptPct = (acceptRatio * 100).round();
-    final ratedOrders = periodOrders
-        .where((o) => o.ratingStars != null)
-        .toList();
+    final hasAcceptanceHistory = (activeDrv != null &&
+        activeDrv.totalTrips + activeDrv.rejectedCount > 0) || periodOrders.isNotEmpty;
+    final ratedOrders =
+        periodOrders.where((o) => o.ratingStars != null).toList();
     final avgRating = ratedOrders.isNotEmpty
         ? (ratedOrders.fold<int>(0, (s, o) => s + o.ratingStars!) /
             ratedOrders.length)
-        : (_store.activeDriverRecord?.rating ??
-            (_store.drivers.isNotEmpty ? _store.drivers.first.rating : 5.0));
+        : (activeDrv?.rating ?? 0.0);
 
     final dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
     int weekdayIndexOfOrder(ActiveOrderRecord o) {
-      final parts = o.createdDateLabel.split('/');
-      if (parts.length == 3) {
-        final d = int.tryParse(parts[0]);
-        final m = int.tryParse(parts[1]);
-        final y = int.tryParse(parts[2]);
-        if (d != null && m != null && y != null) {
-          return (DateTime(y, m, d).weekday - 1).clamp(0, 6);
-        }
-      }
-      return (DateTime.now().weekday - 1).clamp(0, 6);
+      return (o.createdAtDateTime.weekday - 1).clamp(0, 6);
     }
 
     final dayCounts = List<int>.generate(7, (idx) {
@@ -1247,7 +1251,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
     final maxDayCount = dayCounts.fold<int>(1, (m, c) => c > m ? c : m);
     final dailyBars = List.generate(7, (idx) {
       final c = dayCounts[idx];
-      final ratio = c == 0 ? 0.18 : (c / maxDayCount).clamp(0.25, 1.0);
+      final ratio = c / maxDayCount;
       return (dayLabels[idx], ratio, '$c');
     });
     return Container(
@@ -1360,7 +1364,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                             width: 28,
                             height: 28,
                             child: CircularProgressIndicator(
-                              value: acceptRatio,
+                              value: hasAcceptanceHistory ? acceptRatio : 0,
                               strokeWidth: 4,
                               color: const Color(0xFF14B866),
                               backgroundColor: Colors.white24,
@@ -1369,7 +1373,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                           const SizedBox(width: 10),
                           Flexible(
                             child: Text(
-                              '$acceptPct%',
+                              hasAcceptanceHistory ? '$acceptPct%' : '--',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 20,
@@ -1401,12 +1405,14 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          Text(
-                            avgRating.toStringAsFixed(1),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w900,
+                          Flexible(
+                            child: Text(
+                              avgRating > 0 ? avgRating.toStringAsFixed(1) : '--',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 6),
@@ -1500,7 +1506,7 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
             ),
           ),
           const SizedBox(height: 8),
-          ..._store.orders
+          ...allOrders
               .where((o) => o.ratingStars != null)
               .map((ratedOrder) {
             final starsStr = '★' * (ratedOrder.ratingStars ?? 5);
@@ -1544,7 +1550,8 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '"${ratedOrder.ratingComment ?? 'Giao nhanh, nhiệt tình, đóng gói nguyên vẹn!'}"',
+                      ratedOrder.ratingComment?.trim().isNotEmpty == true
+                          ? '"${ratedOrder.ratingComment}"' : 'Không có nhận xét',
                       style:
                           const TextStyle(color: Colors.white70, fontSize: 12),
                     ),
@@ -1553,6 +1560,32 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
               ),
             );
           }),
+          if (allOrders.where((o) => o.ratingStars != null).isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                'Chưa có đánh giá nào từ khách hàng cho các chuyến xe của bạn.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF4ADE80),
+                side: const BorderSide(color: Color(0xFF4ADE80)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () =>
+                  _rebuildDriverUi(() => _selectedScreenIndex = 0),
+              icon: const Icon(Icons.badge_outlined, size: 18),
+              label: const Text(
+                'Cập nhật Hồ sơ & Pháp lý KYC',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
           if (widget.onLogout != null) ...[
             const SizedBox(height: 14),
             SizedBox(

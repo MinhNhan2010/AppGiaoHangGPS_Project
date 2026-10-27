@@ -60,16 +60,22 @@ class EnvConfig {
 
   /// Tạo URL tải mảnh bản đồ Google Maps thực tế (Web Mercator Slippy Tile x, y, z)
   /// layer: 'm' (Bản đồ tiêu chuẩn), 'm,traffic' (Giao thông trực tiếp), 'y' (Vệ tinh Hybrid)
+  /// hideLabels: ẩn toàn bộ tên đường, địa chỉ, POI và trạm giao thông khi làm nền 3D
   static String buildGoogleMapTileUrl({
     required int x,
     required int y,
     required int z,
     String layer = 'm',
+    bool hideLabels = false,
   }) {
     final serverIdx = (x + y).abs() % 4;
-    final keyParam =
-        isGoogleMapsKeyConfigured ? '&key=$googleMapsApiKey' : '';
-    return 'https://mt$serverIdx.google.com/vt/lyrs=$layer&hl=vi&x=$x&y=$y&z=$z$keyParam';
+    final styleParam = hideLabels
+        ? '&apistyle=s.e%3Al%7Cp.v%3Aoff%2Cs.t%3A2%7Cp.v%3Aoff%2Cs.t%3A4%7Cp.v%3Aoff'
+        : '';
+    final keyParam = isGoogleMapsKeyConfigured
+        ? '&key=${Uri.encodeQueryComponent(googleMapsApiKey)}'
+        : '';
+    return 'https://mt$serverIdx.google.com/vt/lyrs=$layer&hl=vi&x=$x&y=$y&z=$z$styleParam$keyParam';
   }
 
   static const String mapboxAccessToken = String.fromEnvironment(
@@ -92,7 +98,7 @@ class EnvConfig {
   );
   static const String _envSmtpSenderEmail = String.fromEnvironment(
     'SMTP_SENDER_EMAIL',
-    defaultValue: 'trihienkuns@gmail.com',
+    defaultValue: '',
   );
   static const String _envSmtpAppPassword = String.fromEnvironment(
     'SMTP_APP_PASSWORD',
@@ -100,6 +106,14 @@ class EnvConfig {
   );
   static const String _envSmsWebhookUrl = String.fromEnvironment(
     'SMS_WEBHOOK_URL',
+    defaultValue: '',
+  );
+  static const String _envOtpEmailWebhookUrl = String.fromEnvironment(
+    'OTP_EMAIL_WEBHOOK_URL',
+    defaultValue: '',
+  );
+  static const String _envOtpEmailWebhookToken = String.fromEnvironment(
+    'OTP_EMAIL_WEBHOOK_TOKEN',
     defaultValue: '',
   );
   static const String _envSmsProvider = String.fromEnvironment(
@@ -127,44 +141,13 @@ class EnvConfig {
     defaultValue: '',
   );
 
-  static final String _defaultSmtpAppPassword = [
-    'zryd',
-    'hbsc',
-    'cxca',
-    'rcgv',
-  ].join(' ');
-  static final String _defaultTwilioAccountSid = [
-    'AC2970b712d0000',
-    '983ed362eafb60369ae',
-  ].join();
-  static final String _defaultTwilioAuthToken = [
-    '4d7834e21ca1a724',
-    'ea504c4fed2724a1',
-  ].join();
-  static final String _defaultTwilioVerifyServiceSid = [
-    'VA6b6112041500b6',
-    'd672a83bb1840493ea',
-  ].join();
-  static final String _defaultGoogleClientId = [
-    '153031396109',
-    '-',
-    'f2a804j22o4mru89ke3mfiieq8iunr4k',
-    '.apps.',
-    'googleusercontent',
-    '.com',
-  ].join();
-  static final String _defaultGoogleClientSecret = [
-    'GOC',
-    'SPX-',
-    'RiPg2RARwNh3upp',
-    '2ds7toSGVnhDO',
-  ].join();
-
   static String _runtimeSmtpHost = '';
   static int _runtimeSmtpPort = 0;
   static String _runtimeSmtpSenderEmail = '';
   static String _runtimeSmtpAppPassword = '';
   static String _runtimeSmsWebhookUrl = '';
+  static String _runtimeOtpEmailWebhookUrl = '';
+  static String _runtimeOtpEmailWebhookToken = '';
   static String _runtimeSmsProvider = '';
   static String _runtimeSmsApiKey = '';
   static String _runtimeSmsApiSecret = '';
@@ -179,48 +162,39 @@ class EnvConfig {
   static String get smtpSenderEmail => _runtimeSmtpSenderEmail.isNotEmpty
       ? _runtimeSmtpSenderEmail
       : _envSmtpSenderEmail;
-  static String get smtpAppPassword => _runtimeSmtpAppPassword.isNotEmpty
-      ? _runtimeSmtpAppPassword
-      : (_envSmtpAppPassword.isNotEmpty
-            ? _envSmtpAppPassword
-            : _defaultSmtpAppPassword);
+  static String get smtpAppPassword =>
+      (_runtimeSmtpAppPassword.isNotEmpty
+              ? _runtimeSmtpAppPassword
+              : _envSmtpAppPassword)
+          .replaceAll(' ', '')
+          .trim();
   static String get smsWebhookUrl => _runtimeSmsWebhookUrl.isNotEmpty
       ? _runtimeSmsWebhookUrl
       : _envSmsWebhookUrl;
-  static String get smsProvider => _runtimeSmsProvider.isNotEmpty
-      ? _runtimeSmsProvider
-      : _envSmsProvider;
+  static String get otpEmailWebhookUrl => _runtimeOtpEmailWebhookUrl.isNotEmpty
+      ? _runtimeOtpEmailWebhookUrl
+      : _envOtpEmailWebhookUrl;
+  static String get otpEmailWebhookToken =>
+      _runtimeOtpEmailWebhookToken.isNotEmpty
+      ? _runtimeOtpEmailWebhookToken
+      : _envOtpEmailWebhookToken;
+  static String get smsProvider =>
+      _runtimeSmsProvider.isNotEmpty ? _runtimeSmsProvider : _envSmsProvider;
   static String get smsApiKey => _runtimeSmsApiKey.isNotEmpty
       ? _runtimeSmsApiKey
-      : (_envSmsApiKey.isNotEmpty
-            ? _envSmsApiKey
-            : (smsProvider.toUpperCase() == 'TWILIO'
-                  ? _defaultTwilioAccountSid
-                  : ''));
+      : _envSmsApiKey;
   static String get smsApiSecret => _runtimeSmsApiSecret.isNotEmpty
       ? _runtimeSmsApiSecret
-      : (_envSmsApiSecret.isNotEmpty
-            ? _envSmsApiSecret
-            : (smsProvider.toUpperCase() == 'TWILIO'
-                  ? _defaultTwilioAuthToken
-                  : ''));
+      : _envSmsApiSecret;
   static String get smsBrandname => _runtimeSmsBrandname.isNotEmpty
       ? _runtimeSmsBrandname
-      : (_envSmsBrandname.isNotEmpty
-            ? _envSmsBrandname
-            : (smsProvider.toUpperCase() == 'TWILIO'
-                  ? _defaultTwilioVerifyServiceSid
-                  : ''));
+      : _envSmsBrandname;
   static String get googleClientId => _runtimeGoogleClientId.isNotEmpty
       ? _runtimeGoogleClientId
-      : (_envGoogleClientId.isNotEmpty
-            ? _envGoogleClientId
-            : _defaultGoogleClientId);
+      : _envGoogleClientId;
   static String get googleClientSecret => _runtimeGoogleClientSecret.isNotEmpty
       ? _runtimeGoogleClientSecret
-      : (_envGoogleClientSecret.isNotEmpty
-            ? _envGoogleClientSecret
-            : _defaultGoogleClientSecret);
+      : _envGoogleClientSecret;
 
   static bool get isSmtpConfigured =>
       smtpHost.isNotEmpty &&
@@ -230,6 +204,10 @@ class EnvConfig {
   static bool get isSmsWebhookConfigured =>
       smsWebhookUrl.startsWith('http://') ||
       smsWebhookUrl.startsWith('https://');
+
+  static bool get isOtpEmailWebhookConfigured =>
+      otpEmailWebhookUrl.startsWith('http://') ||
+      otpEmailWebhookUrl.startsWith('https://');
 
   static bool get isExternalSmsGatewayConfigured {
     final p = smsProvider.toUpperCase();
@@ -263,10 +241,11 @@ class EnvConfig {
 
   static String formatVietnamPhoneE164(String raw) {
     final nat = formatVietnamPhoneNational(raw);
-    if (nat.startsWith('0') && nat.length >= 10) {
-      return '+84${nat.substring(1)}';
+    if (nat.isEmpty) return '';
+    if (nat.startsWith('0')) {
+      return nat.length > 1 ? '+84${nat.substring(1)}' : '';
     }
-    return nat.startsWith('+') ? nat : '+84$nat';
+    return '+84$nat';
   }
 
   static bool get isGoogleOAuthConfigured =>
@@ -279,6 +258,8 @@ class EnvConfig {
     String? smtpSenderEmail,
     String? smtpAppPassword,
     String? smsWebhookUrl,
+    String? otpEmailWebhookUrl,
+    String? otpEmailWebhookToken,
     String? smsProvider,
     String? smsApiKey,
     String? smsApiSecret,
@@ -295,6 +276,12 @@ class EnvConfig {
       _runtimeSmtpAppPassword = smtpAppPassword.replaceAll(' ', '').trim();
     }
     if (smsWebhookUrl != null) _runtimeSmsWebhookUrl = smsWebhookUrl.trim();
+    if (otpEmailWebhookUrl != null) {
+      _runtimeOtpEmailWebhookUrl = otpEmailWebhookUrl.trim();
+    }
+    if (otpEmailWebhookToken != null) {
+      _runtimeOtpEmailWebhookToken = otpEmailWebhookToken.trim();
+    }
     if (smsProvider != null) {
       _runtimeSmsProvider = smsProvider.trim().toUpperCase();
     }

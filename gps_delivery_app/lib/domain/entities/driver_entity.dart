@@ -35,9 +35,15 @@ class DriverEntity extends Equatable {
   });
 
   /// Điểm điều phối thông minh đa tiêu chí
-  /// Kết hợp khoảng cách GPS (bán kính 3km), điểm đánh giá (1..5) và tỷ lệ nhận chuyến (0..100%)
+  /// Kết hợp khoảng cách GPS (bán kính 3km), điểm đánh giá (1..5), tỷ lệ nhận chuyến (0..100%) và quỹ ký quỹ >= 200.000đ
   double computeDispatchScore(GeoPoint pickupLocation) {
-    if (!isOnline || approvalStatus != 'APPROVED' || currentLocation == null) {
+    final normalizedApproval = approvalStatus.trim().toUpperCase();
+    final isApproved = normalizedApproval == 'APPROVED' ||
+        approvalStatus.trim() == 'Đã duyệt';
+    if (!isOnline ||
+        !isApproved ||
+        currentLocation == null ||
+        walletBalance < 200000) {
       return -1.0;
     }
     final distMeters = GeoMath.distanceMeters(currentLocation!, pickupLocation);
@@ -55,23 +61,33 @@ class DriverEntity extends Equatable {
   }
 
   factory DriverEntity.fromMap(Map<String, dynamic> map) {
+    final parsedPoint = GeoPoint.tryParsePostgis(map['current_location']) ??
+        ((map['latitude'] is num && map['longitude'] is num)
+            ? GeoPoint(
+                latitude: (map['latitude'] as num).toDouble(),
+                longitude: (map['longitude'] as num).toDouble(),
+              )
+            : null);
+    final trips = (map['total_trips'] as num?)?.toInt() ?? 0;
+    final rejected = (map['rejected_count'] as num?)?.toInt() ?? 0;
+    final computedAcceptance = (trips + rejected) > 0
+        ? (trips / (trips + rejected)) * 100.0
+        : 100.0;
     return DriverEntity(
-      id: map['id'] as String,
-      phone: map['phone'] as String,
-      fullName: map['full_name'] as String,
-      licensePlate: map['license_plate'] as String,
-      vehicleType: map['vehicle_type'] as String,
-      citizenId: map['citizen_id'] as String,
-      isOnline: map['is_online'] as bool? ?? false,
-      currentLocation: map['current_location'] != null
-          ? GeoPoint.fromGeoJson(
-              map['current_location'] as Map<String, dynamic>,
-            )
-          : null,
+      id: (map['id'] ?? '').toString(),
+      phone: (map['phone'] ?? '').toString(),
+      fullName: (map['full_name'] ?? '').toString(),
+      licensePlate: (map['license_plate'] ?? '').toString(),
+      vehicleType: (map['vehicle_type'] ?? 'MOTORBIKE').toString(),
+      citizenId: (map['citizen_id'] ?? '').toString(),
+      isOnline: map['is_online'] == true || map['is_online'] == 1,
+      currentLocation: parsedPoint,
       currentBearing: (map['current_bearing'] as num? ?? 0.0).toDouble(),
-      ratingAvg: (map['rating_avg'] as num? ?? 5.0).toDouble(),
-      acceptanceRate: (map['acceptance_rate'] as num? ?? 100.0).toDouble(),
-      approvalStatus: map['approval_status'] as String? ?? 'PENDING',
+      ratingAvg:
+          ((map['rating_avg'] ?? map['rating']) as num? ?? 5.0).toDouble(),
+      acceptanceRate:
+          (map['acceptance_rate'] as num? ?? computedAcceptance).toDouble(),
+      approvalStatus: (map['approval_status'] ?? 'PENDING').toString(),
       walletBalance: (map['wallet_balance'] as num? ?? 0.0).toDouble(),
     );
   }
@@ -83,6 +99,8 @@ class DriverEntity extends Equatable {
         currentLocation,
         currentBearing,
         ratingAvg,
+        acceptanceRate,
+        approvalStatus,
         walletBalance,
       ];
 }

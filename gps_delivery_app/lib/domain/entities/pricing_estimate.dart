@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:equatable/equatable.dart';
 import '../enums/service_type.dart';
 
@@ -32,26 +33,52 @@ class PricingEstimate extends Equatable {
     double voucherDiscount = 0.0,
     double baseFareScale = 1.0,
     double pricePerKmScale = 1.0,
+    double? configuredStandardPeakSurcharge,
   }) {
-    final distanceKm = distanceMeters / 1000.0;
+    final safeDistMeters = math.max(0, distanceMeters);
+    final safeDurationSec = math.max(0, durationSeconds);
+    final safeBaseScale = baseFareScale.isFinite && baseFareScale > 0
+        ? baseFareScale
+        : 1.0;
+    final safeKmScale = pricePerKmScale.isFinite && pricePerKmScale > 0
+        ? pricePerKmScale
+        : 1.0;
+    final safeGeofence = geofenceSurcharge.isFinite
+        ? math.max(0.0, geofenceSurcharge)
+        : 0.0;
+    final safeVoucher = voucherDiscount.isFinite
+        ? math.max(0.0, voucherDiscount)
+        : 0.0;
+
+    final distanceKm = safeDistMeters / 1000.0;
     final baseFare =
-        (serviceType.defaultBaseFare * baseFareScale).roundToDouble();
+        (serviceType.defaultBaseFare * safeBaseScale).roundToDouble();
     final distanceFare =
-        (distanceKm * serviceType.defaultPricePerKm * pricePerKmScale)
+        (distanceKm * serviceType.defaultPricePerKm * safeKmScale)
             .roundToDouble();
-    final peakFee = isPeakHour ? serviceType.defaultPeakSurcharge : 0.0;
-    final surchargeFee = peakFee + geofenceSurcharge;
-    final rawTotal = baseFare + distanceFare + surchargeFee - voucherDiscount;
-    final totalAmount = rawTotal < 0 ? 0.0 : rawTotal;
+    final resolvedStandardPeak =
+        (configuredStandardPeakSurcharge != null &&
+                configuredStandardPeakSurcharge.isFinite)
+            ? math.max(0.0, configuredStandardPeakSurcharge)
+            : serviceType.defaultPeakSurcharge;
+    final peakFee = isPeakHour
+        ? (serviceType == DeliveryServiceType.standard
+              ? resolvedStandardPeak
+              : serviceType.defaultPeakSurcharge)
+        : 0.0;
+    final surchargeFee = peakFee + safeGeofence;
+    final subtotal = baseFare + distanceFare + surchargeFee;
+    final effectiveDiscount = safeVoucher.clamp(0.0, subtotal);
+    final totalAmount = math.max(0.0, subtotal - effectiveDiscount);
 
     return PricingEstimate(
       serviceType: serviceType,
       distanceKm: distanceKm,
-      durationSeconds: durationSeconds,
+      durationSeconds: safeDurationSec,
       baseFare: baseFare,
       distanceFare: distanceFare,
       surchargeFee: surchargeFee,
-      discountAmount: voucherDiscount,
+      discountAmount: effectiveDiscount,
       totalAmount: totalAmount,
     );
   }
@@ -60,6 +87,7 @@ class PricingEstimate extends Equatable {
   List<Object?> get props => [
         serviceType,
         distanceKm,
+        durationSeconds,
         baseFare,
         distanceFare,
         surchargeFee,

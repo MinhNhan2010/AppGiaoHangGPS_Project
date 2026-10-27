@@ -15,8 +15,11 @@ enum OrderStatus {
   const OrderStatus(this.dbCode, this.displayName);
 
   static OrderStatus fromDbCode(String code) {
+    final trimmed = code.trim();
+    final upper = trimmed.toUpperCase();
+    final lower = trimmed.toLowerCase();
     return OrderStatus.values.firstWhere(
-      (e) => e.dbCode == code,
+      (e) => e.dbCode == upper || e.name.toLowerCase() == lower,
       orElse: () => OrderStatus.draft,
     );
   }

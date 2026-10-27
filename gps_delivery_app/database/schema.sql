@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
     avatar_url TEXT,
     default_address TEXT,
     default_lat_lng GEOMETRY(Point, 4326),
+    role VARCHAR(20) NOT NULL DEFAULT 'CUSTOMER' CHECK (role IN ('CUSTOMER', 'DRIVER', 'MERCHANT', 'ADMIN')),
     role_id UUID REFERENCES admin_roles_permissions(id) ON DELETE SET NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'SUSPENDED', 'LOCKED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -68,12 +69,16 @@ CREATE TABLE IF NOT EXISTS drivers (
     portrait_image_url TEXT,
     license_image_url TEXT,
     vehicle_doc_image_url TEXT,
+    attached_kyc_docs TEXT[],
     is_online BOOLEAN NOT NULL DEFAULT FALSE,
     current_location GEOMETRY(Point, 4326),
     current_bearing DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     rating_avg DECIMAL(3, 2) NOT NULL DEFAULT 5.00,
     acceptance_rate DECIMAL(5, 2) NOT NULL DEFAULT 100.00,
-    approval_status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED')),
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    bank_name VARCHAR(80),
+    bank_account VARCHAR(40),
+    approval_status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED')),
     wallet_balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -90,15 +95,17 @@ CREATE TABLE IF NOT EXISTS merchants (
     representative_name VARCHAR(100) NOT NULL,
     contact_phone VARCHAR(15) NOT NULL,
     contact_email VARCHAR(100),
-    headquarters_address TEXT NOT NULL,
+    headquarters_address TEXT NOT NULL DEFAULT '',
     logo_url TEXT,
-    license_image_url TEXT NOT NULL,
-    storefront_image_url TEXT NOT NULL,
-    bank_name VARCHAR(80) NOT NULL,
-    bank_account_no VARCHAR(40) NOT NULL,
-    bank_account_holder VARCHAR(100) NOT NULL,
+    license_image_url TEXT NOT NULL DEFAULT '',
+    storefront_image_url TEXT NOT NULL DEFAULT '',
+    attached_kyc_docs TEXT[],
+    bank_name VARCHAR(80) NOT NULL DEFAULT '',
+    bank_account_no VARCHAR(40) NOT NULL DEFAULT '',
+    bank_account_holder VARCHAR(100) NOT NULL DEFAULT '',
+    webhook_url TEXT NOT NULL DEFAULT '',
     cod_balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-    approval_status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED')),
+    approval_status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -168,12 +175,12 @@ CREATE TABLE IF NOT EXISTS orders (
     weight_kg DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     dimensions_cm VARCHAR(30),
     driver_note TEXT,
-    sender_name VARCHAR(100) NOT NULL,
-    sender_phone VARCHAR(15) NOT NULL,
+    sender_name VARCHAR(100) NOT NULL DEFAULT '',
+    sender_phone VARCHAR(15) NOT NULL DEFAULT '',
     pickup_address TEXT NOT NULL,
     pickup_location GEOMETRY(Point, 4326) NOT NULL,
-    recipient_name VARCHAR(100) NOT NULL,
-    recipient_phone VARCHAR(15) NOT NULL,
+    recipient_name VARCHAR(100) NOT NULL DEFAULT '',
+    recipient_phone VARCHAR(15) NOT NULL DEFAULT '',
     dropoff_address TEXT NOT NULL,
     dropoff_location GEOMETRY(Point, 4326) NOT NULL,
     distance_meters INTEGER NOT NULL,
@@ -186,7 +193,7 @@ CREATE TABLE IF NOT EXISTS orders (
     cod_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     total_amount DECIMAL(10, 2) NOT NULL,
     payment_method VARCHAR(20) NOT NULL CHECK (payment_method IN ('CASH', 'MOMO', 'ZALOPAY', 'VNPAY', 'BANK_CARD', 'BANK_TRANSFER')),
-    payment_status VARCHAR(20) NOT NULL DEFAULT 'UNPAID' CHECK (payment_status IN ('UNPAID', 'PAID', 'REFUNDED')),
+    payment_status VARCHAR(20) NOT NULL DEFAULT 'UNPAID' CHECK (payment_status IN ('UNPAID', 'PAID', 'REFUNDED', 'RETURNED')),
     status VARCHAR(30) NOT NULL DEFAULT 'DRAFT' CHECK (
         status IN ('DRAFT', 'SEARCHING', 'ACCEPTED', 'ARRIVING_PICKUP', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED', 'FAILED', 'RETURNING')
     ),
@@ -235,7 +242,7 @@ CREATE TABLE IF NOT EXISTS wallets_and_transactions (
     owner_id UUID NOT NULL,
     owner_type VARCHAR(20) NOT NULL CHECK (owner_type IN ('DRIVER', 'MERCHANT')),
     balance_after DECIMAL(12, 2) NOT NULL,
-    tx_type VARCHAR(30) NOT NULL CHECK (tx_type IN ('DELIVERY_EARNING', 'WITHDRAWAL', 'COD_PAYOUT', 'PLATFORM_COMMISSION', 'REFUND')),
+    tx_type VARCHAR(30) NOT NULL CHECK (tx_type IN ('DELIVERY_EARNING', 'WITHDRAWAL', 'COD_PAYOUT', 'PLATFORM_COMMISSION', 'REFUND', 'RETURN_FEE', 'ESCROW_TOPUP', 'TIP')),
     reference_order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
     amount DECIMAL(12, 2) NOT NULL,
     bank_info_snapshot JSONB,
@@ -268,6 +275,7 @@ CREATE TABLE IF NOT EXISTS order_ratings (
     customer_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
     stars SMALLINT NOT NULL CHECK (stars BETWEEN 1 AND 5),
+    tip_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     feedback_tags TEXT[],
     comment VARCHAR(500),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -299,12 +307,84 @@ CREATE TABLE IF NOT EXISTS chat_messages_and_notifications (
     order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
     sender_id UUID REFERENCES users(id) ON DELETE SET NULL,
     recipient_user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-    target_group VARCHAR(20) NOT NULL DEFAULT 'INDIVIDUAL' CHECK (target_group IN ('INDIVIDUAL', 'ALL_CUSTOMERS', 'ALL_DRIVERS', 'ALL_MERCHANTS')),
+    target_group VARCHAR(20) NOT NULL DEFAULT 'INDIVIDUAL' CHECK (target_group IN ('INDIVIDUAL', 'ALL_USERS', 'ALL_CUSTOMERS', 'ALL_DRIVERS', 'ALL_MERCHANTS')),
     category VARCHAR(25) NOT NULL CHECK (category IN ('CHAT_MESSAGE', 'ORDER_UPDATE', 'PROMOTION', 'SYSTEM_BROADCAST')),
     title VARCHAR(150),
     content TEXT NOT NULL,
     attachment_url TEXT,
     is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Commercial operations extensions: multi-stop, scheduling, ledger, webhooks and audit.
+CREATE TABLE IF NOT EXISTS order_stops (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    sequence_no INTEGER NOT NULL CHECK (sequence_no >= 0),
+    stop_type VARCHAR(20) NOT NULL CHECK (stop_type IN ('PICKUP', 'DROPOFF', 'RETURN')),
+    address TEXT NOT NULL,
+    location GEOMETRY(Point, 4326),
+    recipient_name VARCHAR(100),
+    recipient_phone VARCHAR(15),
+    cod_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    note TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(order_id, sequence_no)
+);
+
+CREATE TABLE IF NOT EXISTS scheduled_orders (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID UNIQUE NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS payment_ledger (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    owner_id UUID,
+    owner_type VARCHAR(20) NOT NULL CHECK (owner_type IN ('CUSTOMER', 'DRIVER', 'MERCHANT', 'PLATFORM')),
+    order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+    direction VARCHAR(10) NOT NULL CHECK (direction IN ('DEBIT', 'CREDIT')),
+    entry_type VARCHAR(40) NOT NULL,
+    amount DECIMAL(14, 2) NOT NULL CHECK (amount >= 0),
+    currency VARCHAR(3) NOT NULL DEFAULT 'VND',
+    idempotency_key VARCHAR(160) UNIQUE NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    endpoint_url TEXT NOT NULL,
+    event_type VARCHAR(80) NOT NULL,
+    aggregate_id UUID,
+    payload JSONB NOT NULL,
+    signature TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ,
+    last_http_status INTEGER,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    delivered_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    actor_id UUID,
+    actor_role VARCHAR(20),
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(60) NOT NULL,
+    entity_id UUID,
+    before_data JSONB,
+    after_data JSONB,
+    ip_address INET,
+    device_id TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -322,6 +402,11 @@ CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders (status, created_
 CREATE INDEX IF NOT EXISTS idx_tracking_logs_loc_gist ON order_tracking_logs USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_tracking_logs_order_time ON order_tracking_logs (order_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_geofence_polygon_gist ON geofence_zones USING GIST (polygon_boundary);
+CREATE INDEX IF NOT EXISTS idx_order_stops_order_sequence ON order_stops (order_id, sequence_no);
+CREATE INDEX IF NOT EXISTS idx_scheduled_orders_due ON scheduled_orders (status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_payment_ledger_owner_time ON payment_ledger (owner_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_retry ON webhook_deliveries (status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity_time ON audit_logs (entity_type, entity_id, created_at DESC);
 
 -- =============================================================================
 -- DỮ LIỆU CẤU HÌNH KHỞI TẠO CHUẨN THEO THIẾT KẾ UI (SEED DATA)

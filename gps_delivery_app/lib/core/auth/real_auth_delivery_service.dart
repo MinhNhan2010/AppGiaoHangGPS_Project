@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart' as url_launcher;
+
 import '../../domain/enums/user_role.dart';
 import '../config/env_config.dart';
 
@@ -120,15 +125,11 @@ class RealAuthDeliveryService {
           deliveredExternally: false,
           channel: 'SMTP_NOT_CONFIGURED',
           destination: target,
-          message:
-              'Chưa cấu hình tài khoản SMTP TLS trong EnvConfig để gửi Email OTP.',
+          message: 'Chưa cấu hình tài khoản SMTP TLS trong EnvConfig để gửi Email OTP.',
           otpCode: otpCode,
         );
       }
-      return _sendRealSmtpTlsEmail(
-        recipientEmail: target,
-        otpCode: otpCode,
-      );
+      return _sendRealSmtpTlsEmail(recipientEmail: target, otpCode: otpCode);
     } else {
       return _dispatchMultiChannelPhoneSmsOtp(
         phoneNumber: target,
@@ -142,6 +143,22 @@ class RealAuthDeliveryService {
     required String recipientEmail,
     required String otpCode,
   }) async {
+    if (kIsWeb) {
+      if (EnvConfig.isOtpEmailWebhookConfigured) {
+        return _sendWebEmailOtpRelay(
+          recipientEmail: recipientEmail,
+          otpCode: otpCode,
+        );
+      }
+      return OtpDeliveryReceipt(
+        success: false,
+        deliveredExternally: false,
+        channel: 'SMTP_WEB_UNSUPPORTED',
+        destination: recipientEmail,
+        otpCode: otpCode,
+        message: 'Bản Web cần cấu hình OTP_EMAIL_WEBHOOK_URL để gửi Email OTP. SMTP 465/587 chỉ chạy trực tiếp trên Desktop/Mobile.',
+      );
+    }
     Socket? rawSocket;
     SecureSocket? tlsSocket;
     StreamSubscription<String>? sub;
@@ -208,7 +225,9 @@ class RealAuthDeliveryService {
         rawSocket.write('STARTTLS\r\n');
         final tlsReady = await waitServerCode();
         if (!tlsReady.startsWith('220')) {
-          throw SocketException('Máy chủ SMTP không hỗ trợ STARTTLS: $tlsReady');
+          throw SocketException(
+            'Máy chủ SMTP không hỗ trợ STARTTLS: $tlsReady',
+          );
         }
         await sub.cancel();
         tlsSocket = await SecureSocket.secure(rawSocket);
@@ -283,7 +302,10 @@ class RealAuthDeliveryService {
         ..writeln('.');
 
       tlsSocket.write(
-        emailPayload.toString().replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'),
+        emailPayload
+            .toString()
+            .replaceAll('\r\n', '\n')
+            .replaceAll('\n', '\r\n'),
       );
       final sendRes = await waitServerCode();
       sendCmd('QUIT');
@@ -315,6 +337,59 @@ class RealAuthDeliveryService {
     }
   }
 
+  /// Chuyển Email OTP tới backend HTTP. Backend chịu trách nhiệm gửi SMTP,
+  /// nên mật khẩu SMTP không bao giờ bị đưa vào bundle Web.
+  Future<OtpDeliveryReceipt> _sendWebEmailOtpRelay({
+    required String recipientEmail,
+    required String otpCode,
+  }) async {
+    try {
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      final token = EnvConfig.otpEmailWebhookToken.trim();
+      if (token.isNotEmpty) headers['Authorization'] = 'Bearer $token';
+      final response = await http
+          .post(
+            Uri.parse(EnvConfig.otpEmailWebhookUrl),
+            headers: headers,
+            body: jsonEncode({
+              'to': recipientEmail,
+              'otp': otpCode,
+              'subject': '[GHST] Mã xác thực OTP của bạn',
+              'message':
+                  'Mã xác thực OTP GHST của bạn là $otpCode. Mã có hiệu lực trong 120 giây.',
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return OtpDeliveryReceipt(
+          success: true,
+          deliveredExternally: true,
+          channel: 'EMAIL_WEB_RELAY',
+          destination: recipientEmail,
+          otpCode: otpCode,
+          message: 'Đã gửi mã OTP tới Email $recipientEmail.',
+        );
+      }
+      return OtpDeliveryReceipt(
+        success: false,
+        deliveredExternally: false,
+        channel: 'EMAIL_WEB_RELAY_ERROR',
+        destination: recipientEmail,
+        otpCode: otpCode,
+        message: 'Email relay trả về mã HTTP ${response.statusCode}.',
+      );
+    } catch (error) {
+      return OtpDeliveryReceipt(
+        success: false,
+        deliveredExternally: false,
+        channel: 'EMAIL_WEB_RELAY_ERROR',
+        destination: recipientEmail,
+        otpCode: otpCode,
+        message: 'Không kết nối được Email relay: $error',
+      );
+    }
+  }
+
   /// Điều phối SMS OTP thực tế 100% qua sóng viễn thông (TextBee.dev / Twilio / SpeedSMS.vn / eSMS.vn / HTTP Webhook)
   Future<OtpDeliveryReceipt> _dispatchMultiChannelPhoneSmsOtp({
     required String phoneNumber,
@@ -327,39 +402,24 @@ class RealAuthDeliveryService {
     if (provider == 'TEXTBEE' &&
         EnvConfig.smsApiKey.isNotEmpty &&
         EnvConfig.smsBrandname.isNotEmpty) {
-      return _sendTextBeeSmsGateway(
-        e164Phone: e164Phone,
-        otpCode: otpCode,
-      );
+      return _sendTextBeeSmsGateway(e164Phone: e164Phone, otpCode: otpCode);
     }
     if (provider == 'ESMS' &&
         EnvConfig.smsApiKey.isNotEmpty &&
         EnvConfig.smsApiSecret.isNotEmpty) {
-      return _sendEsmsVnGateway(
-        phoneNumber: normPhone,
-        otpCode: otpCode,
-      );
+      return _sendEsmsVnGateway(phoneNumber: normPhone, otpCode: otpCode);
     }
     if (provider == 'SPEEDSMS' && EnvConfig.smsApiKey.isNotEmpty) {
-      return _sendSpeedSmsGateway(
-        phoneNumber: normPhone,
-        otpCode: otpCode,
-      );
+      return _sendSpeedSmsGateway(phoneNumber: normPhone, otpCode: otpCode);
     }
     if (provider == 'TWILIO' &&
         EnvConfig.smsApiKey.isNotEmpty &&
         EnvConfig.smsApiSecret.isNotEmpty &&
         EnvConfig.smsBrandname.isNotEmpty) {
-      return _sendTwilioSmsGateway(
-        e164Phone: e164Phone,
-        otpCode: otpCode,
-      );
+      return _sendTwilioSmsGateway(e164Phone: e164Phone, otpCode: otpCode);
     }
     if (EnvConfig.isSmsWebhookConfigured) {
-      return _sendRealSmsWebhook(
-        phoneNumber: normPhone,
-        otpCode: otpCode,
-      );
+      return _sendRealSmsWebhook(phoneNumber: normPhone, otpCode: otpCode);
     }
 
     return OtpDeliveryReceipt(
@@ -378,24 +438,25 @@ class RealAuthDeliveryService {
     required String e164Phone,
     required String otpCode,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final apiKey = EnvConfig.smsApiKey.trim();
       final deviceId = EnvConfig.smsBrandname.trim();
       final uri = Uri.parse(
         'https://api.textbee.dev/api/v1/gateway/devices/$deviceId/send-sms',
       );
-      final req = await client.postUrl(uri);
-      req.headers.set('x-api-key', apiKey);
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       final payload = jsonEncode({
         'recipients': [e164Phone],
         'message':
             '[GHST] Ma xac thuc OTP Giao Hang Sieu Toc cua ban la: $otpCode (Hieu luc 120 giay).',
       });
-      req.add(utf8.encode(payload));
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final raw = await utf8.decoder.bind(res).join();
+      final res = await http
+          .post(
+            uri,
+            headers: {'x-api-key': apiKey, 'Content-Type': 'application/json'},
+            body: payload,
+          )
+          .timeout(const Duration(seconds: 8));
+      final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
       if (res.statusCode >= 200 && res.statusCode < 300) {
         return OtpDeliveryReceipt(
           success: true,
@@ -424,8 +485,6 @@ class RealAuthDeliveryService {
         otpCode: otpCode,
         message: 'Lỗi kết nối TextBee.dev: $e',
       );
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -434,13 +493,10 @@ class RealAuthDeliveryService {
     required String phoneNumber,
     required String otpCode,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
       final uri = Uri.parse(
         'https://rest.esms.vn/MainService.svc/json/SendMultipleMessage_V4_post_json/',
       );
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       final payload = jsonEncode({
         'ApiKey': EnvConfig.smsApiKey,
         'SecretKey': EnvConfig.smsApiSecret,
@@ -450,9 +506,14 @@ class RealAuthDeliveryService {
         'Brandname': EnvConfig.smsBrandname,
         'SmsType': '2',
       });
-      req.add(utf8.encode(payload));
-      final res = await req.close().timeout(const Duration(seconds: 6));
-      final raw = await utf8.decoder.bind(res).join();
+      final res = await http
+          .post(
+            uri,
+            headers: const {'Content-Type': 'application/json'},
+            body: payload,
+          )
+          .timeout(const Duration(seconds: 6));
+      final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
       if (res.statusCode >= 200 &&
           res.statusCode < 300 &&
           raw.contains('"CodeResult":"100"')) {
@@ -483,8 +544,6 @@ class RealAuthDeliveryService {
         otpCode: otpCode,
         message: 'Lỗi kết nối eSMS.vn: $e',
       );
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -493,15 +552,11 @@ class RealAuthDeliveryService {
     required String phoneNumber,
     required String otpCode,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final uri = Uri.parse('https://api.speedsms.vn/index.php/sms/send');
-      final req = await client.postUrl(uri);
       final basicAuth = base64Encode(
         utf8.encode('${EnvConfig.smsApiKey.trim()}:x'),
       );
-      req.headers.set(HttpHeaders.authorizationHeader, 'Basic $basicAuth');
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       final customSender = EnvConfig.smsBrandname.trim();
       final hasCustomSender =
           customSender.isNotEmpty && customSender != 'GHST-OTP';
@@ -516,9 +571,17 @@ class RealAuthDeliveryService {
       if (hasCustomSender) {
         bodyMap['sender'] = customSender;
       }
-      req.add(utf8.encode(jsonEncode(bodyMap)));
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final raw = await utf8.decoder.bind(res).join();
+      final res = await http
+          .post(
+            uri,
+            headers: {
+              'Authorization': 'Basic $basicAuth',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode(bodyMap),
+          )
+          .timeout(const Duration(seconds: 8));
+      final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
       if (res.statusCode >= 200 &&
           res.statusCode < 300 &&
           raw.contains('"status":"success"')) {
@@ -548,8 +611,6 @@ class RealAuthDeliveryService {
         otpCode: otpCode,
         message: 'Lỗi kết nối SpeedSMS: $e',
       );
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -558,7 +619,6 @@ class RealAuthDeliveryService {
     required String e164Phone,
     required String otpCode,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final sid = EnvConfig.smsApiKey.trim();
       final token = EnvConfig.smsApiSecret.trim();
@@ -569,17 +629,19 @@ class RealAuthDeliveryService {
         final uri = Uri.parse(
           'https://verify.twilio.com/v2/Services/$fromOrServiceSid/Verifications',
         );
-        final req = await client.postUrl(uri);
-        req.headers.set(HttpHeaders.authorizationHeader, 'Basic $basicAuth');
-        req.headers.set(
-          HttpHeaders.contentTypeHeader,
-          'application/x-www-form-urlencoded',
-        );
         final formBody =
             'To=${Uri.encodeQueryComponent(e164Phone)}&Channel=sms&Locale=vi';
-        req.add(utf8.encode(formBody));
-        final res = await req.close().timeout(const Duration(seconds: 8));
-        final raw = await utf8.decoder.bind(res).join();
+        final res = await http
+            .post(
+              uri,
+              headers: {
+                'Authorization': 'Basic $basicAuth',
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              body: formBody,
+            )
+            .timeout(const Duration(seconds: 8));
+        final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
         if (res.statusCode >= 200 && res.statusCode < 300) {
           return OtpDeliveryReceipt(
             success: true,
@@ -615,19 +677,21 @@ class RealAuthDeliveryService {
       final uri = Uri.parse(
         'https://api.twilio.com/2010-04-01/Accounts/$sid/Messages.json',
       );
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.authorizationHeader, 'Basic $basicAuth');
-      req.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'application/x-www-form-urlencoded',
-      );
       final formBody =
           'To=${Uri.encodeQueryComponent(e164Phone)}'
           '&From=${Uri.encodeQueryComponent(fromOrServiceSid)}'
           '&Body=${Uri.encodeQueryComponent('[GHST] Ma xac thuc OTP Giao Hang Sieu Toc la: $otpCode (Hieu luc 120s)')}';
-      req.add(utf8.encode(formBody));
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final raw = await utf8.decoder.bind(res).join();
+      final res = await http
+          .post(
+            uri,
+            headers: {
+              'Authorization': 'Basic $basicAuth',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: formBody,
+          )
+          .timeout(const Duration(seconds: 8));
+      final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
       if (res.statusCode >= 200 && res.statusCode < 300) {
         return OtpDeliveryReceipt(
           success: true,
@@ -655,8 +719,6 @@ class RealAuthDeliveryService {
         otpCode: otpCode,
         message: 'Lỗi kết nối Twilio: $e',
       );
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -671,7 +733,6 @@ class RealAuthDeliveryService {
       return false;
     }
     final e164Phone = EnvConfig.formatVietnamPhoneE164(phoneNumber);
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
       final sid = EnvConfig.smsApiKey.trim();
       final token = EnvConfig.smsApiSecret.trim();
@@ -679,18 +740,20 @@ class RealAuthDeliveryService {
       final uri = Uri.parse(
         'https://verify.twilio.com/v2/Services/$serviceSid/VerificationCheck',
       );
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.authorizationHeader, 'Basic $basicAuth');
-      req.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'application/x-www-form-urlencoded',
-      );
       final formBody =
           'To=${Uri.encodeQueryComponent(e164Phone)}'
           '&Code=${Uri.encodeQueryComponent(otpCode.trim())}';
-      req.add(utf8.encode(formBody));
-      final res = await req.close().timeout(const Duration(seconds: 8));
-      final raw = await utf8.decoder.bind(res).join();
+      final res = await http
+          .post(
+            uri,
+            headers: {
+              'Authorization': 'Basic $basicAuth',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: formBody,
+          )
+          .timeout(const Duration(seconds: 8));
+      final raw = utf8.decode(res.bodyBytes, allowMalformed: true);
       return res.statusCode >= 200 &&
           res.statusCode < 300 &&
           (raw.contains('"status": "approved"') ||
@@ -699,8 +762,6 @@ class RealAuthDeliveryService {
               raw.contains('"valid":true'));
     } catch (_) {
       return false;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -709,11 +770,8 @@ class RealAuthDeliveryService {
     required String phoneNumber,
     required String otpCode,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
     try {
       final uri = Uri.parse(EnvConfig.smsWebhookUrl);
-      final req = await client.postUrl(uri);
-      req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
       final body = jsonEncode({
         'phone': phoneNumber,
         'e164Phone': EnvConfig.formatVietnamPhoneE164(phoneNumber),
@@ -721,8 +779,13 @@ class RealAuthDeliveryService {
         'message':
             '[GHST] Ma xac thuc OTP Giao Hang Sieu Toc cua ban la: $otpCode (Hieu luc 120s)',
       });
-      req.add(utf8.encode(body));
-      final res = await req.close().timeout(const Duration(seconds: 6));
+      final res = await http
+          .post(
+            uri,
+            headers: const {'Content-Type': 'application/json'},
+            body: body,
+          )
+          .timeout(const Duration(seconds: 6));
       if (res.statusCode >= 200 && res.statusCode < 300) {
         return OtpDeliveryReceipt(
           success: true,
@@ -751,8 +814,6 @@ class RealAuthDeliveryService {
         otpCode: otpCode,
         message: 'Lỗi kết nối SMS Webhook: $e',
       );
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -809,40 +870,45 @@ class RealAuthDeliveryService {
       },
     ).toString();
 
-    try {
-      final server = await HttpServer.bind(
-        InternetAddress.loopbackIPv4,
-        8765,
-        shared: true,
-      );
-      _activeOAuthServer = server;
+    if (!kIsWeb) {
+      try {
+        final server = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          8765,
+          shared: true,
+        );
+        _activeOAuthServer = server;
 
-      server.listen((HttpRequest request) async {
-        if (request.uri.path == '/oauth2callback') {
-          final fullCallbackUrl =
-              'http://127.0.0.1:8765${request.uri.toString()}';
-          final authResult = await tryProcessOAuthCallbackUrl(fullCallbackUrl);
-
-          request.response.headers.contentType =
-              ContentType('text', 'html', charset: 'utf-8');
-          if (authResult != null) {
-            request.response.write(_buildOAuthSuccessHtml(authResult));
-          } else {
-            request.response.write(
-              '<html><body style="font-family:sans-serif;padding:40px;">'
-              '<h3>Đang đồng bộ phiên đăng nhập Google vào ứng dụng...</h3>'
-              '</body></html>',
+        server.listen((HttpRequest request) async {
+          if (request.uri.path == '/oauth2callback') {
+            final fullCallbackUrl =
+                'http://127.0.0.1:8765${request.uri.toString()}';
+            final authResult = await tryProcessOAuthCallbackUrl(
+              fullCallbackUrl,
             );
-          }
-          await request.response.close();
-          return;
-        }
 
-        request.response.statusCode = HttpStatus.notFound;
-        await request.response.close();
-      });
-    } catch (_) {
-      // Nếu cổng 8765 không mở được trên thiết bị di động, WebView vẫn bắt trực tiếp URL redirect thông qua tryProcessOAuthCallbackUrl
+            request.response.headers.contentType = ContentType(
+              'text',
+              'html',
+              charset: 'utf-8',
+            );
+            if (authResult != null) {
+              request.response.write(_buildOAuthSuccessHtml(authResult));
+            } else {
+              request.response.write(
+                '<html><body style="font-family:sans-serif;padding:40px;">'
+                '<h3>Đang đồng bộ phiên đăng nhập Google vào ứng dụng...</h3>'
+                '</body></html>',
+              );
+            }
+            await request.response.close();
+            return;
+          }
+
+          request.response.statusCode = HttpStatus.notFound;
+          await request.response.close();
+        });
+      } catch (_) {}
     }
 
     if (openSystemBrowser) {
@@ -855,15 +921,7 @@ class RealAuthDeliveryService {
     required String code,
     required String redirectUri,
   }) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
     try {
-      final tokenReq = await client.postUrl(
-        Uri.parse('https://oauth2.googleapis.com/token'),
-      );
-      tokenReq.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'application/x-www-form-urlencoded',
-      );
       final formBody = Uri(
         queryParameters: {
           'code': code,
@@ -873,22 +931,30 @@ class RealAuthDeliveryService {
           'grant_type': 'authorization_code',
         },
       ).query;
-      tokenReq.add(utf8.encode(formBody));
-      final tokenRes = await tokenReq.close();
-      final tokenJsonStr = await utf8.decoder.bind(tokenRes).join();
+      final tokenRes = await http
+          .post(
+            Uri.parse('https://oauth2.googleapis.com/token'),
+            headers: const {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: formBody,
+          )
+          .timeout(const Duration(seconds: 8));
+      final tokenJsonStr = utf8.decode(
+        tokenRes.bodyBytes,
+        allowMalformed: true,
+      );
       final tokenMap = jsonDecode(tokenJsonStr) as Map<String, dynamic>;
       final accessToken = tokenMap['access_token']?.toString();
       if (accessToken == null || accessToken.isEmpty) return null;
 
-      final infoReq = await client.getUrl(
-        Uri.parse('https://www.googleapis.com/oauth2/v3/userinfo'),
-      );
-      infoReq.headers.set(
-        HttpHeaders.authorizationHeader,
-        'Bearer $accessToken',
-      );
-      final infoRes = await infoReq.close();
-      final infoJsonStr = await utf8.decoder.bind(infoRes).join();
+      final infoRes = await http
+          .get(
+            Uri.parse('https://www.googleapis.com/oauth2/v3/userinfo'),
+            headers: {'Authorization': 'Bearer $accessToken'},
+          )
+          .timeout(const Duration(seconds: 8));
+      final infoJsonStr = utf8.decode(infoRes.bodyBytes, allowMalformed: true);
       final infoMap = jsonDecode(infoJsonStr) as Map<String, dynamic>;
 
       final email = infoMap['email']?.toString() ?? '';
@@ -896,15 +962,9 @@ class RealAuthDeliveryService {
       final sub = infoMap['sub']?.toString() ?? 'google-$email';
       if (!email.contains('@')) return null;
 
-      return GoogleOAuthResult(
-        email: email,
-        fullName: name,
-        providerSub: sub,
-      );
+      return GoogleOAuthResult(email: email, fullName: name, providerSub: sub);
     } catch (_) {
       return null;
-    } finally {
-      client.close(force: true);
     }
   }
 
@@ -919,13 +979,27 @@ class RealAuthDeliveryService {
   }
 
   Future<void> launchUrlInSystemBrowser(String url) async {
+    final parsed = Uri.tryParse(url);
+    if (parsed != null) {
+      try {
+        final launched = await url_launcher.launchUrl(
+          parsed,
+          mode: url_launcher.LaunchMode.externalApplication,
+        );
+        if (launched || kIsWeb) return;
+      } catch (_) {
+        if (kIsWeb) return;
+      }
+    }
+    if (kIsWeb) return;
     try {
       if (Platform.isWindows) {
         final escaped = url.replaceAll("'", "''");
-        await Process.run(
-          'powershell',
-          ['-NoProfile', '-Command', "Start-Process '$escaped'"],
-        );
+        await Process.run('powershell', [
+          '-NoProfile',
+          '-Command',
+          "Start-Process '$escaped'",
+        ]);
       } else if (Platform.isMacOS) {
         await Process.run('open', [url]);
       } else if (Platform.isLinux) {
@@ -935,6 +1009,9 @@ class RealAuthDeliveryService {
   }
 
   String _buildOAuthSuccessHtml(GoogleOAuthResult res) {
+    const esc = HtmlEscape();
+    final safeName = esc.convert(res.fullName);
+    final safeEmail = esc.convert(res.email);
     return '''<!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -946,8 +1023,8 @@ class RealAuthDeliveryService {
     <div style="background:#CBFF3E;border:1px solid #15131E;display:inline-block;padding:4px 12px;font-weight:900;font-size:12px;">
       XÁC THỰC GOOGLE THÀNH CÔNG
     </div>
-    <h2 style="margin:14px 0 8px;">Xin chào, ${res.fullName}!</h2>
-    <p style="font-size:14px;color:#333;">Tài khoản <strong>${res.email}</strong> đã được đồng bộ vào ứng dụng <strong>Giao Hàng Siêu Tốc (GHST)</strong>.</p>
+    <h2 style="margin:14px 0 8px;">Xin chào, $safeName!</h2>
+    <p style="font-size:14px;color:#333;">Tài khoản <strong>$safeEmail</strong> đã được đồng bộ vào ứng dụng <strong>Giao Hàng Siêu Tốc (GHST)</strong>.</p>
     <p style="font-size:12.5px;color:#555;margin-top:16px;">Bạn có thể đóng tab trình duyệt này và quay lại cửa sổ ứng dụng.</p>
   </div>
 </body>
@@ -956,6 +1033,10 @@ class RealAuthDeliveryService {
 
   /// Tự động dò tìm địa chỉ IPv4 mạng LAN/Wi-Fi thực của máy tính (ưu tiên Wi-Fi/Ethernet, loại bỏ VirtualBox/APIPA)
   Future<List<String>> detectBestLanIpv4List() async {
+    if (kIsWeb) {
+      final host = Uri.base.host.isNotEmpty ? Uri.base.host : '127.0.0.1';
+      return [host];
+    }
     final scored = <(String ip, int score)>[];
     try {
       final interfaces = await NetworkInterface.list(
@@ -965,7 +1046,8 @@ class RealAuthDeliveryService {
       );
       for (final iface in interfaces) {
         final nameLower = iface.name.toLowerCase();
-        final isVirtual = nameLower.contains('virtual') ||
+        final isVirtual =
+            nameLower.contains('virtual') ||
             nameLower.contains('vbox') ||
             nameLower.contains('vmware') ||
             nameLower.contains('vethernet') ||
@@ -1024,9 +1106,25 @@ class RealAuthDeliveryService {
       required String password,
       required String deviceToken,
       required String fullName,
-    }) onAuthenticateMobileRequest,
+    })
+    onAuthenticateMobileRequest,
   }) async {
     await stopMobileQrAuthServer();
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final sessionToken = (nowMs % 900000 + 100000).toString();
+    final cleanedInitial = initialPhone.trim();
+    if (kIsWeb) {
+      final host = Uri.base.host.isNotEmpty ? Uri.base.host : '127.0.0.1';
+      final port = Uri.base.hasPort ? Uri.base.port : 80;
+      return MobileQrAuthSession(
+        sessionToken: sessionToken,
+        initialPhone: cleanedInitial,
+        lanIp: host,
+        port: port,
+        allLanIps: [host],
+      );
+    }
+
     final lanIps = await detectBestLanIpv4List();
     final primaryIp = lanIps.first;
 
@@ -1038,17 +1136,9 @@ class RealAuthDeliveryService {
         shared: true,
       );
     } catch (_) {
-      server = await HttpServer.bind(
-        InternetAddress.anyIPv4,
-        0,
-        shared: true,
-      );
+      server = await HttpServer.bind(InternetAddress.anyIPv4, 0, shared: true);
     }
     _activeQrAuthServer = server;
-
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final sessionToken = (nowMs % 900000 + 100000).toString();
-    final cleanedInitial = initialPhone.trim();
 
     server.listen((HttpRequest req) async {
       req.response.headers.set('Access-Control-Allow-Origin', '*');
@@ -1056,10 +1146,7 @@ class RealAuthDeliveryService {
         'Access-Control-Allow-Methods',
         'GET, POST, OPTIONS',
       );
-      req.response.headers.set(
-        'Access-Control-Allow-Headers',
-        'Content-Type',
-      );
+      req.response.headers.set('Access-Control-Allow-Headers', 'Content-Type');
       if (req.method == 'OPTIONS') {
         req.response.statusCode = HttpStatus.ok;
         await req.response.close();
@@ -1067,17 +1154,14 @@ class RealAuthDeliveryService {
       }
 
       final forwardedFor = req.headers.value('x-forwarded-for');
-      final remoteIp =
-          (forwardedFor != null && forwardedFor.trim().isNotEmpty)
-              ? '${forwardedFor.split(',').first.trim()} (Internet/4G/Wi-Fi)'
-              : (req.connectionInfo?.remoteAddress.address ??
-                  'Thiết bị di động');
+      final remoteIp = (forwardedFor != null && forwardedFor.trim().isNotEmpty)
+          ? '${forwardedFor.split(',').first.trim()} (Internet/4G/Wi-Fi)'
+          : (req.connectionInfo?.remoteAddress.address ?? 'Thiết bị di động');
       final userAgent =
           req.headers.value(HttpHeaders.userAgentHeader) ?? 'Mobile Browser';
       final path = req.uri.path;
 
-      if (req.method == 'GET' &&
-          (path == '/' || path.startsWith('/q/'))) {
+      if (req.method == 'GET' && (path == '/' || path.startsWith('/q/'))) {
         onEvent(
           MobileQrVerificationEvent(
             status: 'SCANNED',
@@ -1087,8 +1171,11 @@ class RealAuthDeliveryService {
             timestamp: DateTime.now(),
           ),
         );
-        req.response.headers.contentType =
-            ContentType('text', 'html', charset: 'utf-8');
+        req.response.headers.contentType = ContentType(
+          'text',
+          'html',
+          charset: 'utf-8',
+        );
         req.response.write(
           _buildMobileQrVerifyHtml(
             sessionToken: sessionToken,
@@ -1121,8 +1208,11 @@ class RealAuthDeliveryService {
             fullName: rawFullName,
           );
 
-          req.response.headers.contentType =
-              ContentType('application', 'json', charset: 'utf-8');
+          req.response.headers.contentType = ContentType(
+            'application',
+            'json',
+            charset: 'utf-8',
+          );
 
           if (!authRes.ok) {
             req.response.write(
@@ -1190,24 +1280,21 @@ class RealAuthDeliveryService {
     required String initialPhone,
     required void Function(MobileQrVerificationEvent event) onEvent,
   }) async {
+    if (kIsWeb) return;
     try {
       final nullKnownHosts = Platform.isWindows ? 'NUL' : '/dev/null';
-      final proc = await Process.start(
-        'ssh',
-        [
-          '-o',
-          'StrictHostKeyChecking=no',
-          '-o',
-          'UserKnownHostsFile=$nullKnownHosts',
-          '-o',
-          'ServerAliveInterval=30',
-          '-T',
-          '-R',
-          '80:127.0.0.1:$port',
-          'nokey@localhost.run',
-        ],
-        runInShell: false,
-      );
+      final proc = await Process.start('ssh', [
+        '-o',
+        'StrictHostKeyChecking=no',
+        '-o',
+        'UserKnownHostsFile=$nullKnownHosts',
+        '-o',
+        'ServerAliveInterval=30',
+        '-T',
+        '-R',
+        '80:127.0.0.1:$port',
+        'nokey@localhost.run',
+      ], runInShell: false);
       _activeQrTunnelProcess = proc;
       bool emitted = false;
       final urlRegex = RegExp(r'https://[a-zA-Z0-9-]+\.lhr\.life');
@@ -1232,14 +1319,8 @@ class RealAuthDeliveryService {
         }
       }
 
-      proc.stdout.transform(utf8.decoder).listen(
-        checkChunk,
-        onError: (_) {},
-      );
-      proc.stderr.transform(utf8.decoder).listen(
-        checkChunk,
-        onError: (_) {},
-      );
+      proc.stdout.transform(utf8.decoder).listen(checkChunk, onError: (_) {});
+      proc.stderr.transform(utf8.decoder).listen(checkChunk, onError: (_) {});
     } catch (_) {}
   }
 

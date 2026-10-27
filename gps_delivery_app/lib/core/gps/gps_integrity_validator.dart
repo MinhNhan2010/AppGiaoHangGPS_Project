@@ -1,9 +1,10 @@
+import 'package:equatable/equatable.dart';
 import '../../domain/entities/geo_point.dart';
 import '../config/env_config.dart';
 import '../error/app_exception.dart';
 import '../utils/geo_math.dart';
 
-class BatteryTrackingPolicy {
+class BatteryTrackingPolicy extends Equatable {
   final int pingIntervalSeconds;
   final int distanceFilterMeters;
   final bool enable3dBuildings;
@@ -17,6 +18,15 @@ class BatteryTrackingPolicy {
     required this.cameraPitch,
     required this.targetFps,
   });
+
+  @override
+  List<Object?> get props => [
+        pingIntervalSeconds,
+        distanceFilterMeters,
+        enable3dBuildings,
+        cameraPitch,
+        targetFps,
+      ];
 }
 
 class GpsIntegrityValidator {
@@ -31,55 +41,65 @@ class GpsIntegrityValidator {
     int? previousTimestampMs,
     double? reportedSpeedKmh,
     bool isAccelerometerActive = true,
+    double? accuracyMeters,
   }) {
+    if (!currentPoint.latitude.isFinite ||
+        !currentPoint.longitude.isFinite ||
+        currentPoint.latitude.abs() > 90.0 ||
+        currentPoint.longitude.abs() > 180.0 ||
+        (accuracyMeters != null &&
+            (!accuracyMeters.isFinite || accuracyMeters < 0.0))) {
+      throw const GpsIntegrityException(
+        ruleId: 'RULE-GEO-01',
+        message: 'Tọa độ GPS hoặc sai số định vị nằm ngoài phạm vi WGS84 hợp lệ.',
+      );
+    }
+
     // Kiểm tra cờ giả lập vị trí (Mock Location) từ hệ điều hành
     if (isMockFlaggedByOs) {
       throw const GpsIntegrityException(
         ruleId: 'RULE-GEO-01',
-        message: 'Phát hiện phần mềm giả lập vị trí (Mock Location). Vui lòng tắt Fake GPS để tiếp tục nhận đơn.',
+        message:
+            'Phát hiện phần mềm giả lập vị trí (Mock Location). Vui lòng tắt Fake GPS để tiếp tục nhận đơn.',
       );
     }
 
     // Đối chiếu độ khớp giữa cảm biến gia tốc IMU và vận tốc GPS
-    if ((reportedSpeedKmh ?? 0.0) > 30.0 && !isAccelerometerActive) {
+    if ((reportedSpeedKmh != null && !reportedSpeedKmh.isFinite) ||
+        ((reportedSpeedKmh ?? 0.0) > 30.0 && !isAccelerometerActive)) {
       throw const GpsIntegrityException(
         ruleId: 'RULE-GEO-03',
-        message: 'Dữ liệu cảm biến gia tốc không khớp với tốc độ di chuyển GPS.',
+        message:
+            'Dữ liệu vận tốc GPS không khớp với cảm biến quán tính (IMU Accelerometer đứng yên).',
       );
     }
 
+    // Phát hiện dịch chuyển tức thời bất thường (Teleportation > 120 km/h)
     if (previousPoint != null && previousTimestampMs != null) {
-      final deltaSec = (currentTimestampMs - previousTimestampMs) / 1000.0;
-      if (deltaSec > 0.0) {
-        final distMeters = GeoMath.distanceMeters(previousPoint, currentPoint);
-        final computedSpeedKmh = (distMeters / deltaSec) * 3.6;
-
-        // Ngưỡng vận tốc dịch chuyển bất thường (> 120 km/h)
-        if (computedSpeedKmh > EnvConfig.maxValidVehicleSpeedKmh) {
+      final distMeters = GeoMath.distanceMeters(previousPoint, currentPoint);
+      final elapsedSec = (currentTimestampMs - previousTimestampMs) / 1000.0;
+      if (elapsedSec <= 0) {
+        if (distMeters > 30.0) {
           throw GpsIntegrityException(
             ruleId: 'RULE-GEO-02',
             message:
-                'Vận tốc dịch chuyển tức thời (${computedSpeedKmh.toStringAsFixed(1)} km/h) vượt ngưỡng cho phép (${EnvConfig.maxValidVehicleSpeedKmh} km/h).',
+                'Phát hiện dịch chuyển tọa độ tức thời bất thường (${distMeters.toStringAsFixed(0)}m với Δt=${elapsedSec.toStringAsFixed(2)}s).',
+          );
+        }
+      } else if (distMeters > 10.0 || elapsedSec >= 0.5) {
+        final calculatedSpeedKmh = (distMeters / elapsedSec) * 3.6;
+        if (calculatedSpeedKmh > EnvConfig.maxValidVehicleSpeedKmh) {
+          throw GpsIntegrityException(
+            ruleId: 'RULE-GEO-02',
+            message:
+                'Phát hiện dịch chuyển tọa độ bất thường (${calculatedSpeedKmh.toStringAsFixed(1)} km/h > ${EnvConfig.maxValidVehicleSpeedKmh} km/h).',
           );
         }
       }
     }
   }
 
-  /// Phát hiện bất thường khi tài xế đứng yên >= 15 phút trong trạng thái đang giao hàng
-  static bool isStationaryAnomaly({
-    required GeoPoint anchorPoint,
-    required GeoPoint currentPoint,
-    required int stationaryStartMs,
-    required int currentTimestampMs,
-  }) {
-    final movedMeters = GeoMath.distanceMeters(anchorPoint, currentPoint);
-    if (movedMeters > 15.0) return false;
-    final elapsedSeconds = (currentTimestampMs - stationaryStartMs) ~/ 1000;
-    return elapsedSeconds >= EnvConfig.stationaryAnomalyAlertSeconds;
-  }
-
-  /// Chính sách điều tiết tần suất phát GPS và đồ họa 3D theo dung lượng pin
+  /// Xác định cấu hình tần suất định vị và hiển thị bản đồ 3D theo mức pin
   static BatteryTrackingPolicy resolvePolicy({
     required int batteryLevelPercent,
     required bool isCharging,

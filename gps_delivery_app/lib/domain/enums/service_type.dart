@@ -55,8 +55,13 @@ enum DeliveryServiceType {
   });
 
   static DeliveryServiceType fromDbCode(String code) {
+    final trimmed = code.trim();
+    final upper = trimmed.toUpperCase();
+    final lower = trimmed.toLowerCase();
+    if (upper == 'EXPRESS') return DeliveryServiceType.express30m;
+    if (upper == 'ECONOMY') return DeliveryServiceType.saving;
     return DeliveryServiceType.values.firstWhere(
-      (e) => e.dbCode == code,
+      (e) => e.dbCode == upper || e.name.toLowerCase() == lower,
       orElse: () => DeliveryServiceType.express30m,
     );
   }

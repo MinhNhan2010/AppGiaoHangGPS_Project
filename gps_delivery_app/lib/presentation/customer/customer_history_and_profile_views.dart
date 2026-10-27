@@ -3,19 +3,75 @@ part of 'customer_subsystem_views.dart';
 extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
   /// UC08: Liên hệ tài xế (Chat nội bộ & Gọi điện - Khớp 100% uc08_lien_he_1791014536835.jpg)
   Widget _buildInAppChatView() {
-    final activeOrder = _store.activeCustomerOrderRecord ?? _store.orders.first;
-    final hasAssignedDriver = activeOrder.assignedDriverName != null &&
+    final activeOrder = _store.activeCustomerOrderRecord;
+    if (activeOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 44,
+                color: Color(0xFF5B33E6),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Chưa có đơn hàng hoạt động để liên hệ Tài xế',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Hãy đặt đơn giao hàng để hệ thống điều phối Tài xế và mở kênh liên lạc nội bộ.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF4A4754)),
+              ),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF5B33E6),
+                ),
+                onPressed: () =>
+                    _rebuildCustomerUi(() => _selectedScreenIndex = 2),
+                icon: const Icon(Icons.add_box_outlined, size: 16),
+                label: const Text('Tạo đơn hàng mới'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final hasAssignedDriver =
+        activeOrder.assignedDriverName != null &&
         activeOrder.assignedDriverName!.trim().isNotEmpty;
+    final canChatWithDriver =
+        hasAssignedDriver &&
+        activeOrder.status != OrderStatus.cancelled &&
+        activeOrder.status != OrderStatus.delivered &&
+        activeOrder.paymentStatus != 'RETURNED';
     final assignedDriverRecord = hasAssignedDriver
         ? _store.drivers
-            .where((d) => d.fullName == activeOrder.assignedDriverName)
-            .firstOrNull
+              .where(
+                (d) =>
+                    d.fullName.trim().toLowerCase() ==
+                    activeOrder.assignedDriverName!.trim().toLowerCase(),
+              )
+              .firstOrNull
         : null;
     final orderMessages = _store.chatMessages
         .where((m) => m.orderId == activeOrder.trackingCode)
         .toList();
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -26,7 +82,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             child: Row(
               children: [
                 InkWell(
-                  onTap: () => _rebuildCustomerUi(() => _selectedScreenIndex = 4),
+                  onTap: () =>
+                      _rebuildCustomerUi(() => _selectedScreenIndex = 4),
                   child: const Icon(
                     Icons.arrow_back_rounded,
                     color: Colors.white,
@@ -49,7 +106,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     children: [
                       Text(
                         hasAssignedDriver
-                            ? '${activeOrder.assignedDriverName} • ${activeOrder.assignedDriverPlate ?? assignedDriverRecord?.licensePlate ?? "59X1-123.45"}'
+                            ? '${activeOrder.assignedDriverName} • ${activeOrder.assignedDriverPlate ?? assignedDriverRecord?.licensePlate ?? "Chưa cập nhật biển số"}'
                             : 'Chưa có tài xế nhận đơn (${activeOrder.trackingCode})',
                         style: const TextStyle(
                           color: Colors.white,
@@ -100,20 +157,41 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       );
                       return;
                     }
-                    final rawPhone = assignedDriverRecord?.phone ??
-                        _store.activeDriverRecord?.phone ??
-                        _store.activeDriverPhone;
+                    final rawPhone = assignedDriverRecord?.phone.trim() ?? '';
+                    if (rawPhone.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Chưa có số điện thoại liên lạc của tài xế ${activeOrder.assignedDriverName}.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
                     final isClosed =
                         activeOrder.status == OrderStatus.delivered ||
-                            activeOrder.status == OrderStatus.cancelled;
+                        activeOrder.status == OrderStatus.cancelled ||
+                        activeOrder.status == OrderStatus.failed ||
+                        activeOrder.status == OrderStatus.returning ||
+                        activeOrder.paymentStatus == 'RETURNED';
                     final maskedPhone = SecurityAndBarcodeUtils.maskPhoneNumber(
                       rawPhone,
                       shouldMask: isClosed,
                     );
+                    if (!isClosed) {
+                      Clipboard.setData(ClipboardData(text: rawPhone));
+                      _store.sendChatMessage(
+                        activeOrder.trackingCode,
+                        '[Cuộc gọi] Khách hàng liên hệ tài xế ($maskedPhone)',
+                        isCustomer: true,
+                      );
+                    }
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(
-                          'Đang kết nối cuộc gọi tới tài xế $maskedPhone...',
+                          isClosed
+                              ? 'Đơn đã hoàn tất/đóng — SĐT tài xế được ẩn bảo mật ($maskedPhone).'
+                              : 'Đã sao chép SĐT $maskedPhone vào bộ nhớ tạm & ghi nhận nhật ký liên hệ!',
                         ),
                       ),
                     );
@@ -225,7 +303,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                             decoration: BoxDecoration(
                               color: const Color(0xFFF5F1E8),
                               borderRadius: BorderRadius.all(Radius.zero),
-                              border: Border.all(color: const Color(0xFF15131E)),
+                              border: Border.all(
+                                color: const Color(0xFF15131E),
+                              ),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -256,20 +336,26 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 6,
-                  children: [
-                    'Tôi đang xuống lấy hàng',
-                    'Để hàng ở lễ tân giúp mình',
-                    'Gọi điện khi tới nơi nhé',
-                  ].map((quick) {
-                    return ActionChip(
-                      label: Text(quick, style: const TextStyle(fontSize: 11)),
-                      onPressed: () => _store.sendChatMessage(
-                        activeOrder.trackingCode,
-                        quick,
-                        isCustomer: true,
-                      ),
-                    );
-                  }).toList(),
+                  children:
+                      [
+                        'Tôi đang xuống lấy hàng',
+                        'Để hàng ở lễ tân giúp mình',
+                        'Gọi điện khi tới nơi nhé',
+                      ].map((quick) {
+                        return ActionChip(
+                          label: Text(
+                            quick,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          onPressed: canChatWithDriver
+                              ? () => _store.sendChatMessage(
+                                  activeOrder.trackingCode,
+                                  quick,
+                                  isCustomer: true,
+                                )
+                              : null,
+                        );
+                      }).toList(),
                 ),
                 const SizedBox(height: 8),
                 Row(
@@ -277,9 +363,14 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     Expanded(
                       child: TextField(
                         controller: _chatInputCtrl,
-                        decoration: const InputDecoration(
+                        enabled: canChatWithDriver,
+                        decoration: InputDecoration(
                           isDense: true,
-                          hintText: 'Nhập tin nhắn...',
+                          hintText: canChatWithDriver
+                              ? 'Nhập tin nhắn...'
+                              : !hasAssignedDriver
+                              ? 'Chờ tài xế nhận đơn để nhắn tin...'
+                              : 'Chuyến hàng đã kết thúc (Chỉ xem lại lịch sử chat)',
                         ),
                       ),
                     ),
@@ -289,15 +380,17 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         backgroundColor: const Color(0xFF5B33E6),
                       ),
                       icon: const Icon(Icons.send_rounded, size: 18),
-                      onPressed: () {
-                        if (_chatInputCtrl.text.trim().isEmpty) return;
-                        _store.sendChatMessage(
-                          activeOrder.trackingCode,
-                          _chatInputCtrl.text.trim(),
-                          isCustomer: true,
-                        );
-                        _chatInputCtrl.clear();
-                      },
+                      onPressed: canChatWithDriver
+                          ? () {
+                              if (_chatInputCtrl.text.trim().isEmpty) return;
+                              _store.sendChatMessage(
+                                activeOrder.trackingCode,
+                                _chatInputCtrl.text.trim(),
+                                isCustomer: true,
+                              );
+                              _chatInputCtrl.clear();
+                            }
+                          : null,
                     ),
                   ],
                 ),
@@ -312,11 +405,43 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
   /// UC12: Hủy đơn hàng & Chọn lý do hủy (Khớp 100% uc12_huy_don_1791014622336.jpg)
   Widget _buildCancelOrderSheetView() {
     final targetOrder = _store.activeCustomerOrderRecord;
-    final canCancel = targetOrder != null &&
-        targetOrder.status.canTransitionTo(OrderStatus.cancelled);
-    final hasDriverAccepted = targetOrder != null &&
-        (targetOrder.status == OrderStatus.accepted ||
-            targetOrder.status == OrderStatus.arrivingPickup);
+    if (targetOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.cancel_presentation_rounded,
+                size: 44,
+                color: Color(0xFF5B33E6),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Chưa có đơn hàng nào để hủy',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Bạn hiện chưa có vận đơn hoạt động. Hãy đặt đơn hàng mới hoặc kiểm tra lịch sử đơn hàng.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF4A4754)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final canCancel = targetOrder.status.canTransitionTo(OrderStatus.cancelled);
+    final hasDriverAccepted =
+        targetOrder.status == OrderStatus.accepted ||
+        targetOrder.status == OrderStatus.arrivingPickup;
     final reasons = [
       'Đổi ý, không muốn gửi nữa',
       'Tìm được tài xế / dịch vụ khác',
@@ -325,7 +450,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
       'Lý do khác',
     ];
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(18),
         child: Column(
@@ -340,50 +468,48 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 color: Color(0xFF15131E),
               ),
             ),
-            if (targetOrder != null) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF5F1E8),
-                  border: Border.all(color: const Color(0xFF15131E)),
-                ),
-                child: Text(
-                  'Đơn đang chọn: ${targetOrder.trackingCode} (${targetOrder.status.displayName})\nLộ trình: ${targetOrder.pickupAddress} → ${targetOrder.dropoffAddress}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF15131E),
-                  ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F1E8),
+                border: Border.all(color: const Color(0xFF15131E)),
+              ),
+              child: Text(
+                'Đơn đang chọn: ${targetOrder.trackingCode} (${targetOrder.status.displayName})\nLộ trình: ${targetOrder.pickupAddress} → ${targetOrder.dropoffAddress}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF15131E),
                 ),
               ),
-              if (_store.customerOrders.length > 1) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: _store.customerOrders.map((ordItem) {
-                    final isCur =
-                        ordItem.trackingCode == targetOrder.trackingCode;
-                    return ChoiceChip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text(
-                        '${ordItem.trackingCode} (${ordItem.status.displayName})',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: isCur ? Colors.white : AppColors.ink,
-                        ),
+            ),
+            if (_store.customerOrders.length > 1) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: _store.customerOrders.map((ordItem) {
+                  final isCur =
+                      ordItem.trackingCode == targetOrder.trackingCode;
+                  return ChoiceChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: isCur ? Colors.white : AppColors.ink,
                       ),
-                      selected: isCur,
-                      selectedColor: const Color(0xFF5B33E6),
-                      onSelected: (_) => _rebuildCustomerUi(() {
-                        _store.selectCustomerOrder(ordItem.trackingCode);
-                      }),
-                    );
-                  }).toList(),
-                ),
-              ],
+                    ),
+                    selected: isCur,
+                    selectedColor: const Color(0xFF5B33E6),
+                    onSelected: (_) => _rebuildCustomerUi(() {
+                      _store.selectCustomerOrder(ordItem.trackingCode);
+                    }),
+                  );
+                }).toList(),
+              ),
             ],
             const SizedBox(height: 12),
             const Text(
@@ -394,7 +520,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             RadioGroup<String>(
               groupValue: _selectedCancelReason,
               onChanged: (v) {
-                if (v != null) _rebuildCustomerUi(() => _selectedCancelReason = v);
+                if (v != null) {
+                  _rebuildCustomerUi(() => _selectedCancelReason = v);
+                }
               },
               child: Column(
                 children: reasons
@@ -441,11 +569,11 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      !canCancel && targetOrder != null
+                      !canCancel
                           ? 'Đơn ${targetOrder.trackingCode} đang ở trạng thái "${targetOrder.status.displayName}" nên không thể hủy theo quy tắc FSM.'
                           : hasDriverAccepted
-                              ? 'Quý khách lưu ý: Tài xế đã nhận chuyến, việc hủy đơn hàng này có thể phát sinh phí hủy (15.000đ).'
-                              : 'Đơn hàng đang ở bước tìm tài xế: Quý khách được hỗ trợ hủy đơn miễn phí (0đ).',
+                          ? 'Quý khách lưu ý: Tài xế đã nhận chuyến, việc hủy đơn hàng này có thể phát sinh phí hủy (15.000đ).'
+                          : 'Đơn hàng đang ở bước tìm tài xế: Quý khách được hỗ trợ hủy đơn miễn phí (0đ).',
                       style: const TextStyle(
                         fontSize: 12,
                         color: Color(0xFF9A3412),
@@ -479,11 +607,20 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         if (ok) {
                           _cancelDetailCtrl.clear();
                         }
+                        final refundNote =
+                            ok && targetOrder.paymentStatus == 'REFUNDED'
+                            ? ' • Đã hoàn tiền thanh toán trước'
+                            : '';
+                        final feeNote = ok
+                            ? (hasDriverAccepted
+                                  ? ' • Phí hủy sau khi tài xế nhận: 15.000đ'
+                                  : ' • Miễn phí hủy (0đ)')
+                            : '';
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
                               ok
-                                  ? 'Đã hủy đơn $target (Lý do: $reason)'
+                                  ? 'Đã hủy đơn $target (Lý do: $reason)$feeNote$refundNote'
                                   : 'Đơn $target đang ở trạng thái "${targetOrder.status.displayName}", không thể hủy.',
                             ),
                           ),
@@ -492,7 +629,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     : null,
                 child: Text(
                   canCancel ? 'Xác nhận hủy đơn' : 'Không thể hủy đơn này',
-                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14.5),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 14.5,
+                  ),
                 ),
               ),
             ),
@@ -505,7 +645,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     borderRadius: BorderRadius.all(Radius.zero),
                   ),
                 ),
-                onPressed: () => _rebuildCustomerUi(() => _selectedScreenIndex = 4),
+                onPressed: () =>
+                    _rebuildCustomerUi(() => _selectedScreenIndex = 4),
                 child: const Text(
                   'Quay lại',
                   style: TextStyle(fontWeight: FontWeight.w700),
@@ -551,7 +692,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     }).toList();
 
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -573,53 +717,30 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _historySearchCtrl,
-                        onChanged: (_) => _rebuildCustomerUi(() {}),
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          hintText: 'Tìm theo mã đơn hàng...',
-                          prefixIcon: Icon(Icons.search_rounded),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      onPressed: () {
-                        _rebuildCustomerUi(() {});
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Đã cập nhật danh sách ${_store.customerOrders.length} vận đơn của bạn',
-                            ),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.refresh_rounded, size: 15),
-                      label: const Text(
-                        'Làm mới',
-                        style: TextStyle(fontSize: 11.5),
-                      ),
-                    ),
-                  ],
+                TextField(
+                  controller: _historySearchCtrl,
+                  onChanged: (_) => _rebuildCustomerUi(() {}),
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    hintText: 'Tìm theo mã đơn hàng hoặc địa chỉ...',
+                    prefixIcon: Icon(Icons.search_rounded),
+                  ),
                 ),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 6,
-                  children: ['Tất cả', 'Đang giao', 'Hoàn thành', 'Đã hủy']
-                      .map((tab) {
-                    return ChoiceChip(
-                      visualDensity: VisualDensity.compact,
-                      label: Text(tab),
-                      selected: _historyFilterTab == tab,
-                      onSelected: (_) => _rebuildCustomerUi(() {
-                        _historyFilterTab = tab;
-                      }),
-                    );
-                  }).toList(),
+                  children: ['Tất cả', 'Đang giao', 'Hoàn thành', 'Đã hủy'].map(
+                    (tab) {
+                      return ChoiceChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(tab),
+                        selected: _historyFilterTab == tab,
+                        onSelected: (_) => _rebuildCustomerUi(() {
+                          _historyFilterTab = tab;
+                        }),
+                      );
+                    },
+                  ).toList(),
                 ),
                 const SizedBox(height: 12),
                 if (filtered.isEmpty)
@@ -633,20 +754,21 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     final isReturned = ord.paymentStatus == 'RETURNED';
                     final isDone =
                         ord.status == OrderStatus.delivered && !isReturned;
-                    final isCancelled = ord.status == OrderStatus.cancelled ||
+                    final isCancelled =
+                        ord.status == OrderStatus.cancelled ||
                         ord.status == OrderStatus.failed ||
                         ord.status == OrderStatus.returning ||
                         isReturned;
                     final badgeBg = isDone
                         ? const Color(0xFFDCFCE7)
                         : isCancelled
-                            ? const Color(0xFFFEE2E2)
-                            : const Color(0xFFE9E9E4);
+                        ? const Color(0xFFFEE2E2)
+                        : const Color(0xFFE9E9E4);
                     final badgeFg = isDone
                         ? const Color(0xFF14B866)
                         : isCancelled
-                            ? const Color(0xFFDC2626)
-                            : const Color(0xFFFF5E83);
+                        ? const Color(0xFFDC2626)
+                        : const Color(0xFFFF5E83);
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 10),
@@ -673,25 +795,59 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                                   color: Color(0xFF15131E),
                                 ),
                               ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 3,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: badgeBg,
-                                  borderRadius: BorderRadius.all(Radius.zero),
-                                ),
-                                child: Text(
-                                  isReturned
-                                      ? 'Đã hoàn kho'
-                                      : ord.status.displayName,
-                                  style: TextStyle(
-                                    color: badgeFg,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  if (!isDone &&
+                                      !isCancelled &&
+                                      ord.status != OrderStatus.searching &&
+                                      ord.status != OrderStatus.draft)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 3,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFECFDF5),
+                                        border: Border.all(
+                                          color: const Color(0xFF14B866),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'OTP: ${SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(ord.trackingCode)}',
+                                        style: const TextStyle(
+                                          color: Color(0xFF14B866),
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w900,
+                                          fontFamily: 'monospace',
+                                        ),
+                                      ),
+                                    ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 3,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: badgeBg,
+                                      borderRadius: BorderRadius.all(
+                                        Radius.zero,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      isReturned
+                                          ? 'Đã hoàn kho'
+                                          : ord.status.displayName,
+                                      style: TextStyle(
+                                        color: badgeFg,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ),
                             ],
                           ),
@@ -713,10 +869,14 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                                           ord.podImageNote!.isNotEmpty
                                       ? 'Dịch vụ: ${ord.serviceType.displayName} • POD: ${ord.podImageNote}'
                                       : isDone
-                                          ? 'Dịch vụ: ${ord.serviceType.displayName} • POD: Đã ký nhận'
-                                          : ord.status == OrderStatus.cancelled
-                                              ? 'Dịch vụ: ${ord.serviceType.displayName} • Hủy: ${ord.cancelReason ?? "Khách hủy đơn"}'
-                                              : 'Dịch vụ: ${ord.serviceType.displayName} • TT: ${ord.paymentStatus == "PAID" ? "Đã thanh toán" : "Chưa thanh toán (${ord.paymentMethod})"}',
+                                      ? 'Dịch vụ: ${ord.serviceType.displayName} • POD: Đã ký nhận'
+                                      : ord.status == OrderStatus.cancelled
+                                      ? 'Dịch vụ: ${ord.serviceType.displayName} • Hủy: ${ord.cancelReason ?? "Khách hủy đơn"}${ord.paymentStatus == "REFUNDED" ? " (Đã hoàn tiền)" : ""}'
+                                      : 'Dịch vụ: ${ord.serviceType.displayName} • TT: ${ord.paymentStatus == "PAID"
+                                            ? "Đã thanh toán"
+                                            : ord.paymentStatus == "REFUNDED"
+                                            ? "Đã hoàn tiền"
+                                            : "Chưa thanh toán (${ord.paymentMethod})"}',
                                   style: const TextStyle(
                                     fontSize: 11.5,
                                     color: Color(0xFF4A4754),
@@ -803,21 +963,55 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
 
   /// UC10: Đánh giá chuyến hàng & Tiền thưởng Tip (Khớp 100% uc10_danh_gia_1791014585673.jpg)
   Widget _buildRateDriverView() {
+    final deliveredOrders = _store.customerOrders
+        .where(
+          (o) =>
+              o.status == OrderStatus.delivered &&
+              o.paymentStatus != 'RETURNED',
+        )
+        .toList();
     final currentSelected = _store.activeCustomerOrderRecord;
-    final activeOrder = (currentSelected != null &&
+    final activeOrder =
+        (currentSelected != null &&
             currentSelected.status == OrderStatus.delivered &&
             currentSelected.paymentStatus != 'RETURNED')
         ? currentSelected
-        : (_store.customerOrders
-                .where(
-                  (o) =>
-                      o.status == OrderStatus.delivered &&
-                      o.paymentStatus != 'RETURNED',
-                )
-                .firstOrNull ??
-            currentSelected ??
-            _store.orders.first);
-    final canRateOrder = activeOrder.status == OrderStatus.delivered &&
+        : deliveredOrders.firstOrNull;
+    if (activeOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.star_border_rounded,
+                size: 46,
+                color: Color(0xFF5B33E6),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Chưa có chuyến hàng nào để đánh giá',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Sau khi chuyến hàng được giao hoàn tất, bạn có thể đánh giá chất lượng phục vụ và gửi tiền thưởng Tip cho Tài xế tại đây.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF4A4754)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final canRateOrder =
+        activeOrder.status == OrderStatus.delivered &&
         activeOrder.paymentStatus != 'RETURNED';
     if (_lastSyncedRatingOrderCode != activeOrder.trackingCode) {
       _lastSyncedRatingOrderCode = activeOrder.trackingCode;
@@ -825,13 +1019,21 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
         _ratingStars = activeOrder.ratingStars!;
       } else {
         _ratingStars = 5;
+        _ratingCommentCtrl.clear();
       }
     }
-    final assignedDrv = activeOrder.assignedDriverName != null
+    final hasAssignedDrv =
+        activeOrder.assignedDriverName != null &&
+        activeOrder.assignedDriverName!.trim().isNotEmpty;
+    final assignedDrv = hasAssignedDrv
         ? _store.drivers
-            .where((d) => d.fullName == activeOrder.assignedDriverName)
-            .firstOrNull
-        : _store.activeDriverRecord;
+              .where(
+                (d) =>
+                    d.fullName.trim().toLowerCase() ==
+                    activeOrder.assignedDriverName!.trim().toLowerCase(),
+              )
+              .firstOrNull
+        : null;
     final chips = [
       'Thái độ thân thiện',
       'Giao hàng nhanh',
@@ -841,7 +1043,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     const tipOptions = [0, 5000, 10000, 20000];
 
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -852,7 +1057,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             child: Row(
               children: [
                 InkWell(
-                  onTap: () => _rebuildCustomerUi(() => _selectedScreenIndex = 4),
+                  onTap: () =>
+                      _rebuildCustomerUi(() => _selectedScreenIndex = 4),
                   child: const Icon(
                     Icons.arrow_back_rounded,
                     color: Colors.white,
@@ -876,17 +1082,17 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
             padding: const EdgeInsets.all(18),
             child: Column(
               children: [
-                if (_store.customerOrders.length > 1) ...[
+                if (deliveredOrders.length > 1) ...[
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: _store.customerOrders.map((ordItem) {
+                    children: deliveredOrders.map((ordItem) {
                       final isCur =
                           ordItem.trackingCode == activeOrder.trackingCode;
                       return ChoiceChip(
                         visualDensity: VisualDensity.compact,
                         label: Text(
-                          '${ordItem.trackingCode} (${ordItem.status.displayName})',
+                          '${ordItem.trackingCode} (${ordItem.ratingStars != null ? "${ordItem.ratingStars}★" : "Chưa đánh giá"})',
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
@@ -914,14 +1120,18 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  activeOrder.assignedDriverName ?? _store.activeDriverName,
+                  hasAssignedDrv
+                      ? activeOrder.assignedDriverName!
+                      : 'Chưa có tài xế nhận chuyến',
                   style: const TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 16,
                   ),
                 ),
                 Text(
-                  '${assignedDrv?.vehicleType ?? _store.activeDriverRecord?.vehicleType ?? "Xe máy"} - ${activeOrder.assignedDriverPlate ?? assignedDrv?.licensePlate ?? _store.activeDriverRecord?.licensePlate ?? "59X1-123.45"}',
+                  hasAssignedDrv
+                      ? '${assignedDrv?.vehicleType ?? "Xe máy"} - ${activeOrder.assignedDriverPlate ?? assignedDrv?.licensePlate ?? "Chưa cập nhật biển số"}'
+                      : 'Chưa phân bổ phương tiện',
                   style: const TextStyle(
                     fontSize: 12.5,
                     color: Color(0xFF4A4754),
@@ -971,7 +1181,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   children: List.generate(5, (index) {
                     final starNum = index + 1;
                     return IconButton(
-                      onPressed: () => _rebuildCustomerUi(() => _ratingStars = starNum),
+                      onPressed: () =>
+                          _rebuildCustomerUi(() => _ratingStars = starNum),
                       icon: Icon(
                         starNum <= _ratingStars
                             ? Icons.star_rounded
@@ -986,8 +1197,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   _ratingStars == 5
                       ? 'Tuyệt vời!'
                       : _ratingStars == 4
-                          ? 'Rất hài lòng'
-                          : 'Cần cải thiện',
+                      ? 'Rất hài lòng'
+                      : 'Cần cải thiện',
                   style: const TextStyle(
                     fontWeight: FontWeight.w800,
                     color: Color(0xFFFF5E83),
@@ -1063,7 +1274,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       ),
                       onPressed: alreadyRated
                           ? null
-                          : () => _rebuildCustomerUi(() => _selectedTipVnd = tip),
+                          : () =>
+                                _rebuildCustomerUi(() => _selectedTipVnd = tip),
                       child: Text(
                         label,
                         style: const TextStyle(
@@ -1090,8 +1302,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         ? () {
                             final isFirstRating =
                                 activeOrder.ratingStars == null;
-                            final effectiveTip =
-                                isFirstRating ? _selectedTipVnd : 0;
+                            final effectiveTip = isFirstRating
+                                ? _selectedTipVnd
+                                : 0;
                             final tipNote = effectiveTip > 0
                                 ? ' [Tip: ${CurrencyFormatter.formatVnd(effectiveTip.toDouble())}]'
                                 : '';
@@ -1139,13 +1352,50 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
 
   /// Gửi khiếu nại đơn hàng kèm ảnh bằng chứng
   Widget _buildSubmitComplaintView() {
-    final targetOrder = _store.activeCustomerOrderRecord ?? _store.orders.first;
+    final targetOrder = _store.activeCustomerOrderRecord;
+    if (targetOrder == null) {
+      return Card(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: AppColors.ink, width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.support_agent_rounded,
+                size: 46,
+                color: Color(0xFF5B33E6),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Chưa có đơn hàng nào để gửi khiếu nại',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Mọi yêu cầu hỗ trợ và khiếu nại bồi thường sẽ được liên kết trực tiếp với mã vận đơn của bạn sau khi tạo đơn.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12.5, color: Color(0xFF4A4754)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final myOrderCodes = _store.customerOrders
+        .map((o) => o.trackingCode)
+        .toSet();
     final myComplaints = _store.complaints
         .where(
           (c) =>
               c.customerName.trim().toLowerCase() ==
                   _store.customerFullName.trim().toLowerCase() ||
-              c.orderId == targetOrder.trackingCode,
+              (myOrderCodes.contains(c.orderId) &&
+                  !c.customerName.trim().startsWith('Tài xế')),
         )
         .toList();
     final types = [
@@ -1196,7 +1446,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: selected ? Colors.white : const Color(0xFF15131E),
+                        color: selected
+                            ? Colors.white
+                            : const Color(0xFF15131E),
                       ),
                     ),
                     selected: selected,
@@ -1232,7 +1484,8 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 return ChoiceChip(
                   label: Text(t),
                   selected: _complaintType == t,
-                  onSelected: (_) => _rebuildCustomerUi(() => _complaintType = t),
+                  onSelected: (_) =>
+                      _rebuildCustomerUi(() => _complaintType = t),
                 );
               }).toList(),
             ),
@@ -1252,19 +1505,28 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 OutlinedButton.icon(
-                  onPressed: _customerComplaintPhotos >= 3
+                  onPressed: _customerEvidenceFiles.length >= 3
                       ? null
-                      : () => _rebuildCustomerUi(() {
-                            _customerComplaintPhotos =
-                                (_customerComplaintPhotos + 1).clamp(0, 3);
-                          }),
+                      : () async {
+                          final pickedName =
+                              await SecurityAndBarcodeUtils.pickLocalDocumentOrImage(
+                                dialogTitle:
+                                    'Chọn ảnh / chứng từ bằng chứng khiếu nại',
+                              );
+                          if (!mounted || pickedName == null) return;
+                          if (!_customerEvidenceFiles.contains(pickedName)) {
+                            _rebuildCustomerUi(
+                              () => _customerEvidenceFiles.add(pickedName),
+                            );
+                          }
+                        },
                   icon: const Icon(Icons.add_a_photo_outlined, size: 16),
                   label: Text(
-                    'Đính kèm ảnh ($_customerComplaintPhotos/3)',
+                    'Đính kèm ảnh (${_customerEvidenceFiles.length}/3)',
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
-                for (var i = 1; i <= _customerComplaintPhotos; i++)
+                for (final fileName in _customerEvidenceFiles)
                   Chip(
                     visualDensity: VisualDensity.compact,
                     avatar: const Icon(
@@ -1272,14 +1534,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       size: 15,
                       color: Color(0xFF14B866),
                     ),
-                    label: Text(
-                      'bang_chung_0$i.jpg',
-                      style: const TextStyle(fontSize: 11),
+                    label: Text(fileName, style: const TextStyle(fontSize: 11)),
+                    onDeleted: () => _rebuildCustomerUi(
+                      () => _customerEvidenceFiles.remove(fileName),
                     ),
-                    onDeleted: () => _rebuildCustomerUi(() {
-                      _customerComplaintPhotos =
-                          (_customerComplaintPhotos - 1).clamp(0, 3);
-                    }),
                   ),
               ],
             ),
@@ -1291,21 +1549,75 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   backgroundColor: AppColors.danger,
                 ),
                 onPressed: () {
+                  if (_complaintType == 'Thái độ tài xế' &&
+                      (targetOrder.assignedDriverName == null ||
+                          targetOrder.assignedDriverName!.trim().isEmpty)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        backgroundColor: AppColors.danger,
+                        content: Text(
+                          'Đơn hàng đang chờ gán tài xế, chưa thể gửi khiếu nại về thái độ tài xế!',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  if (_complaintType == 'Hàng hư hỏng' &&
+                      (targetOrder.status == OrderStatus.draft ||
+                          targetOrder.status == OrderStatus.searching ||
+                          targetOrder.status == OrderStatus.accepted ||
+                          targetOrder.status == OrderStatus.arrivingPickup)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: AppColors.danger,
+                        content: Text(
+                          'Đơn ${targetOrder.trackingCode} hiện chưa được tài xế lấy hàng (${targetOrder.status.displayName}). Chỉ có thể báo cáo "Hàng hư hỏng" sau khi kiện hàng đã được bàn giao vận chuyển!',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  final duplicateOpen = myComplaints.any(
+                    (c) =>
+                        c.orderId == targetOrder.trackingCode &&
+                        c.issueType == _complaintType &&
+                        c.status != 'Đã giải quyết',
+                  );
+                  if (duplicateOpen) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: AppColors.danger,
+                        content: Text(
+                          'Bạn đã gửi khiếu nại "$_complaintType" cho đơn ${targetOrder.trackingCode} và hồ sơ đang được xử lý!',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
                   final rawDesc = _complaintDescCtrl.text.trim().isEmpty
                       ? 'Yêu cầu kiểm tra lộ trình & tình trạng kiện hàng'
                       : _complaintDescCtrl.text.trim();
+                  final attachedFiles = List<String>.from(
+                    _customerEvidenceFiles,
+                  );
+                  final attachmentSuffix = attachedFiles.isEmpty
+                      ? 'Không đính kèm tệp'
+                      : 'Tệp đính kèm: ${attachedFiles.join(", ")}';
                   _store.addIncidentOrComplaint(
                     orderId: targetOrder.trackingCode,
                     reporterName: _store.customerFullName,
                     issueType: _complaintType,
-                    description:
-                        '$rawDesc (Đính kèm $_customerComplaintPhotos/3 ảnh bằng chứng)',
+                    description: '$rawDesc ($attachmentSuffix)',
+                    evidenceFiles: attachedFiles,
                   );
-                  _complaintDescCtrl.clear();
+                  _rebuildCustomerUi(() {
+                    _complaintDescCtrl.clear();
+                    _customerEvidenceFiles.clear();
+                  });
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Đã gửi yêu cầu khiếu nại cho đơn ${targetOrder.trackingCode} ($_customerComplaintPhotos/3 ảnh) tới Trung tâm Hỗ trợ!',
+                        'Đã gửi yêu cầu khiếu nại cho đơn ${targetOrder.trackingCode} (${attachedFiles.length} tệp đính kèm) tới Trung tâm Hỗ trợ!',
                       ),
                     ),
                   );
@@ -1376,7 +1688,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     final hasPhone = _store.hasUserProvidedPhone;
 
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1400,12 +1715,30 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                     Builder(
                       builder: (context) {
                         const avatarThemes = [
-                          (Color(0xFFE9E9E4), Color(0xFF5B33E6), Icons.person_rounded),
-                          (Color(0xFFDCFCE7), Color(0xFF14B866), Icons.verified_user_rounded),
-                          (Color(0xFFFEF3C7), Color(0xFFD97706), Icons.workspace_premium_rounded),
-                          (Color(0xFFDBEAFE), Color(0xFF1D4ED8), Icons.face_retouching_natural_rounded),
+                          (
+                            Color(0xFFE9E9E4),
+                            Color(0xFF5B33E6),
+                            Icons.person_rounded,
+                          ),
+                          (
+                            Color(0xFFDCFCE7),
+                            Color(0xFF14B866),
+                            Icons.verified_user_rounded,
+                          ),
+                          (
+                            Color(0xFFFEF3C7),
+                            Color(0xFFD97706),
+                            Icons.workspace_premium_rounded,
+                          ),
+                          (
+                            Color(0xFFDBEAFE),
+                            Color(0xFF1D4ED8),
+                            Icons.face_retouching_natural_rounded,
+                          ),
                         ];
-                        final theme = avatarThemes[_store.customerAvatarBadgeIndex % avatarThemes.length];
+                        final theme =
+                            avatarThemes[_store.customerAvatarBadgeIndex %
+                                avatarThemes.length];
                         return Container(
                           width: 78,
                           height: 78,
@@ -1414,11 +1747,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 3),
                           ),
-                          child: Icon(
-                            theme.$3,
-                            size: 46,
-                            color: theme.$2,
-                          ),
+                          child: Icon(theme.$3, size: 46, color: theme.$2),
                         );
                       },
                     ),
@@ -1427,8 +1756,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       bottom: 0,
                       child: InkWell(
                         onTap: () {
-                          final nextIdx = (_store.customerAvatarBadgeIndex + 1) % 4;
-                          _store.updateCustomerProfile(
+                          final nextIdx =
+                              (_store.customerAvatarBadgeIndex + 1) % 4;
+                          final ok = _store.updateCustomerProfile(
                             fullName: _profileNameCtrl.text.trim(),
                             phone: _profilePhoneCtrl.text.trim(),
                             email: _profileEmailCtrl.text.trim(),
@@ -1436,6 +1766,17 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                             gender: _profileGender,
                             avatarBadgeIndex: nextIdx,
                           );
+                          if (!ok) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                backgroundColor: AppColors.danger,
+                                content: Text(
+                                  'Không thể lưu: Số điện thoại hoặc Email này đã được đăng ký bởi tài khoản khác!',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
                               content: Text(
@@ -1573,161 +1914,178 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                       );
                     },
                   ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _profileAddressCtrl,
-                  decoration:
-                      const InputDecoration(labelText: 'Địa chỉ mặc định'),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Giới tính',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
-                ),
-                RadioGroup<String>(
-                  groupValue: _profileGender,
-                  onChanged: (v) {
-                    if (v != null) _rebuildCustomerUi(() => _profileGender = v);
-                  },
-                  child: const Row(
-                    children: [
-                      Expanded(
-                        child: RadioListTile<String>(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          value: 'Nam',
-                          title: Text('Nam'),
-                        ),
-                      ),
-                      Expanded(
-                        child: RadioListTile<String>(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          value: 'Nữ',
-                          title: Text('Nữ'),
-                        ),
-                      ),
-                      Expanded(
-                        child: RadioListTile<String>(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          value: 'Khác',
-                          title: Text('Khác'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 20),
-                const Text(
-                  'Liên kết tài khoản',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
-                ),
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Color(0xFFFEE2E2),
-                    child: Text(
-                      'G',
-                      style: TextStyle(
-                        color: Color(0xFFDC2626),
-                        fontWeight: FontWeight.w900,
-                      ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _profileAddressCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Địa chỉ mặc định',
                     ),
                   ),
-                  title: const Text('Google'),
-                  trailing: Switch(
-                    value: _store.isCustomerGoogleLinked,
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Giới tính',
+                    style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                  ),
+                  RadioGroup<String>(
+                    groupValue: _profileGender,
                     onChanged: (v) {
-                      _store.toggleCustomerSocialLink(
-                        provider: 'GOOGLE',
-                        linked: v,
-                      );
+                      if (v != null) {
+                        _rebuildCustomerUi(() => _profileGender = v);
+                      }
                     },
-                  ),
-                ),
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    radius: 14,
-                    backgroundColor: Color(0xFFDCFCE7),
-                    child: Icon(
-                      Icons.shield_outlined,
-                      size: 15,
-                      color: Color(0xFF14B866),
+                    child: const Row(
+                      children: [
+                        Expanded(
+                          child: RadioListTile<String>(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: 'Nam',
+                            title: Text('Nam'),
+                          ),
+                        ),
+                        Expanded(
+                          child: RadioListTile<String>(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: 'Nữ',
+                            title: Text('Nữ'),
+                          ),
+                        ),
+                        Expanded(
+                          child: RadioListTile<String>(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: 'Khác',
+                            title: Text('Khác'),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  title: const Text('Xác thực OTP Bảo mật 2 lớp (Email / SMS)'),
-                  trailing: Switch(
-                    value: _store.isCustomerTwoFactorEnabled,
-                    onChanged: (v) {
-                      _store.toggleCustomerSocialLink(
-                        provider: 'TWO_FACTOR_OTP',
-                        linked: v,
-                      );
-                    },
+                  const Divider(height: 20),
+                  const Text(
+                    'Liên kết tài khoản',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
                   ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  height: 46,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF5B33E6),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.all(Radius.zero),
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const CircleAvatar(
+                      radius: 14,
+                      backgroundColor: Color(0xFFFEE2E2),
+                      child: Text(
+                        'G',
+                        style: TextStyle(
+                          color: Color(0xFFDC2626),
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
-                    onPressed: () {
-                      if (_profileNameCtrl.text.trim().isEmpty) {
+                    title: const Text('Google'),
+                    trailing: Switch(
+                      value: _store.isCustomerGoogleLinked,
+                      onChanged: (v) {
+                        _store.toggleCustomerSocialLink(
+                          provider: 'GOOGLE',
+                          linked: v,
+                        );
+                      },
+                    ),
+                  ),
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const CircleAvatar(
+                      radius: 14,
+                      backgroundColor: Color(0xFFDCFCE7),
+                      child: Icon(
+                        Icons.shield_outlined,
+                        size: 15,
+                        color: Color(0xFF14B866),
+                      ),
+                    ),
+                    title: const Text(
+                      'Xác thực OTP Bảo mật 2 lớp (Email / SMS)',
+                    ),
+                    trailing: Switch(
+                      value: _store.isCustomerTwoFactorEnabled,
+                      onChanged: (v) {
+                        _store.toggleCustomerSocialLink(
+                          provider: 'TWO_FACTOR_OTP',
+                          linked: v,
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF5B33E6),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.all(Radius.zero),
+                        ),
+                      ),
+                      onPressed: () {
+                        if (_profileNameCtrl.text.trim().isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Vui lòng nhập họ và tên hợp lệ!'),
+                            ),
+                          );
+                          return;
+                        }
+                        final ok = _store.updateCustomerProfile(
+                          fullName: _profileNameCtrl.text.trim(),
+                          phone: _profilePhoneCtrl.text.trim(),
+                          email: _profileEmailCtrl.text.trim(),
+                          defaultAddress: _profileAddressCtrl.text.trim(),
+                          gender: _profileGender,
+                        );
+                        if (!ok) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              backgroundColor: AppColors.danger,
+                              content: Text(
+                                'Không thể lưu: Số điện thoại hoặc Email này đã được đăng ký bởi tài khoản khác!',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Vui lòng nhập họ và tên hợp lệ!'),
+                          SnackBar(
+                            content: Text(
+                              'Đã lưu thay đổi hồ sơ cá nhân (${_profileNameCtrl.text.trim()} • Giới tính: $_profileGender)!',
+                            ),
                           ),
                         );
-                        return;
-                      }
-                      _store.updateCustomerProfile(
-                        fullName: _profileNameCtrl.text.trim(),
-                        phone: _profilePhoneCtrl.text.trim(),
-                        email: _profileEmailCtrl.text.trim(),
-                        defaultAddress: _profileAddressCtrl.text.trim(),
-                        gender: _profileGender,
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'Đã lưu thay đổi hồ sơ cá nhân (${_profileNameCtrl.text.trim()} • Giới tính: $_profileGender)!',
-                          ),
-                        ),
-                      );
-                    },
-                    child: const Text(
-                      'Lưu thay đổi hồ sơ',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                      },
+                      child: const Text(
+                        'Lưu thay đổi hồ sơ',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
                     ),
                   ),
-                ),
-                const Divider(height: 24),
-                _buildPartnerKycApplicationSection(context),
-              ],
+                  const Divider(height: 24),
+                  _buildPartnerKycApplicationSection(context),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
   }
 
   Widget _buildPartnerKycApplicationSection(BuildContext context) {
-    final normPhone = _profilePhoneCtrl.text
-        .trim()
-        .replaceAll(RegExp(r'[^0-9]'), '');
+    final rawPhoneInput = _profilePhoneCtrl.text.trim().isNotEmpty
+        ? _profilePhoneCtrl.text.trim()
+        : (_store.activeAuthenticatedUser?.phone ?? _store.customerPhone);
+    final normPhone = rawPhoneInput.replaceAll(RegExp(r'[^0-9]'), '');
     final drvRecord = _store.drivers
         .where(
           (d) =>
@@ -1751,17 +2109,17 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
       final bg = isApproved
           ? const Color(0xFFDCFCE7)
           : isPending
-              ? const Color(0xFFFEF3C7)
-              : isRejected
-                  ? const Color(0xFFFEE2E2)
-                  : const Color(0xFFF5F1E8);
+          ? const Color(0xFFFEF3C7)
+          : isRejected
+          ? const Color(0xFFFEE2E2)
+          : const Color(0xFFF5F1E8);
       final fg = isApproved
           ? const Color(0xFF14B866)
           : isPending
-              ? const Color(0xFFD97706)
-              : isRejected
-                  ? const Color(0xFFDC2626)
-                  : const Color(0xFF4A4754);
+          ? const Color(0xFFD97706)
+          : isRejected
+          ? const Color(0xFFDC2626)
+          : const Color(0xFF4A4754);
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(
@@ -1789,162 +2147,164 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
         child: Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
-          initiallyExpanded: drvRecord != null || merRecord != null,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-          leading: const Icon(
-            Icons.verified_user_rounded,
-            color: Color(0xFF5B33E6),
-            size: 20,
-          ),
-          title: const Text(
-            'Đăng ký Đối tác Tài xế / Cửa hàng B2B (KYC)',
-            style: TextStyle(
-              fontWeight: FontWeight.w900,
-              fontSize: 13.5,
-              color: Color(0xFF15131E),
+            initiallyExpanded: drvRecord != null || merRecord != null,
+            tilePadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 2,
             ),
-          ),
-          subtitle: const Text(
-            'Mở rộng nếu bạn muốn nộp hồ sơ định danh trở thành Tài xế hoặc Cửa hàng B2B',
-            style: TextStyle(
-              fontSize: 11.5,
-              color: Color(0xFF4A4754),
+            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            leading: const Icon(
+              Icons.verified_user_rounded,
+              color: Color(0xFF5B33E6),
+              size: 20,
             ),
-          ),
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: const Color(0xFF15131E)),
+            title: const Text(
+              'Đăng ký Đối tác Tài xế / Cửa hàng B2B (KYC)',
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: 13.5,
+                color: Color(0xFF15131E),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.two_wheeler_rounded,
-                        size: 18,
-                        color: Color(0xFF5B33E6),
+            ),
+            subtitle: const Text(
+              'Mở rộng nếu bạn muốn nộp hồ sơ định danh trở thành Tài xế hoặc Cửa hàng B2B',
+              style: TextStyle(fontSize: 11.5, color: Color(0xFF4A4754)),
+            ),
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFF15131E)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.two_wheeler_rounded,
+                          size: 18,
+                          color: Color(0xFF5B33E6),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Đối tác Tài xế Giao hàng',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        statusBadge(drvRecord?.approvalStatus),
+                      ],
+                    ),
+                    if (drvRecord != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mã hồ sơ: ${drvRecord.id} • CCCD: ${drvRecord.citizenId}\nPhương tiện: ${drvRecord.vehicleType} (${drvRecord.licensePlate} - ${drvRecord.vehicleColor})',
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          color: Color(0xFF334155),
+                        ),
                       ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Đối tác Tài xế Giao hàng',
-                          style: TextStyle(
+                    ],
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _showDriverKycApplicationDialog(
+                          context,
+                          existing: drvRecord,
+                        ),
+                        icon: const Icon(
+                          Icons.assignment_ind_outlined,
+                          size: 16,
+                        ),
+                        label: Text(
+                          drvRecord == null
+                              ? 'Đăng ký làm Đối tác Tài xế (Nộp KYC)'
+                              : 'Cập nhật hồ sơ Tài xế (KYC)',
+                          style: const TextStyle(
+                            fontSize: 12,
                             fontWeight: FontWeight.w800,
-                            fontSize: 13,
                           ),
                         ),
                       ),
-                      statusBadge(drvRecord?.approvalStatus),
-                    ],
-                  ),
-                  if (drvRecord != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Mã hồ sơ: ${drvRecord.id} • CCCD: ${drvRecord.citizenId}\nPhương tiện: ${drvRecord.vehicleType} (${drvRecord.licensePlate} - ${drvRecord.vehicleColor})',
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF334155),
-                      ),
                     ),
                   ],
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _showDriverKycApplicationDialog(
-                        context,
-                        existing: drvRecord,
-                      ),
-                      icon:
-                          const Icon(Icons.assignment_ind_outlined, size: 16),
-                      label: Text(
-                        drvRecord == null
-                            ? 'Đăng ký làm Đối tác Tài xế (Nộp KYC)'
-                            : 'Cập nhật hồ sơ Tài xế (KYC)',
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: const Color(0xFF15131E)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(
+                          Icons.storefront_rounded,
+                          size: 18,
+                          color: Color(0xFFFF5E83),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Đối tác Cửa hàng / Doanh nghiệp B2B',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        statusBadge(merRecord?.approvalStatus),
+                      ],
+                    ),
+                    if (merRecord != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Mã hồ sơ: ${merRecord.id} • Cửa hàng: ${merRecord.storeName}\nMST: ${merRecord.taxCode} • NH: ${merRecord.bankName} (${merRecord.bankAccount})',
                         style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 11.5,
+                          color: Color(0xFF334155),
                         ),
                       ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: const Color(0xFF15131E)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.storefront_rounded,
-                        size: 18,
-                        color: Color(0xFFFF5E83),
-                      ),
-                      const SizedBox(width: 8),
-                      const Expanded(
-                        child: Text(
-                          'Đối tác Cửa hàng / Doanh nghiệp B2B',
-                          style: TextStyle(
+                    ],
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _showMerchantKycApplicationDialog(
+                          context,
+                          existing: merRecord,
+                        ),
+                        icon: const Icon(
+                          Icons.business_center_outlined,
+                          size: 16,
+                        ),
+                        label: Text(
+                          merRecord == null
+                              ? 'Đăng ký Cửa hàng B2B (Nộp KYC)'
+                              : 'Cập nhật hồ sơ Cửa hàng B2B (KYC)',
+                          style: const TextStyle(
+                            fontSize: 12,
                             fontWeight: FontWeight.w800,
-                            fontSize: 13,
                           ),
                         ),
                       ),
-                      statusBadge(merRecord?.approvalStatus),
-                    ],
-                  ),
-                  if (merRecord != null) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      'Mã hồ sơ: ${merRecord.id} • Cửa hàng: ${merRecord.storeName}\nMST: ${merRecord.taxCode} • NH: ${merRecord.bankName} (${merRecord.bankAccount})',
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF334155),
-                      ),
                     ),
                   ],
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _showMerchantKycApplicationDialog(
-                        context,
-                        existing: merRecord,
-                      ),
-                      icon: const Icon(
-                        Icons.business_center_outlined,
-                        size: 16,
-                      ),
-                      label: Text(
-                        merRecord == null
-                            ? 'Đăng ký Cửa hàng B2B (Nộp KYC)'
-                            : 'Cập nhật hồ sơ Cửa hàng B2B (KYC)',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -1953,22 +2313,33 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     BuildContext context, {
     DriverApplicantRecord? existing,
   }) {
-    final citizenCtrl = TextEditingController(
-      text: existing?.citizenId ?? '',
+    final citizenCtrl = TextEditingController(text: existing?.citizenId ?? '');
+    final plateCtrl = TextEditingController(text: existing?.licensePlate ?? '');
+    final colorCtrl = TextEditingController(text: existing?.vehicleColor ?? '');
+    final bankNameCtrl = TextEditingController(text: existing?.bankName ?? '');
+    final bankAccCtrl = TextEditingController(
+      text: existing?.bankAccount ?? '',
     );
-    final plateCtrl = TextEditingController(
-      text: existing?.licensePlate ?? '',
-    );
-    final colorCtrl = TextEditingController(
-      text: existing?.vehicleColor ?? '',
+    final attachedDocs = List<String>.from(
+      existing?.attachedKycDocs ?? const [],
     );
     String selectedVehicle = existing?.vehicleType ?? 'Xe máy';
+    Animation<double>? dialogRouteAnim;
 
     showDialog<void>(
       context: context,
       builder: (dialogCtx) {
+        dialogRouteAnim ??= ModalRoute.of(dialogCtx)?.animation;
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
+            final vehicleOptions = <String>{
+              'Xe máy',
+              'Xe tải 500kg',
+              'Xe tải nhỏ',
+              'Xe bán tải',
+              'Xe Van',
+              if (selectedVehicle.trim().isNotEmpty) selectedVehicle.trim(),
+            }.toList();
             return AlertDialog(
               title: const Text(
                 'Hồ sơ Đăng ký Đối tác Tài xế (KYC)',
@@ -1979,6 +2350,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       TextField(
                         controller: citizenCtrl,
@@ -1992,20 +2364,14 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         decoration: const InputDecoration(
                           labelText: 'Loại phương tiện đăng ký',
                         ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Xe máy',
-                            child: Text('Xe máy giao hàng nhanh'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Xe tải 500kg',
-                            child: Text('Xe tải nhẹ 500kg'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Xe bán tải',
-                            child: Text('Xe bán tải / Van'),
-                          ),
-                        ],
+                        items: vehicleOptions
+                            .map(
+                              (opt) => DropdownMenuItem(
+                                value: opt,
+                                child: Text(opt),
+                              ),
+                            )
+                            .toList(),
                         onChanged: (v) {
                           if (v != null) {
                             setDialogState(() => selectedVehicle = v);
@@ -2026,6 +2392,59 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                           labelText: 'Màu sơn phương tiện',
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: bankNameCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Ngân hàng nhận thanh toán ví Tài xế',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: bankAccCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Số tài khoản ngân hàng',
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked =
+                              await SecurityAndBarcodeUtils.pickLocalDocumentOrImage(
+                                dialogTitle:
+                                    'Đính kèm ảnh CCCD / GPLX / Đăng ký xe',
+                              );
+                          if (picked != null &&
+                              !attachedDocs.contains(picked)) {
+                            setDialogState(() => attachedDocs.add(picked));
+                          }
+                        },
+                        icon: const Icon(Icons.upload_file_rounded, size: 16),
+                        label: Text(
+                          'Đính kèm giấy tờ KYC (${attachedDocs.length})',
+                        ),
+                      ),
+                      if (attachedDocs.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: attachedDocs
+                              .map(
+                                (doc) => Chip(
+                                  visualDensity: VisualDensity.compact,
+                                  label: Text(
+                                    doc,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  onDeleted: () => setDialogState(
+                                    () => attachedDocs.remove(doc),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -2037,42 +2456,69 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    if (citizenCtrl.text.trim().isEmpty ||
-                        plateCtrl.text.trim().isEmpty) {
+                    final rawCitizen = citizenCtrl.text.trim();
+                    final rawPlate = plateCtrl.text.trim();
+                    if (!RegExp(r'^[0-9]{9,12}$').hasMatch(rawCitizen) ||
+                        rawPlate.length < 4) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          backgroundColor: AppColors.danger,
+                          content: Text(
+                            'Vui lòng nhập số CCCD hợp lệ (9-12 chữ số) và biển kiểm soát phương tiện!',
+                          ),
+                        ),
+                      );
                       return;
                     }
-                    _store.registerOrUpdateDriverKyc(
+                    final updated = _store.registerOrUpdateDriverKyc(
                       fullName: _profileNameCtrl.text.trim().isNotEmpty
                           ? _profileNameCtrl.text.trim()
                           : _store.customerFullName,
                       phone: _profilePhoneCtrl.text.trim().isNotEmpty
                           ? _profilePhoneCtrl.text.trim()
-                          : _store.customerPhone,
-                      citizenId: citizenCtrl.text.trim(),
+                          : (_store.activeAuthenticatedUser?.phone ??
+                                _store.customerPhone),
+                      citizenId: rawCitizen,
                       vehicleType: selectedVehicle,
-                      licensePlate: plateCtrl.text.trim(),
+                      licensePlate: rawPlate,
                       vehicleColor: colorCtrl.text.trim().isNotEmpty
                           ? colorCtrl.text.trim()
                           : 'Xanh đen',
+                      bankName: bankNameCtrl.text.trim().isNotEmpty
+                          ? bankNameCtrl.text.trim()
+                          : null,
+                      bankAccount: bankAccCtrl.text.trim().isNotEmpty
+                          ? bankAccCtrl.text.trim()
+                          : null,
+                      attachedDocs: attachedDocs,
+                      activateDriverContext: false,
                     );
                     Navigator.of(dialogCtx).pop();
                     _rebuildCustomerUi(() {});
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
+                      SnackBar(
                         content: Text(
-                          'Đã gửi hồ sơ Đối tác Tài xế (Trạng thái: Chờ duyệt) tới Admin!',
+                          'Đã lưu hồ sơ Đối tác Tài xế (Trạng thái: ${updated.approvalStatus})!',
                         ),
                       ),
                     );
                   },
-                  child: const Text('Gửi hồ sơ chờ Admin duyệt'),
+                  child: const Text('Lưu & Gửi hồ sơ'),
                 ),
               ],
             );
           },
         );
       },
-    );
+    ).whenComplete(() {
+      SecurityAndBarcodeUtils.disposeControllersAfterDialog([
+        citizenCtrl,
+        plateCtrl,
+        colorCtrl,
+        bankNameCtrl,
+        bankAccCtrl,
+      ], dialogRouteAnim);
+    });
   }
 
   void _showMerchantKycApplicationDialog(
@@ -2082,25 +2528,32 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     final storeNameCtrl = TextEditingController(
       text: existing?.storeName ?? '',
     );
-    final taxCtrl = TextEditingController(
-      text: existing?.taxCode ?? '',
-    );
+    final taxCtrl = TextEditingController(text: existing?.taxCode ?? '');
     final repCtrl = TextEditingController(
       text: existing?.representativeName ?? _profileNameCtrl.text.trim(),
     );
-    final bankNameCtrl = TextEditingController(
-      text: existing?.bankName ?? '',
-    );
+    final bankNameCtrl = TextEditingController(text: existing?.bankName ?? '');
     final bankAccCtrl = TextEditingController(
       text: existing?.bankAccount ?? '',
     );
+    final attachedDocs = List<String>.from(
+      existing?.attachedKycDocs ?? const [],
+    );
     String businessType = existing?.businessType ?? 'Hộ kinh doanh cá thể';
+    Animation<double>? dialogRouteAnim;
 
     showDialog<void>(
       context: context,
       builder: (dialogCtx) {
+        dialogRouteAnim ??= ModalRoute.of(dialogCtx)?.animation;
         return StatefulBuilder(
           builder: (ctx, setDialogState) {
+            final bizOptions = <String>{
+              'Hộ kinh doanh cá thể',
+              'Công ty TNHH',
+              'Công ty Cổ phần',
+              if (businessType.trim().isNotEmpty) businessType.trim(),
+            }.toList();
             return AlertDialog(
               title: const Text(
                 'Hồ sơ Đăng ký Đối tác Cửa hàng B2B (KYC)',
@@ -2111,6 +2564,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       TextField(
                         controller: storeNameCtrl,
@@ -2124,20 +2578,14 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         decoration: const InputDecoration(
                           labelText: 'Loại hình kinh doanh',
                         ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'Hộ kinh doanh cá thể',
-                            child: Text('Hộ kinh doanh cá thể'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Công ty TNHH',
-                            child: Text('Công ty TNHH'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'Công ty Cổ phần',
-                            child: Text('Công ty Cổ phần'),
-                          ),
-                        ],
+                        items: bizOptions
+                            .map(
+                              (opt) => DropdownMenuItem(
+                                value: opt,
+                                child: Text(opt),
+                              ),
+                            )
+                            .toList(),
                         onChanged: (v) {
                           if (v != null) {
                             setDialogState(() => businessType = v);
@@ -2172,6 +2620,45 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                           labelText: 'Số tài khoản ngân hàng',
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          final picked =
+                              await SecurityAndBarcodeUtils.pickLocalDocumentOrImage(
+                                dialogTitle:
+                                    'Đính kèm GPKD / CCCD đại diện B2B',
+                              );
+                          if (picked != null &&
+                              !attachedDocs.contains(picked)) {
+                            setDialogState(() => attachedDocs.add(picked));
+                          }
+                        },
+                        icon: const Icon(Icons.upload_file_rounded, size: 16),
+                        label: Text(
+                          'Đính kèm GPKD / Pháp lý (${attachedDocs.length})',
+                        ),
+                      ),
+                      if (attachedDocs.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: attachedDocs
+                              .map(
+                                (doc) => Chip(
+                                  visualDensity: VisualDensity.compact,
+                                  label: Text(
+                                    doc,
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  onDeleted: () => setDialogState(
+                                    () => attachedDocs.remove(doc),
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -2184,38 +2671,58 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 ElevatedButton(
                   onPressed: () {
                     if (storeNameCtrl.text.trim().isEmpty ||
-                        taxCtrl.text.trim().isEmpty) {
+                        taxCtrl.text.trim().isEmpty ||
+                        bankNameCtrl.text.trim().isEmpty ||
+                        bankAccCtrl.text.trim().isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          backgroundColor: AppColors.danger,
+                          content: Text(
+                            'Vui lòng nhập đầy đủ Tên cửa hàng, Mã số thuế và Tài khoản ngân hàng nhận COD!',
+                          ),
+                        ),
+                      );
                       return;
                     }
-                    _store.registerOrUpdateMerchantKyc(
+                    final updated = _store.registerOrUpdateMerchantKyc(
                       ownerPhone: _profilePhoneCtrl.text.trim().isNotEmpty
                           ? _profilePhoneCtrl.text.trim()
-                          : _store.customerPhone,
+                          : (_store.activeAuthenticatedUser?.phone ??
+                                _store.customerPhone),
                       storeName: storeNameCtrl.text.trim(),
                       businessType: businessType,
                       taxCode: taxCtrl.text.trim(),
                       representativeName: repCtrl.text.trim(),
                       bankName: bankNameCtrl.text.trim(),
                       bankAccount: bankAccCtrl.text.trim(),
+                      attachedDocs: attachedDocs,
                     );
                     Navigator.of(dialogCtx).pop();
                     _rebuildCustomerUi(() {});
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
+                      SnackBar(
                         content: Text(
-                          'Đã gửi hồ sơ Cửa hàng B2B (Trạng thái: Chờ duyệt) tới Admin!',
+                          'Đã lưu hồ sơ Cửa hàng B2B (Trạng thái: ${updated.approvalStatus})!',
                         ),
                       ),
                     );
                   },
-                  child: const Text('Gửi hồ sơ chờ Admin duyệt'),
+                  child: const Text('Lưu & Gửi hồ sơ'),
                 ),
               ],
             );
           },
         );
       },
-    );
+    ).whenComplete(() {
+      SecurityAndBarcodeUtils.disposeControllersAfterDialog([
+        storeNameCtrl,
+        taxCtrl,
+        repCtrl,
+        bankNameCtrl,
+        bankAccCtrl,
+      ], dialogRouteAnim);
+    });
   }
 
   /// UC42: Trung tâm Thông báo (Khớp 100% uc42_thong_bao_1791094562197.jpg)
@@ -2226,7 +2733,10 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
     }).toList();
 
     return Card(
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero, side: BorderSide(color: AppColors.ink, width: 1.5)),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.zero,
+        side: BorderSide(color: AppColors.ink, width: 1.5),
+      ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2248,7 +2758,9 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                 ),
                 TextButton(
                   onPressed: () {
-                    _store.markAllNotificationsAsRead();
+                    _store.markAllNotificationsAsRead(
+                      targetGroupScope: 'Khách hàng',
+                    );
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content: Text(
@@ -2278,12 +2790,14 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   spacing: 8,
                   children: ['Tất cả', 'Đơn hàng', 'Khuyến mãi', 'Hệ thống']
                       .map((cat) {
-                    return ChoiceChip(
-                      label: Text(cat),
-                      selected: _notiFilter == cat,
-                      onSelected: (_) => _rebuildCustomerUi(() => _notiFilter = cat),
-                    );
-                  }).toList(),
+                        return ChoiceChip(
+                          label: Text(cat),
+                          selected: _notiFilter == cat,
+                          onSelected: (_) =>
+                              _rebuildCustomerUi(() => _notiFilter = cat),
+                        );
+                      })
+                      .toList(),
                 ),
                 const SizedBox(height: 12),
                 if (items.isEmpty)
@@ -2313,19 +2827,19 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                   final iconColor = isOrder
                       ? const Color(0xFF14B866)
                       : isPromo
-                          ? const Color(0xFFFF5E83)
-                          : const Color(0xFF5B33E6);
+                      ? const Color(0xFFFF5E83)
+                      : const Color(0xFF5B33E6);
                   final iconData = isOrder
                       ? Icons.local_shipping_rounded
                       : isPromo
-                          ? Icons.card_giftcard_rounded
-                          : Icons.shield_outlined;
+                      ? Icons.card_giftcard_rounded
+                      : Icons.shield_outlined;
 
                   return InkWell(
                     onTap: () {
                       _store.markNotificationAsRead(n.id);
-                      final match =
-                          RegExp(r'#DH[0-9A-Za-z-]+').firstMatch(n.title);
+                      final match = RegExp(r'#DH[0-9A-Za-z-]+')
+                          .firstMatch(n.title);
                       if (n.title.toLowerCase().contains('khiếu nại') ||
                           n.title.contains('KN-')) {
                         if (match != null) {
@@ -2336,7 +2850,7 @@ extension _CustomerHistoryAndProfileViews on _CustomerSubsystemEntryState {
                         _store.selectCustomerOrder(match.group(0)!);
                         _rebuildCustomerUi(() => _selectedScreenIndex = 4);
                       } else if (n.category == 'Khuyến mãi') {
-                        _rebuildCustomerUi(() => _selectedScreenIndex = 14);
+                        _rebuildCustomerUi(() => _selectedScreenIndex = 12);
                       }
                     },
                     child: Container(
