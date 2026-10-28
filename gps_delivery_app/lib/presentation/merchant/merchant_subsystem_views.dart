@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/gps/smart_dispatch_engine.dart';
 import '../../core/theme/app_colors.dart';
@@ -12,6 +13,7 @@ import '../../domain/entities/geo_point.dart';
 import '../../domain/entities/pricing_estimate.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
+import '../screens/public_order_tracking_screen.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
@@ -105,12 +107,17 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     text: '30 x 20 x 10 cm',
   );
   final TextEditingController _singleCodCtrl = TextEditingController(text: '0');
+  final TextEditingController _singleDeclaredValueCtrl = TextEditingController(
+    text: '0',
+  );
   final TextEditingController _singleNoteCtrl = TextEditingController();
   String _feePayer = 'Người gửi trả phí';
   String _batchFeePayer = 'Người gửi trả phí';
   DeliveryServiceType _merchantServiceType = DeliveryServiceType.express30m;
   bool _isFragile = false;
   bool _isKeepCold = false;
+  bool _merchantPreferEcoEv = false;
+  bool _merchantIsRoundTrip = false;
   int _selectedWaybillOrderIndex = 0;
   int _selectedWarehouseIndex = 0;
 
@@ -140,11 +147,32 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   List<GeocodedPlaceSuggestion> _liveMerchantNominatimSuggestions = const [];
   bool _isSearchingMerchantNominatim = false;
 
+  // Thực đơn Ăn uống Đối tác B2B (GrabFood) - Screen 11
+  final TextEditingController _menuDishNameCtrl = TextEditingController();
+  final TextEditingController _menuDishPriceCtrl = TextEditingController(
+    text: '49000',
+  );
+  final TextEditingController _menuDishDescCtrl = TextEditingController();
+  final TextEditingController _menuDishPrepCtrl = TextEditingController(
+    text: '12',
+  );
+  String _menuDishCategory = 'Cơm • Bún • Phở';
+  final Set<String> _menuDishMealSlots = <String>{
+    'breakfast',
+    'lunch',
+    'afternoonTea',
+    'dinner',
+  };
+  bool _menuDishEco = true;
+  bool _menuDishCold = false;
+  bool _menuDishPromo = false;
+  String? _editingMenuItemId;
+
   @override
   void initState() {
     super.initState();
     if (widget.forcedScreenIndex != null) {
-      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 10);
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 11);
     }
     final mer = _store.activeMerchantRecord;
     _storeNameCtrl = TextEditingController(text: mer?.storeName ?? '');
@@ -236,7 +264,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     super.didUpdateWidget(oldWidget);
     if (widget.forcedScreenIndex != null &&
         widget.forcedScreenIndex != oldWidget.forcedScreenIndex) {
-      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 10);
+      _selectedScreenIndex = widget.forcedScreenIndex!.clamp(0, 11);
     }
   }
 
@@ -319,6 +347,8 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
               svcStr.contains('LARGE') ||
               svcStr.contains('TAI')
           ? DeliveryServiceType.truck
+          : svcStr.contains('2H') || svcStr.contains('SAME_DAY')
+          ? DeliveryServiceType.sameDay2h
           : svcStr.contains('EXPRESS')
           ? DeliveryServiceType.express30m
           : svcStr.contains('ECONOMY') || svcStr.contains('SAVING')
@@ -408,6 +438,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     _singleWeightCtrl.dispose();
     _singleDimCtrl.dispose();
     _singleCodCtrl.dispose();
+    _singleDeclaredValueCtrl.dispose();
     _singleNoteCtrl.dispose();
     _editOrderNameCtrl.dispose();
     _editOrderPhoneCtrl.dispose();
@@ -417,6 +448,10 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     _codWithdrawCtrl.dispose();
     _shopComplaintOrderCtrl.dispose();
     _shopComplaintDescCtrl.dispose();
+    _menuDishNameCtrl.dispose();
+    _menuDishPriceCtrl.dispose();
+    _menuDishDescCtrl.dispose();
+    _menuDishPrepCtrl.dispose();
     super.dispose();
   }
 
@@ -493,6 +528,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       default:
         return const [
           (Icons.warehouse_outlined, 'Điểm lấy hàng & Cấu hình Kho', 1),
+          (Icons.restaurant_menu_rounded, 'Thực đơn Ăn uống (GrabFood)', 11),
           (Icons.storefront_outlined, 'Hồ sơ & Xác thực pháp lý', 0),
         ];
     }
@@ -539,6 +575,8 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _buildMerchantOrangeTopHeader(),
+            if (_subTabsForActivePillar().length >= 2)
+              _buildMerchantContextualSubTabBar(mobilePadding),
             Expanded(
               child: SingleChildScrollView(
                 padding: EdgeInsets.all(mobilePadding),
@@ -576,7 +614,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       (
         Icons.storefront_outlined,
         'Cửa hàng & Kho',
-        'Kho lấy hàng & Hồ sơ pháp lý',
+        'Kho lấy hàng • Thực đơn • Hồ sơ',
         4,
       ),
     ];
@@ -1058,6 +1096,8 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
         return _buildReturnAndMonthlyAnalyticsView();
       case 10:
         return _buildMerchantComplaintSupportUc40View();
+      case 11:
+        return _buildMerchantGrabFoodMenuManagerView(context);
       default:
         return _buildSingleOrderCreateView();
     }

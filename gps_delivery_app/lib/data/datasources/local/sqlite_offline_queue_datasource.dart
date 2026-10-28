@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -46,7 +47,7 @@ class SqliteOfflineQueueDatasource {
   SqliteOfflineQueueDatasource._internal();
 
   static const String _dbFileName = 'gps_delivery_production.db';
-  static const int _dbVersion = 6;
+  static const int _dbVersion = 8;
   static const Uuid _uuid = Uuid();
 
   static bool _ffiInitialized = false;
@@ -96,7 +97,7 @@ class SqliteOfflineQueueDatasource {
     if (isTestEnv) {
       fullPath = p.join(
         Directory.systemTemp.path,
-        'gps_delivery_test_runtime_$pid.db',
+        'gps_delivery_test_runtime_${pid}_${Isolate.current.hashCode}.db',
       );
     } else if (Platform.isAndroid || Platform.isIOS) {
       final mobileDbDir = await sqflite.getDatabasesPath();
@@ -175,6 +176,18 @@ class SqliteOfflineQueueDatasource {
       "TEXT NOT NULL DEFAULT '007100****889'",
     );
     await _ensureColumnExists(db, 'drivers', 'attached_kyc_docs_json', 'TEXT');
+    await _ensureColumnExists(
+      db,
+      'drivers',
+      'is_electric_vehicle',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'drivers',
+      'battery_percent',
+      'INTEGER NOT NULL DEFAULT 95',
+    );
 
     await _ensureColumnExists(
       db,
@@ -218,6 +231,54 @@ class SqliteOfflineQueueDatasource {
     await _ensureColumnExists(db, 'vouchers', 'used_count', 'INTEGER');
 
     await _ensureColumnExists(db, 'orders', 'delivered_at_ms', 'INTEGER');
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'prefer_eco_ev',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'declared_value_vnd',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'insurance_fee',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'is_round_trip',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'extra_stop_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(db, 'orders', 'batch_group_id', 'TEXT');
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'co2_saved_grams',
+      'REAL NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(
+      db,
+      'orders',
+      'green_fund_contributed',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumnExists(db, 'orders', 'public_tracking_token', 'TEXT');
+
+    await _ensureColumnExists(db, 'order_stops', 'otp_code', 'TEXT');
+    await _ensureColumnExists(db, 'order_stops', 'pod_note', 'TEXT');
+    await _ensureColumnExists(db, 'order_stops', 'completed_at_ms', 'INTEGER');
 
     await _ensureColumnExists(
       db,
@@ -305,6 +366,8 @@ class SqliteOfflineQueueDatasource {
         wallet_balance REAL NOT NULL DEFAULT 0.0,
         bank_name TEXT NOT NULL DEFAULT 'Vietcombank',
         bank_account TEXT NOT NULL DEFAULT '007100****889',
+        is_electric_vehicle INTEGER NOT NULL DEFAULT 0,
+        battery_percent INTEGER NOT NULL DEFAULT 95,
         attached_kyc_docs_json TEXT,
         created_at TEXT NOT NULL
       )
@@ -410,7 +473,16 @@ class SqliteOfflineQueueDatasource {
         rating_comment TEXT,
         created_date_label TEXT NOT NULL,
         created_at_ms INTEGER NOT NULL,
-        delivered_at_ms INTEGER
+        delivered_at_ms INTEGER,
+        prefer_eco_ev INTEGER NOT NULL DEFAULT 0,
+        declared_value_vnd REAL NOT NULL DEFAULT 0,
+        insurance_fee REAL NOT NULL DEFAULT 0,
+        is_round_trip INTEGER NOT NULL DEFAULT 0,
+        extra_stop_count INTEGER NOT NULL DEFAULT 0,
+        batch_group_id TEXT,
+        co2_saved_grams REAL NOT NULL DEFAULT 0,
+        green_fund_contributed INTEGER NOT NULL DEFAULT 0,
+        public_tracking_token TEXT
       )
     ''');
 
@@ -558,6 +630,9 @@ class SqliteOfflineQueueDatasource {
         cod_amount REAL NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'PENDING',
         note TEXT,
+        otp_code TEXT,
+        pod_note TEXT,
+        completed_at_ms INTEGER,
         created_at_ms INTEGER NOT NULL,
         UNIQUE(order_id, sequence_no)
       )
@@ -622,6 +697,30 @@ class SqliteOfflineQueueDatasource {
         after_json TEXT,
         ip_address TEXT,
         device_id TEXT,
+        created_at_ms INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS merchant_menu_items (
+        id TEXT PRIMARY KEY,
+        merchant_id TEXT NOT NULL,
+        store_name TEXT NOT NULL,
+        store_address TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL DEFAULT 'Cơm • Bún • Phở',
+        price_vnd REAL NOT NULL,
+        prep_minutes INTEGER NOT NULL DEFAULT 15,
+        meal_slots_json TEXT NOT NULL DEFAULT '[]',
+        is_eco_packaging INTEGER NOT NULL DEFAULT 0,
+        is_cold_item INTEGER NOT NULL DEFAULT 0,
+        has_promo_badge INTEGER NOT NULL DEFAULT 0,
+        is_available INTEGER NOT NULL DEFAULT 1,
+        rating REAL NOT NULL DEFAULT 4.8,
+        sold_count INTEGER NOT NULL DEFAULT 0,
         created_at_ms INTEGER NOT NULL
       )
     ''');

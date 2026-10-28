@@ -64,8 +64,10 @@ CREATE TABLE IF NOT EXISTS drivers (
     full_name VARCHAR(100) NOT NULL,
     citizen_id VARCHAR(20) UNIQUE NOT NULL,
     license_plate VARCHAR(20) NOT NULL,
-    vehicle_type VARCHAR(20) NOT NULL CHECK (vehicle_type IN ('MOTORBIKE', 'VAN', 'TRUCK_500KG', 'TRUCK_1T')),
+    vehicle_type VARCHAR(20) NOT NULL CHECK (vehicle_type IN ('MOTORBIKE', 'EV_MOTORBIKE', 'VAN', 'TRUCK_500KG', 'TRUCK_1T')),
     vehicle_color VARCHAR(30),
+    is_electric_vehicle BOOLEAN NOT NULL DEFAULT FALSE,
+    battery_percent SMALLINT NOT NULL DEFAULT 95 CHECK (battery_percent BETWEEN 0 AND 100),
     portrait_image_url TEXT,
     license_image_url TEXT,
     vehicle_doc_image_url TEXT,
@@ -129,7 +131,7 @@ CREATE TABLE IF NOT EXISTS merchant_pickup_points (
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pricing_configs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    service_type VARCHAR(30) UNIQUE NOT NULL CHECK (service_type IN ('EXPRESS_30M', 'STANDARD', 'SAVING', 'TRUCK')),
+    service_type VARCHAR(30) UNIQUE NOT NULL CHECK (service_type IN ('EXPRESS_30M', 'STANDARD', 'SAVING', 'SAME_DAY_2H', 'TRUCK')),
     service_name VARCHAR(100) NOT NULL,
     estimated_time_label VARCHAR(50) NOT NULL,
     base_fare DECIMAL(10, 2) NOT NULL,
@@ -170,7 +172,7 @@ CREATE TABLE IF NOT EXISTS orders (
     merchant_id UUID REFERENCES merchants(id) ON DELETE SET NULL,
     pickup_point_id UUID REFERENCES merchant_pickup_points(id) ON DELETE SET NULL,
     voucher_id UUID REFERENCES vouchers(id) ON DELETE SET NULL,
-    service_type VARCHAR(30) NOT NULL CHECK (service_type IN ('EXPRESS_30M', 'STANDARD', 'SAVING', 'TRUCK')),
+    service_type VARCHAR(30) NOT NULL CHECK (service_type IN ('EXPRESS_30M', 'STANDARD', 'SAVING', 'SAME_DAY_2H', 'TRUCK')),
     package_category VARCHAR(50) NOT NULL DEFAULT 'Hàng thông thường',
     weight_kg DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     dimensions_cm VARCHAR(30),
@@ -201,6 +203,15 @@ CREATE TABLE IF NOT EXISTS orders (
     pod_image_url TEXT,
     pod_otp_code VARCHAR(6),
     pod_signature_url TEXT,
+    prefer_eco_ev BOOLEAN NOT NULL DEFAULT FALSE,
+    declared_value_vnd DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    insurance_fee DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    is_round_trip BOOLEAN NOT NULL DEFAULT FALSE,
+    extra_stop_count INTEGER NOT NULL DEFAULT 0,
+    batch_group_id VARCHAR(40),
+    co2_saved_grams DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    green_fund_contributed BOOLEAN NOT NULL DEFAULT FALSE,
+    public_tracking_token VARCHAR(64),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     delivered_at TIMESTAMPTZ
 );
@@ -316,6 +327,48 @@ CREATE TABLE IF NOT EXISTS chat_messages_and_notifications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Bảng điểm dừng đa điểm giao / giao 2 chiều (Multi-stop & Round-trip)
+CREATE TABLE IF NOT EXISTS order_stops (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    sequence_no INTEGER NOT NULL CHECK (sequence_no >= 0),
+    stop_type VARCHAR(20) NOT NULL CHECK (stop_type IN ('PICKUP', 'DROPOFF', 'RETURN')),
+    address TEXT NOT NULL,
+    location GEOMETRY(Point, 4326),
+    recipient_name VARCHAR(100),
+    recipient_phone VARCHAR(15),
+    cod_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    note TEXT,
+    otp_code VARCHAR(6),
+    pod_note TEXT,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(order_id, sequence_no)
+);
+
+-- Bảng thực đơn ăn uống Đối tác B2B (GrabFood Smart Dining Ecosystem)
+CREATE TABLE IF NOT EXISTS merchant_menu_items (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    merchant_id UUID NOT NULL REFERENCES merchants(id) ON DELETE CASCADE,
+    store_name VARCHAR(150) NOT NULL,
+    store_address TEXT NOT NULL,
+    store_location GEOMETRY(Point, 4326) NOT NULL,
+    name VARCHAR(150) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category VARCHAR(80) NOT NULL DEFAULT 'Cơm • Bún • Phở',
+    price_vnd DECIMAL(12, 2) NOT NULL CHECK (price_vnd >= 0),
+    prep_minutes INTEGER NOT NULL DEFAULT 15 CHECK (prep_minutes >= 1),
+    meal_slots_json JSONB NOT NULL DEFAULT '["breakfast","lunch","afternoonTea","dinner"]'::jsonb,
+    is_eco_packaging BOOLEAN NOT NULL DEFAULT FALSE,
+    is_cold_item BOOLEAN NOT NULL DEFAULT FALSE,
+    has_promo_badge BOOLEAN NOT NULL DEFAULT FALSE,
+    is_available BOOLEAN NOT NULL DEFAULT TRUE,
+    rating DECIMAL(3, 2) NOT NULL DEFAULT 4.80,
+    sold_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- =============================================================================
 -- CHỈ MỤC KHÔNG GIAN POSTGIS (SPATIAL GIST INDEXES) & CHỈ MỤC HIỆU NĂNG CAO
 -- =============================================================================
@@ -327,6 +380,11 @@ CREATE INDEX IF NOT EXISTS idx_pickup_points_loc_gist ON merchant_pickup_points 
 CREATE INDEX IF NOT EXISTS idx_orders_pickup_loc_gist ON orders USING GIST (pickup_location);
 CREATE INDEX IF NOT EXISTS idx_orders_dropoff_loc_gist ON orders USING GIST (dropoff_location);
 CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_public_tracking_token ON orders (public_tracking_token);
+CREATE INDEX IF NOT EXISTS idx_orders_batch_group ON orders (batch_group_id);
+CREATE INDEX IF NOT EXISTS idx_order_stops_order_sequence ON order_stops (order_id, sequence_no);
+CREATE INDEX IF NOT EXISTS idx_merchant_menu_items_loc_gist ON merchant_menu_items USING GIST (store_location);
+CREATE INDEX IF NOT EXISTS idx_merchant_menu_items_merchant_avail ON merchant_menu_items (merchant_id, is_available);
 CREATE INDEX IF NOT EXISTS idx_tracking_logs_loc_gist ON order_tracking_logs USING GIST (location);
 CREATE INDEX IF NOT EXISTS idx_tracking_logs_order_time ON order_tracking_logs (order_id, recorded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_geofence_polygon_gist ON geofence_zones USING GIST (polygon_boundary);
@@ -339,6 +397,7 @@ VALUES
     ('EXPRESS_30M', 'Giao nhanh (Express)', '1-2 giờ', 15000.00, 8500.00, 20000.00, 15000.00, TRUE, FALSE),
     ('STANDARD', 'Giao tiêu chuẩn', '1-3 ngày', 25000.00, 5000.00, 10000.00, 15000.00, TRUE, TRUE),
     ('SAVING', 'Giao tiết kiệm', '3-5 ngày', 12000.00, 4000.00, 0.00, 10000.00, FALSE, FALSE),
+    ('SAME_DAY_2H', 'Giao nhanh 2H (Ghép đơn)', 'Trong 2 giờ', 12000.00, 5500.00, 8000.00, 12000.00, TRUE, FALSE),
     ('TRUCK', 'Giao hàng lớn', '2-4 ngày', 80000.00, 15000.00, 30000.00, 25000.00, TRUE, FALSE)
 ON CONFLICT (service_type) DO NOTHING;
 

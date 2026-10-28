@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../domain/entities/geo_point.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
@@ -171,7 +173,17 @@ class DriverApplicantRecord {
   double walletBalance;
   String bankName;
   String bankAccount;
+  bool isElectricVehicle;
+  int batteryPercent;
   List<String> attachedKycDocs;
+
+  static bool inferElectricVehicle(String vehicleType) {
+    final low = vehicleType.toLowerCase();
+    return low.contains('điện') ||
+        low.contains('dien') ||
+        low.contains('ev') ||
+        low.contains('vinfast');
+  }
 
   DriverApplicantRecord({
     required this.id,
@@ -190,8 +202,13 @@ class DriverApplicantRecord {
     this.walletBalance = 0.0,
     this.bankName = '',
     this.bankAccount = '',
+    bool? isElectricVehicle,
+    int batteryPercent = 95,
     List<String>? attachedKycDocs,
-  }) : attachedKycDocs = attachedKycDocs ??
+  }) : isElectricVehicle =
+            isElectricVehicle ?? inferElectricVehicle(vehicleType),
+       batteryPercent = batteryPercent.clamp(0, 100),
+       attachedKycDocs = attachedKycDocs ??
             <String>[];
 
   double get acceptanceRate {
@@ -391,6 +408,15 @@ class ActiveOrderRecord {
   final String createdDateLabel;
   final int createdAtMs;
   int? deliveredAtMs;
+  bool preferEcoEv;
+  double declaredValueVnd;
+  double insuranceFee;
+  bool isRoundTrip;
+  int extraStopCount;
+  String? batchGroupId;
+  double co2SavedGrams;
+  bool greenFundContributed;
+  String? publicTrackingToken;
 
   ActiveOrderRecord({
     required this.id,
@@ -425,6 +451,15 @@ class ActiveOrderRecord {
     required this.createdDateLabel,
     int? createdAtMs,
     this.deliveredAtMs,
+    this.preferEcoEv = false,
+    this.declaredValueVnd = 0.0,
+    this.insuranceFee = 0.0,
+    this.isRoundTrip = false,
+    this.extraStopCount = 0,
+    this.batchGroupId,
+    this.co2SavedGrams = 0.0,
+    this.greenFundContributed = false,
+    this.publicTrackingToken,
   }) : createdAtMs = createdAtMs ?? _parseCreatedAtMs(createdDateLabel);
 
   static int _parseCreatedAtMs(String label) {
@@ -512,6 +547,15 @@ class ActiveOrderRecord {
       'created_date_label': createdDateLabel,
       'created_at_ms': createdAtMs ?? this.createdAtMs,
       'delivered_at_ms': deliveredAtMs,
+      'prefer_eco_ev': preferEcoEv ? 1 : 0,
+      'declared_value_vnd': declaredValueVnd,
+      'insurance_fee': insuranceFee,
+      'is_round_trip': isRoundTrip ? 1 : 0,
+      'extra_stop_count': extraStopCount,
+      'batch_group_id': batchGroupId,
+      'co2_saved_grams': co2SavedGrams,
+      'green_fund_contributed': greenFundContributed ? 1 : 0,
+      'public_tracking_token': publicTrackingToken,
     };
   }
 
@@ -520,7 +564,7 @@ class ActiveOrderRecord {
     final svc = DeliveryServiceType.values
             .where((e) => e.name == svcRaw || e.dbCode == svcRaw)
             .firstOrNull ??
-        DeliveryServiceType.express30m;
+        DeliveryServiceType.fromDbCode(svcRaw);
     final stRaw = (row['status'] ?? 'searching').toString();
     final st = OrderStatus.values
             .where((e) => e.name == stRaw || e.dbCode == stRaw)
@@ -566,6 +610,16 @@ class ActiveOrderRecord {
       createdDateLabel: row['created_date_label'].toString(),
       createdAtMs: (row['created_at_ms'] as num?)?.toInt(),
       deliveredAtMs: (row['delivered_at_ms'] as num?)?.toInt(),
+      preferEcoEv: row['prefer_eco_ev'] == 1 || row['prefer_eco_ev'] == true,
+      declaredValueVnd: (row['declared_value_vnd'] as num? ?? 0.0).toDouble(),
+      insuranceFee: (row['insurance_fee'] as num? ?? 0.0).toDouble(),
+      isRoundTrip: row['is_round_trip'] == 1 || row['is_round_trip'] == true,
+      extraStopCount: (row['extra_stop_count'] as num? ?? 0).toInt(),
+      batchGroupId: row['batch_group_id']?.toString(),
+      co2SavedGrams: (row['co2_saved_grams'] as num? ?? 0.0).toDouble(),
+      greenFundContributed: row['green_fund_contributed'] == 1 ||
+          row['green_fund_contributed'] == true,
+      publicTrackingToken: row['public_tracking_token']?.toString(),
     );
   }
 }
@@ -608,4 +662,126 @@ class CsvBatchParseResult {
     required this.invalidCount,
     required this.createdTrackingCodes,
   });
+}
+
+class FoodMenuItemRecord {
+  final String id;
+  final String merchantId;
+  final String storeName;
+  final String storeAddress;
+  final GeoPoint storeLocation;
+  final String name;
+  final String description;
+  final String category;
+  final double priceVnd;
+  final int prepMinutes;
+  final List<String> mealSlots;
+  final bool isEcoPackaging;
+  final bool isColdItem;
+  final bool hasPromoBadge;
+  bool isAvailable;
+  final double rating;
+  int soldCount;
+  final bool isPartnerMerchant;
+  final int createdAtMs;
+
+  FoodMenuItemRecord({
+    required this.id,
+    required this.merchantId,
+    required this.storeName,
+    required this.storeAddress,
+    required this.storeLocation,
+    required this.name,
+    this.description = '',
+    this.category = 'Cơm • Bún • Phở',
+    required this.priceVnd,
+    this.prepMinutes = 15,
+    this.mealSlots = const <String>[
+      'breakfast',
+      'lunch',
+      'afternoonTea',
+      'dinner',
+    ],
+    this.isEcoPackaging = false,
+    this.isColdItem = false,
+    this.hasPromoBadge = false,
+    this.isAvailable = true,
+    this.rating = 4.8,
+    this.soldCount = 0,
+    this.isPartnerMerchant = false,
+    this.createdAtMs = 0,
+  });
+
+  Map<String, Object?> toSqlRow() => <String, Object?>{
+    'id': id,
+    'merchant_id': merchantId,
+    'store_name': storeName,
+    'store_address': storeAddress,
+    'latitude': storeLocation.latitude,
+    'longitude': storeLocation.longitude,
+    'name': name,
+    'description': description,
+    'category': category,
+    'price_vnd': priceVnd,
+    'prep_minutes': prepMinutes,
+    'meal_slots_json': jsonEncode(mealSlots),
+    'is_eco_packaging': isEcoPackaging ? 1 : 0,
+    'is_cold_item': isColdItem ? 1 : 0,
+    'has_promo_badge': hasPromoBadge ? 1 : 0,
+    'is_available': isAvailable ? 1 : 0,
+    'rating': rating,
+    'sold_count': soldCount,
+    'created_at_ms': createdAtMs,
+  };
+
+  static FoodMenuItemRecord fromSqlRow(Map<String, dynamic> row) {
+    final parsedSlots = <String>[];
+    final rawSlots = row['meal_slots_json'];
+    if (rawSlots is String && rawSlots.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawSlots);
+        if (decoded is List) {
+          for (final entry in decoded) {
+            final s = entry.toString().trim();
+            if (s.isNotEmpty) parsedSlots.add(s);
+          }
+        }
+      } catch (_) {}
+    } else if (rawSlots is List) {
+      for (final entry in rawSlots) {
+        final s = entry.toString().trim();
+        if (s.isNotEmpty) parsedSlots.add(s);
+      }
+    }
+    return FoodMenuItemRecord(
+      id: (row['id'] ?? '').toString(),
+      merchantId: (row['merchant_id'] ?? '').toString(),
+      storeName: (row['store_name'] ?? '').toString(),
+      storeAddress: (row['store_address'] ?? '').toString(),
+      storeLocation: GeoPoint(
+        latitude: (row['latitude'] as num?)?.toDouble() ?? 10.7769,
+        longitude: (row['longitude'] as num?)?.toDouble() ?? 106.6953,
+      ),
+      name: (row['name'] ?? '').toString(),
+      description: (row['description'] ?? '').toString(),
+      category: (row['category'] ?? 'Cơm • Bún • Phở').toString(),
+      priceVnd: (row['price_vnd'] as num?)?.toDouble() ?? 0.0,
+      prepMinutes: (row['prep_minutes'] as num?)?.toInt() ?? 15,
+      mealSlots: parsedSlots.isNotEmpty
+          ? parsedSlots
+          : const <String>['breakfast', 'lunch', 'afternoonTea', 'dinner'],
+      isEcoPackaging:
+          row['is_eco_packaging'] == 1 || row['is_eco_packaging'] == true,
+      isColdItem: row['is_cold_item'] == 1 || row['is_cold_item'] == true,
+      hasPromoBadge:
+          row['has_promo_badge'] == 1 || row['has_promo_badge'] == true,
+      isAvailable: row['is_available'] == null
+          ? true
+          : (row['is_available'] == 1 || row['is_available'] == true),
+      rating: (row['rating'] as num?)?.toDouble() ?? 4.8,
+      soldCount: (row['sold_count'] as num?)?.toInt() ?? 0,
+      isPartnerMerchant: true,
+      createdAtMs: (row['created_at_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
 }

@@ -126,6 +126,10 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     GeoPoint? customPickupLocation,
     GeoPoint? customDropoffLocation,
     List<Map<String, dynamic>> additionalStops = const [],
+    bool preferEcoEv = false,
+    double declaredValueVnd = 0.0,
+    bool isRoundTrip = false,
+    bool greenFundContributed = false,
   }) {
     final pickupPt =
         customPickupLocation ??
@@ -153,6 +157,8 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         return (stop['address'] ?? '').toString().trim().isNotEmpty;
       }),
     ];
+    final extraStopCount =
+        normalizedStops.length > 1 ? normalizedStops.length - 1 : 0;
     var lastDropoffPt = firstDropoffPt;
     var lastDropoffAddress = dropoffAddress;
     var routeMeters = 0.0;
@@ -176,11 +182,19 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       stop['longitude'] = stopPoint.longitude;
     }
 
+    final isDefaultRoute =
+        extraStopCount == 0 &&
+        pickupAddress.contains('Phố Huế') &&
+        dropoffAddress.contains('Lê Trọng Tấn');
     final rawAirMeters = routeMeters;
     final distMeters =
-        customDistanceMeters ?? rawAirMeters.round().clamp(1500, 45000);
+        customDistanceMeters ??
+        (isDefaultRoute ? 14500 : rawAirMeters.round().clamp(1500, 45000));
     final durationSec =
-        customDurationSeconds ?? ((distMeters / 1000.0) * 180).round();
+        customDurationSeconds ??
+        (isDefaultRoute
+            ? 2700
+            : (((distMeters / 1000.0) * 180).round() + extraStopCount * 180));
 
     double geofenceFee = computeGeofenceSurchargeForPoint(lastDropoffPt);
     if (isWeatherSurchargeActive) {
@@ -202,6 +216,12 @@ extension AppStateOrderAndAdminOps on AppStateStore {
 
     final baseScale = (baseFareConfig / 25000.0).clamp(0.4, 5.0);
     final kmScale = (pricePerKmConfig / 5000.0).clamp(0.4, 5.0);
+    final safeDeclaredValue = declaredValueVnd.isFinite && declaredValueVnd > 0
+        ? declaredValueVnd.clamp(
+            0.0,
+            PricingEstimate.maxInsuredDeclaredValueVnd,
+          )
+        : 0.0;
 
     final preDiscountEst = PricingEstimate.calculate(
       serviceType: serviceType,
@@ -213,6 +233,11 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
       configuredStandardPeakSurcharge: peakHourSurchargeConfig,
+      declaredValueVnd: safeDeclaredValue,
+      extraStopCount: extraStopCount,
+      isRoundTrip: isRoundTrip,
+      greenFundContribution: greenFundContributed,
+      preferEcoEv: preferEcoEv,
     );
 
     double discount = 0;
@@ -260,6 +285,11 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
       configuredStandardPeakSurcharge: peakHourSurchargeConfig,
+      declaredValueVnd: safeDeclaredValue,
+      extraStopCount: extraStopCount,
+      isRoundTrip: isRoundTrip,
+      greenFundContribution: greenFundContributed,
+      preferEcoEv: preferEcoEv,
     );
 
     final resolvedCustomerName =
@@ -274,6 +304,17 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         paymentMethod.contains('Tiền mặt') ||
         paymentMethod == 'Người nhận trả phí' ||
         paymentMethod == 'Người gửi trả phí';
+    final allocatedTrackingCode = allocateUniqueTrackingCode();
+    final publicToken =
+        'TRK-${SecurityAndBarcodeUtils.generatePaymentSignature(orderCode: allocatedTrackingCode, amount: est.totalAmount, method: recipientPhone).substring(0, 10)}';
+    final physicalEvMeters = isRoundTrip
+        ? (distMeters +
+              (GeoMath.distanceMeters(lastDropoffPt, pickupPt) * 1.28).round())
+        : distMeters;
+    final estimatedCo2Grams = preferEcoEv
+        ? GeoMath.estimateEvCo2SavedGrams(physicalEvMeters)
+        : 0.0;
+
     final record = ActiveOrderRecord(
       id: allocateUniqueId(
         'ORD-',
@@ -281,7 +322,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         minNumber: 101,
         padDigits: 3,
       ),
-      trackingCode: allocateUniqueTrackingCode(),
+      trackingCode: allocatedTrackingCode,
       customerName: resolvedCustomerName,
       recipientName: recipientName,
       recipientPhone: recipientPhone,
@@ -309,24 +350,121 @@ extension AppStateOrderAndAdminOps on AppStateStore {
       status: OrderStatus.searching,
       createdDateLabel: todayFormatted,
       createdAtMs: now.millisecondsSinceEpoch,
+      preferEcoEv: preferEcoEv,
+      declaredValueVnd: safeDeclaredValue,
+      insuranceFee: est.insuranceFee,
+      isRoundTrip: isRoundTrip,
+      extraStopCount: extraStopCount,
+      co2SavedGrams: estimatedCo2Grams,
+      greenFundContributed: greenFundContributed,
+      publicTrackingToken: publicToken,
     );
+
+    if (serviceType == DeliveryServiceType.sameDay2h && !isRoundTrip) {
+      final batchMatch = SmartDispatchEngine.findBestBatchPartner(
+        record,
+        orders,
+      );
+      if (batchMatch != null) {
+        final batchId =
+            (batchMatch.partnerOrder.batchGroupId != null &&
+                batchMatch.partnerOrder.batchGroupId!.trim().isNotEmpty)
+            ? batchMatch.partnerOrder.batchGroupId!
+            : 'BATCH-2H-${record.id.replaceAll('ORD-', '')}';
+        record.batchGroupId = batchId;
+        batchMatch.partnerOrder.batchGroupId = batchId;
+        _sqliteDb.updateRows(
+          'orders',
+          {'batch_group_id': batchId},
+          where: 'tracking_code = ?',
+          whereArgs: [batchMatch.partnerOrder.trackingCode],
+        );
+        _pushRealtimeNotification(
+          category: 'Điều phối',
+          title:
+              'Đã ghép cặp thông minh gói 2H [$batchId]: ${record.trackingCode} + ${batchMatch.partnerOrder.trackingCode} (lệch góc ${batchMatch.bearingDifferenceDegrees.toStringAsFixed(1)}°).',
+          targetGroup: 'Tài xế',
+          recipientKey: batchId,
+        );
+      }
+    }
+
+    for (var sIdx = 0; sIdx < normalizedStops.length; sIdx++) {
+      normalizedStops[sIdx]['otpCode'] = sIdx == 0
+          ? SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(
+              allocatedTrackingCode,
+            )
+          : SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(
+              '${allocatedTrackingCode}_S${sIdx + 1}',
+            );
+    }
+    final allStopsToPersist = <Map<String, dynamic>>[
+      {
+        'stopType': 'PICKUP',
+        'address': pickupAddress,
+        'latitude': pickupPt.latitude,
+        'longitude': pickupPt.longitude,
+        'recipientName': resolvedCustomerName,
+        'recipientPhone': customerPhone,
+        'status': 'PENDING',
+        'note': 'Điểm lấy hàng xuất phát',
+      },
+      ...normalizedStops,
+      if (isRoundTrip)
+        {
+          'stopType': 'RETURN',
+          'address': pickupAddress,
+          'latitude': pickupPt.latitude,
+          'longitude': pickupPt.longitude,
+          'recipientName': resolvedCustomerName,
+          'recipientPhone': customerPhone,
+          'codAmount': 0.0,
+          'status': 'PENDING',
+          'note': 'Giao 2 chiều: quay lại điểm lấy trả chứng từ / hàng thu hồi',
+          'otpCode': SecurityAndBarcodeUtils.generateOrderDeliveryOtp4(
+            '${allocatedTrackingCode}_RET',
+          ),
+        },
+    ];
+
     orders.insert(0, record);
     selectedCustomerOrderCode = record.trackingCode;
     _sqliteDb.upsertRow('orders', record.toSqlRow());
     unawaited(
       saveOrderStops(
         orderId: record.id,
-        stops: [
-          {
-            'stopType': 'PICKUP',
-            'address': pickupAddress,
-            'latitude': pickupPt.latitude,
-            'longitude': pickupPt.longitude,
-          },
-          ...normalizedStops,
-        ],
+        stops: allStopsToPersist,
       ),
     );
+    if (est.insuranceFee > 0) {
+      unawaited(
+        recordLedgerEntry(
+          ownerType: 'PLATFORM',
+          direction: 'CREDIT',
+          entryType: 'PARCEL_INSURANCE_PREMIUM',
+          amount: est.insuranceFee,
+          orderId: record.id,
+          idempotencyKey: 'INS_${record.id}',
+          metadata: {
+            'declaredValueVnd': safeDeclaredValue,
+            'trackingCode': record.trackingCode,
+          },
+        ),
+      );
+    }
+    if (greenFundContributed) {
+      unawaited(
+        recordLedgerEntry(
+          ownerType: 'PLATFORM',
+          direction: 'CREDIT',
+          entryType: 'GREEN_FUND_CONTRIBUTION',
+          amount: PricingEstimate.greenFundContributionUnitVnd,
+          orderId: record.id,
+          idempotencyKey: 'GREEN_${record.id}',
+          metadata: {'trackingCode': record.trackingCode},
+        ),
+      );
+    }
     activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
       pickupPt,
       lastDropoffPt,
@@ -516,7 +654,12 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     final merRepLower = mer.representativeName.trim().toLowerCase();
     final shopOrders = orders.where((o) {
       final custLower = o.customerName.trim().toLowerCase();
-      return (merStoreLower.isNotEmpty && custLower == merStoreLower) ||
+      final grabStoreLower = GrabFoodRecommendationEngine
+          .extractGrabFoodStoreNameFromDescription(o.packageDescription)
+          ?.trim()
+          .toLowerCase();
+      return (merStoreLower.isNotEmpty &&
+              (custLower == merStoreLower || grabStoreLower == merStoreLower)) ||
           (merRepLower.isNotEmpty && custLower == merRepLower);
     }).toList();
     final deliveredShopOrders = shopOrders
@@ -613,6 +756,49 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     });
   }
 
+  /// Tra cứu vận đơn công khai theo mã vận đơn hoặc mã token chia sẻ (không cần đăng nhập)
+  ActiveOrderRecord? findOrderForPublicTracking(String rawQuery) {
+    final cleaned = rawQuery.trim().replaceAll('#', '').toUpperCase();
+    if (cleaned.isEmpty) return null;
+    return orders.where((o) {
+      final codeUp = o.trackingCode.trim().replaceAll('#', '').toUpperCase();
+      final tokenUp = (o.publicTrackingToken ?? '').trim().toUpperCase();
+      return codeUp == cleaned ||
+          (tokenUp.isNotEmpty && tokenUp == cleaned);
+    }).firstOrNull;
+  }
+
+  /// Lấy danh sách đơn hàng ghép cặp cùng nhóm 2H với đơn hiện tại
+  List<ActiveOrderRecord> batchPartnersFor(ActiveOrderRecord order) {
+    final gid = order.batchGroupId;
+    if (gid == null || gid.trim().isEmpty) return const [];
+    return orders
+        .where((o) => o.id != order.id && o.batchGroupId == gid)
+        .toList(growable: false);
+  }
+
+  /// Tổng lượng CO2 giảm phát thải trên toàn hệ thống (tính bằng gram)
+  double get totalSystemCo2SavedGrams {
+    var sum = 0.0;
+    for (final o in orders) {
+      if (o.status != OrderStatus.cancelled) {
+        sum += o.co2SavedGrams;
+      }
+    }
+    return sum;
+  }
+
+  /// Tổng đóng góp Quỹ Xanh từ các đơn giao hàng
+  double get totalGreenFundContributedVnd {
+    var count = 0;
+    for (final o in orders) {
+      if (o.status != OrderStatus.cancelled && o.greenFundContributed) {
+        count++;
+      }
+    }
+    return count * PricingEstimate.greenFundContributionUnitVnd;
+  }
+
   void driverAcceptOrder(
     String trackingCode, {
     String? customDriverName,
@@ -632,19 +818,26 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         linkedUser?.status == 'LOCKED') {
       return;
     }
-    if (ord.serviceType == DeliveryServiceType.truck) {
-      final vLower = activeDrv.vehicleType.toLowerCase();
-      final isTruckCapable =
-          vLower.contains('tải') ||
-          vLower.contains('van') ||
-          vLower.contains('truck');
-      if (!isTruckCapable) {
-        return;
-      }
+    if (!SmartDispatchEngine.isDriverEligibleForOrder(
+      driver: activeDrv,
+      pickupLocation: ord.pickupLocation,
+      serviceType: ord.serviceType,
+      requireElectricVehicle: ord.preferEcoEv,
+      totalOrderRouteMeters:
+          ord.isRoundTrip ? (ord.distanceMeters * 2) : ord.distanceMeters,
+      declaredValueVnd: ord.declaredValueVnd,
+      codAmount: ord.codAmount,
+    )) {
+      return;
     }
     ord.status = OrderStatus.accepted;
     ord.assignedDriverName = customDriverName ?? activeDrv.fullName;
     ord.assignedDriverPlate = customPlate ?? activeDrv.licensePlate;
+    if (activeDrv.isElectricVehicle && ord.co2SavedGrams <= 0) {
+      ord.co2SavedGrams = GeoMath.estimateEvCo2SavedGrams(
+        ord.isRoundTrip ? (ord.distanceMeters * 2) : ord.distanceMeters,
+      );
+    }
     selectedDriverOrderCode = trackingCode;
     activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
       ord.pickupLocation,
@@ -660,6 +853,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         'status': ord.status.name,
         'assigned_driver_name': ord.assignedDriverName,
         'assigned_driver_plate': ord.assignedDriverPlate,
+        'co2_saved_grams': ord.co2SavedGrams,
       },
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
@@ -714,15 +908,17 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     if (linkedUser != null && linkedUser.status == 'LOCKED') {
       return false;
     }
-    if (ord.serviceType == DeliveryServiceType.truck) {
-      final vLower = driver.vehicleType.toLowerCase();
-      final isTruckCapable =
-          vLower.contains('tải') ||
-          vLower.contains('van') ||
-          vLower.contains('truck');
-      if (!isTruckCapable) {
-        return false;
-      }
+    if (!SmartDispatchEngine.isDriverEligibleForOrder(
+      driver: driver,
+      pickupLocation: ord.pickupLocation,
+      serviceType: ord.serviceType,
+      requireElectricVehicle: ord.preferEcoEv,
+      totalOrderRouteMeters:
+          ord.isRoundTrip ? (ord.distanceMeters * 2) : ord.distanceMeters,
+      declaredValueVnd: ord.declaredValueVnd,
+      codAmount: ord.codAmount,
+    )) {
+      return false;
     }
     if (ord.status == OrderStatus.failed) {
       ord.status = OrderStatus.inTransit;
@@ -734,6 +930,11 @@ extension AppStateOrderAndAdminOps on AppStateStore {
     }
     ord.assignedDriverName = driver.fullName;
     ord.assignedDriverPlate = driver.licensePlate;
+    if (driver.isElectricVehicle && ord.co2SavedGrams <= 0) {
+      ord.co2SavedGrams = GeoMath.estimateEvCo2SavedGrams(
+        ord.isRoundTrip ? (ord.distanceMeters * 2) : ord.distanceMeters,
+      );
+    }
     selectedDriverOrderCode = trackingCode;
     activeRoutePolyline = SmartDispatchEngine.generateRoutePolyline(
       ord.pickupLocation,
@@ -858,8 +1059,44 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         ord.paymentStatus = 'PAID';
         ord.podImageNote =
             podNote ?? 'Đã chụp ảnh kiện hàng kèm Watermark GPS & OTP 4 số';
-        final driverNetEarning = ((ord.deliveryFee + ord.surchargeFee) * 0.80)
-            .roundToDouble();
+        if (assignedDrv != null && assignedDrv.isElectricVehicle) {
+          if (ord.co2SavedGrams <= 0) {
+            ord.co2SavedGrams = GeoMath.estimateEvCo2SavedGrams(
+              ord.isRoundTrip ? (ord.distanceMeters * 2) : ord.distanceMeters,
+            );
+          }
+          final socUsed = ((ord.isRoundTrip
+                          ? ord.distanceMeters * 2
+                          : ord.distanceMeters) /
+                      SmartDispatchEngine.evFullChargeRangeMeters *
+                      100)
+                  .round()
+                  .clamp(1, 25);
+          assignedDrv.batteryPercent =
+              (assignedDrv.batteryPercent - socUsed).clamp(5, 100);
+        }
+        final nonDriverSurcharges =
+            ord.insuranceFee +
+            (ord.greenFundContributed
+                ? PricingEstimate.greenFundContributionUnitVnd
+                : 0.0);
+        final commissionableBase =
+            (ord.deliveryFee + ord.surchargeFee - nonDriverSurcharges).clamp(
+              0.0,
+              double.infinity,
+            );
+        final driverNetEarning = (commissionableBase * 0.80).roundToDouble();
+        unawaited(
+          _sqliteDb.updateRows(
+            'order_stops',
+            {
+              'status': 'COMPLETED',
+              'completed_at_ms': ord.deliveredAtMs,
+            },
+            where: 'order_id = ? AND status != ?',
+            whereArgs: [ord.id, 'COMPLETED'],
+          ),
+        );
         if (assignedDrv != null) {
           assignedDrv.totalTrips += 1;
           assignedDrv.walletBalance += driverNetEarning;
@@ -882,12 +1119,17 @@ extension AppStateOrderAndAdminOps on AppStateStore {
           driverWalletBalance += driverNetEarning;
         }
         final ordOwnerLower = ord.customerName.trim().toLowerCase();
+        final grabStoreLower = GrabFoodRecommendationEngine
+            .extractGrabFoodStoreNameFromDescription(ord.packageDescription)
+            ?.trim()
+            .toLowerCase();
         final matchedMer = merchantApplicants
-            .where(
-              (m) =>
-                  m.storeName.trim().toLowerCase() == ordOwnerLower ||
-                  m.representativeName.trim().toLowerCase() == ordOwnerLower,
-            )
+            .where((m) {
+              final mStore = m.storeName.trim().toLowerCase();
+              return mStore == ordOwnerLower ||
+                  m.representativeName.trim().toLowerCase() == ordOwnerLower ||
+                  (grabStoreLower != null && grabStoreLower == mStore);
+            })
             .firstOrNull;
         if (matchedMer != null) {
           final codHandlingFee = ord.codAmount > 2000000
@@ -923,6 +1165,8 @@ extension AppStateOrderAndAdminOps on AppStateStore {
           {
             'wallet_balance': assignedDrv?.walletBalance ?? driverWalletBalance,
             if (assignedDrv != null) 'total_trips': assignedDrv.totalTrips,
+            if (assignedDrv != null)
+              'battery_percent': assignedDrv.batteryPercent,
           },
           where: 'id = ?',
           whereArgs: [assignedDrv?.id ?? activeDriverId],
@@ -1005,6 +1249,7 @@ extension AppStateOrderAndAdminOps on AppStateStore {
         'assigned_driver_plate': ord.assignedDriverPlate,
         'pod_image_note': ord.podImageNote,
         'delivered_at_ms': ord.deliveredAtMs,
+        'co2_saved_grams': ord.co2SavedGrams,
       },
       where: 'tracking_code = ?',
       whereArgs: [trackingCode],
@@ -1943,16 +2188,24 @@ extension AppStateOrderAndAdminOps on AppStateStore {
               relatedOrder != null && relatedOrder.codAmount > 0
               ? (relatedOrder.codAmount * 0.20).clamp(50000.0, 500000.0)
               : 100000.0;
-          final ownerHint = (relatedOrder?.customerName ?? item.customerName)
-              .trim()
-              .toLowerCase();
-          final matchedMer = merchantApplicants
-              .where(
-                (m) =>
-                    m.storeName.trim().toLowerCase() == ownerHint ||
-                    m.representativeName.trim().toLowerCase() == ownerHint,
-              )
-              .firstOrNull;
+          final reporterHint = item.customerName.trim().toLowerCase();
+          final fallbackOrderHint =
+              (relatedOrder?.customerName ?? '').trim().toLowerCase();
+          MerchantApplicantRecord? findMerchantByHint(String hint) {
+            if (hint.isEmpty) return null;
+            return merchantApplicants
+                .where(
+                  (m) =>
+                      m.storeName.trim().toLowerCase() == hint ||
+                      m.representativeName.trim().toLowerCase() == hint,
+                )
+                .firstOrNull;
+          }
+
+          final matchedMer = findMerchantByHint(reporterHint) ??
+              (item.issueType.startsWith('Shop KN') || reporterHint.isEmpty
+                  ? findMerchantByHint(fallbackOrderHint)
+                  : null);
           final isMerchantComplaint =
               matchedMer != null || item.issueType.startsWith('Shop KN');
           if (isMerchantComplaint) {

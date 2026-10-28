@@ -14,12 +14,14 @@ import '../../domain/entities/geo_point.dart';
 import '../../domain/entities/pricing_estimate.dart';
 import '../../domain/enums/order_status.dart';
 import '../../domain/enums/service_type.dart';
+import '../screens/public_order_tracking_screen.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/system_state_screens.dart';
 
 part 'customer_auth_and_address_views.dart';
 part 'customer_order_and_pricing_views.dart';
 part 'customer_history_and_profile_views.dart';
+part 'customer_grab_food_views.dart';
 
 /// Phân hệ Khách hàng (Customer App) - 14 màn hình chuẩn thiết kế gốc (uc02..uc12, uc41, uc42)
 class CustomerSubsystemEntry extends StatefulWidget {
@@ -59,10 +61,15 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     text: '20 x 15 x 10 cm',
   );
   final TextEditingController _codCtrl = TextEditingController();
+  final TextEditingController _declaredValueCtrl = TextEditingController();
   final TextEditingController _voucherCtrl = TextEditingController();
   DeliveryServiceType _selectedService = DeliveryServiceType.express30m;
   bool _isScheduledDelivery = false;
   String _scheduledDeliverySlot = '13:00 - 15:00';
+  bool _preferEcoEv = false;
+  bool _greenFundContributed = false;
+  bool _isRoundTrip = false;
+  int? _lastTspSavedMeters;
   final String _selectedPaymentMethod = 'Tiền mặt (COD)';
   String _cashFeePayer = 'Người gửi trả phí';
   List<GeoPoint>? _osrmPreviewPoints;
@@ -114,6 +121,18 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   // Trạng thái Trung tâm thông báo
   String _notiFilter = 'Tất cả';
 
+  // Trạng thái Ăn uống & Gợi ý thông minh (GrabFood)
+  final TextEditingController _foodSearchCtrl = TextEditingController();
+  final TextEditingController _foodKitchenNoteCtrl = TextEditingController();
+  final TextEditingController _foodDropoffCtrl = TextEditingController();
+  MealTimeSlot _selectedFoodMealSlot = MealTimeSlot.auto;
+  GrabFoodQuickFilter _selectedFoodQuickFilter = GrabFoodQuickFilter.all;
+  final List<GrabFoodCartEntry> _grabFoodCart = <GrabFoodCartEntry>[];
+  DeliveryServiceType _foodDeliveryService = DeliveryServiceType.express30m;
+  bool _foodPreferEcoEv = false;
+  bool _foodGreenFund = false;
+  String? _selectedFoodVoucherCode;
+
   static const List<String> _screenTitles = [
     'Trang chủ',
     'Sổ địa chỉ nhận hàng',
@@ -128,6 +147,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     'Hồ sơ cá nhân',
     'Trung tâm thông báo',
     'Kho mã ưu đãi & Khuyến mãi',
+    'Ăn uống & Gợi ý (GrabFood)',
   ];
 
   @override
@@ -212,6 +232,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     _weightCtrl.dispose();
     _dimCtrl.dispose();
     _codCtrl.dispose();
+    _declaredValueCtrl.dispose();
     _voucherCtrl.dispose();
     _newAddressCtrl.dispose();
     _chatInputCtrl.dispose();
@@ -223,6 +244,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     _profilePhoneCtrl.dispose();
     _profileEmailCtrl.dispose();
     _profileAddressCtrl.dispose();
+    _foodSearchCtrl.dispose();
+    _foodKitchenNoteCtrl.dispose();
+    _foodDropoffCtrl.dispose();
     super.dispose();
   }
 
@@ -233,7 +257,8 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
         screenIdx == 2 ||
         screenIdx == 3 ||
         screenIdx == 1 ||
-        screenIdx == 12) {
+        screenIdx == 12 ||
+        screenIdx == 13) {
       return 0; // Trang chủ & Đặt đơn
     }
     if (screenIdx == 4 ||
@@ -336,6 +361,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   Widget _buildCustomerStudioSidebar(double sidebarWidth) {
     const menuItems = <(IconData, String, int)>[
       (Icons.home_outlined, 'Trang chủ', 0),
+      (Icons.restaurant_menu_rounded, 'Ăn uống (GrabFood)', 13),
       (Icons.add_box_outlined, 'Tạo đơn hàng mới', 2),
       (Icons.receipt_long_outlined, 'Đơn hàng', 7),
       (Icons.bookmarks_outlined, 'Sổ địa chỉ nhận hàng', 1),
@@ -910,6 +936,8 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
         return _buildNotificationCenterView();
       case 12:
         return _buildDedicatedVoucherUc11View();
+      case 13:
+        return _buildGrabFoodDiscoveryAndCartView(context);
       default:
         return _buildCustomerHomeDashboardView();
     }
@@ -1450,6 +1478,13 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                 DeliveryServiceType.standard,
               ),
               (
+                'Ghép đơn 2H',
+                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
+                Icons.hub_outlined,
+                const Color(0xFF0EA5E9),
+                DeliveryServiceType.sameDay2h,
+              ),
+              (
                 'Tiết kiệm 4h',
                 'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.saving))}',
                 Icons.savings_outlined,
@@ -1539,6 +1574,8 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
             );
           },
         ),
+        const SizedBox(height: 12),
+        _buildHomeGrabFoodDiscoveryStrip(context),
         if (recentOrders.isNotEmpty) ...[
           const SizedBox(height: 12),
           Container(

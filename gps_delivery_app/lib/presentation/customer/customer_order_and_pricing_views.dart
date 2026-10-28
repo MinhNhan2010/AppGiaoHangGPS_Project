@@ -475,30 +475,198 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                       ],
                     ),
                     const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          final address = _extraDropoffCtrl.text.trim();
-                          if (address.isEmpty) return;
-                          _rebuildCustomerUi(() {
-                            _additionalStops.add({
-                              'address': address,
-                              'recipientName': _extraRecipientNameCtrl.text
-                                  .trim(),
-                              'recipientPhone': _extraRecipientPhoneCtrl.text
-                                  .trim(),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      alignment: WrapAlignment.end,
+                      children: [
+                        if (_additionalStops.isNotEmpty)
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.ink,
+                              foregroundColor: AppColors.acid,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 8,
+                              ),
+                            ),
+                            onPressed: () {
+                              if (_dropoffCtrl.text.trim().isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Vui lòng nhập Điểm giao chính trước khi tối ưu thứ tự đa điểm!',
+                                    ),
+                                  ),
+                                );
+                                return;
+                              }
+                              final allStops = <Map<String, dynamic>>[
+                                {
+                                  'address': _dropoffCtrl.text.trim(),
+                                  'recipientName': _recipientNameCtrl.text
+                                      .trim(),
+                                  'recipientPhone': _recipientPhoneCtrl.text
+                                      .trim(),
+                                  if (_pinnedDropoffLocation != null) ...{
+                                    'latitude':
+                                        _pinnedDropoffLocation!.latitude,
+                                    'longitude':
+                                        _pinnedDropoffLocation!.longitude,
+                                  },
+                                },
+                                ..._additionalStops.map(
+                                  (s) => Map<String, dynamic>.from(s),
+                                ),
+                              ];
+                              final tspRes =
+                                  SmartDispatchEngine.optimizeMultiStopRoute(
+                                    pickup: pPt,
+                                    stops: allStops,
+                                    isRoundTrip: _isRoundTrip,
+                                  );
+                              if (tspRes.optimizedStops.isEmpty) return;
+                              final outboundRes =
+                                  SmartDispatchEngine.optimizeMultiStopRoute(
+                                    pickup: pPt,
+                                    stops: tspRes.optimizedStops,
+                                    isRoundTrip: false,
+                                  );
+                              final firstStop = tspRes.optimizedStops.first;
+                              _rebuildCustomerUi(() {
+                                _dropoffCtrl.text =
+                                    (firstStop['address'] ?? '').toString();
+                                _recipientNameCtrl.text =
+                                    (firstStop['recipientName'] ?? '')
+                                        .toString();
+                                _recipientPhoneCtrl.text =
+                                    (firstStop['recipientPhone'] ?? '')
+                                        .toString();
+                                if (firstStop['latitude'] is num &&
+                                    firstStop['longitude'] is num) {
+                                  _pinnedDropoffLocation = GeoPoint(
+                                    latitude:
+                                        (firstStop['latitude'] as num)
+                                            .toDouble(),
+                                    longitude:
+                                        (firstStop['longitude'] as num)
+                                            .toDouble(),
+                                  );
+                                }
+                                _additionalStops
+                                  ..clear()
+                                  ..addAll(tspRes.optimizedStops.skip(1));
+                                _osrmPreviewPoints = tspRes.routePolyline;
+                                _osrmDistMeters =
+                                    outboundRes.optimizedDistanceMeters;
+                                _osrmDurationSec =
+                                    outboundRes.estimatedDurationSeconds;
+                                _lastTspSavedMeters =
+                                    tspRes.savedDistanceMeters;
+                              });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    tspRes.savedDistanceMeters > 0
+                                        ? 'Đã tối ưu 2-Opt TSP ${tspRes.optimizedStops.length} điểm giao • Tiết kiệm ${(tspRes.savedDistanceMeters / 1000.0).toStringAsFixed(2)} km!'
+                                        : 'Thứ tự ${tspRes.optimizedStops.length} điểm giao hiện tại đã là lộ trình ngắn nhất!',
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.route_rounded, size: 15),
+                            label: const Text(
+                              'Tối ưu đa điểm (2-Opt TSP)',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            final address = _extraDropoffCtrl.text.trim();
+                            if (address.isEmpty) return;
+                            _rebuildCustomerUi(() {
+                              _additionalStops.add({
+                                'address': address,
+                                'recipientName': _extraRecipientNameCtrl.text
+                                    .trim(),
+                                'recipientPhone': _extraRecipientPhoneCtrl.text
+                                    .trim(),
+                              });
+                              _extraDropoffCtrl.clear();
+                              _extraRecipientNameCtrl.clear();
+                              _extraRecipientPhoneCtrl.clear();
+                              _lastTspSavedMeters = null;
                             });
-                            _extraDropoffCtrl.clear();
-                            _extraRecipientNameCtrl.clear();
-                            _extraRecipientPhoneCtrl.clear();
-                          });
-                        },
-                        icon: const Icon(Icons.add, size: 16),
-                        label: const Text('Thêm điểm giao'),
+                          },
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Thêm điểm giao'),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (_lastTspSavedMeters != null) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFECFDF5),
+                        border: Border.all(color: AppColors.success),
+                      ),
+                      child: Text(
+                        _lastTspSavedMeters! > 0
+                            ? 'Lộ trình đa điểm đã sắp xếp tối ưu bằng Nearest-Neighbor + 2-Opt (rút ngắn ${(_lastTspSavedMeters! / 1000.0).toStringAsFixed(2)} km).'
+                            : 'Thứ tự các trạm giao đã tối ưu theo thuật toán 2-Opt TSP.',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
                       ),
                     ),
                   ],
+                  const Divider(height: 16),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Giao hàng 2 chiều (Khứ hồi về điểm lấy)',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Tài xế mang chứng từ / hàng đổi trả quay lại điểm lấy (+60% cước cơ bản & km)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Switch.adaptive(
+                        activeThumbColor: AppColors.violet,
+                        value: _isRoundTrip,
+                        onChanged: (val) => _rebuildCustomerUi(() {
+                          _isRoundTrip = val;
+                          _lastTspSavedMeters = null;
+                        }),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -590,6 +758,30 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _declaredValueCtrl,
+              keyboardType: TextInputType.number,
+              onChanged: (_) => _rebuildCustomerUi(() {}),
+              decoration: InputDecoration(
+                labelText: 'Khai giá bảo hiểm hàng hóa (VNĐ - tùy chọn)',
+                hintText: 'VD: 5000000 (Phí 0.5%, đền bù tối đa 30.000.000đ)',
+                prefixIcon: const Icon(
+                  Icons.verified_user_outlined,
+                  size: 18,
+                  color: AppColors.violet,
+                ),
+                helperText: (() {
+                  final rawVal =
+                      double.tryParse(_declaredValueCtrl.text.trim()) ?? 0.0;
+                  if (rawVal <= 0) {
+                    return 'Đơn khai giá >= 3.000.000đ tự động lọc Tài xế chuẩn >= 4.5★ & ký quỹ >= 500.000đ';
+                  }
+                  final fee = PricingEstimate.calculateInsuranceFee(rawVal);
+                  return 'Phí bảo hiểm khai giá (0.5%): ${CurrencyFormatter.formatVnd(fee)}';
+                })(),
+              ),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -891,11 +1083,72 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
               ],
             ),
             const SizedBox(height: 10),
+            _buildUc04ServiceCard(
+              title: 'Giao nhanh 2H (Ghép đơn)',
+              eta: 'Ghép cặp cùng hướng Bearing <= 25° • Tiết kiệm nội thành',
+              priceLabel:
+                  'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
+              icon: Icons.hub_rounded,
+              iconColor: const Color(0xFF0EA5E9),
+              selected: _selectedService == DeliveryServiceType.sameDay2h,
+              onTap: () => _rebuildCustomerUi(() {
+                _selectedService = DeliveryServiceType.sameDay2h;
+              }),
+            ),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 6,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
+                FilterChip(
+                  visualDensity: VisualDensity.compact,
+                  avatar: Icon(
+                    Icons.electric_moped_rounded,
+                    size: 15,
+                    color: _preferEcoEv ? Colors.white : AppColors.success,
+                  ),
+                  label: Text(
+                    _preferEcoEv
+                        ? 'Xe điện Xanh (Eco EV • -48g CO₂/km)'
+                        : 'Ưu tiên Xe điện Xanh (Eco EV)',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: _preferEcoEv ? Colors.white : AppColors.ink,
+                    ),
+                  ),
+                  selected: _preferEcoEv,
+                  selectedColor: AppColors.success,
+                  onSelected: (v) => _rebuildCustomerUi(() {
+                    _preferEcoEv = v;
+                  }),
+                ),
+                FilterChip(
+                  visualDensity: VisualDensity.compact,
+                  avatar: Icon(
+                    Icons.park_rounded,
+                    size: 15,
+                    color: _greenFundContributed
+                        ? Colors.white
+                        : AppColors.success,
+                  ),
+                  label: Text(
+                    'Góp 1.000đ Quỹ Xanh',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                      color: _greenFundContributed
+                          ? Colors.white
+                          : AppColors.ink,
+                    ),
+                  ),
+                  selected: _greenFundContributed,
+                  selectedColor: const Color(0xFF059669),
+                  onSelected: (v) => _rebuildCustomerUi(() {
+                    _greenFundContributed = v;
+                  }),
+                ),
                 FilterChip(
                   visualDensity: VisualDensity.compact,
                   avatar: Icon(
@@ -1208,13 +1461,43 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
           _dropoffCtrl.text,
           fallback: const GeoPoint(latitude: 10.7688, longitude: 106.6820),
         );
-    final rawAirMeters = GeoMath.distanceMeters(pickupPt, dropoffPt);
-    final distMeters =
-        _osrmDistMeters ?? (rawAirMeters * 1.28).round().clamp(1500, 45000);
-    final durationSec =
-        _osrmDurationSec ?? ((distMeters / 1000.0) * 180).round();
+    var lastDropoffPt = dropoffPt;
+    int distMeters;
+    int durationSec;
+    if (_additionalStops.isEmpty) {
+      final rawAirMeters = GeoMath.distanceMeters(pickupPt, dropoffPt);
+      distMeters =
+          _osrmDistMeters ?? (rawAirMeters * 1.28).round().clamp(1500, 45000);
+      durationSec =
+          _osrmDurationSec ?? ((distMeters / 1000.0) * 180).round();
+    } else {
+      var routeMeters = GeoMath.distanceMeters(pickupPt, dropoffPt) * 1.28;
+      var prevPt = dropoffPt;
+      for (final stop in _additionalStops) {
+        final addr = (stop['address'] ?? '').toString().trim();
+        if (addr.isEmpty) continue;
+        final sPt = (stop['latitude'] is num && stop['longitude'] is num)
+            ? GeoPoint(
+                latitude: (stop['latitude'] as num).toDouble(),
+                longitude: (stop['longitude'] as num).toDouble(),
+              )
+            : SmartDispatchEngine.resolveAddressToCoordinate(
+                addr,
+                fallback: prevPt,
+              );
+        routeMeters += GeoMath.distanceMeters(prevPt, sPt) * 1.28;
+        prevPt = sPt;
+        lastDropoffPt = sPt;
+      }
+      distMeters =
+          _osrmDistMeters ?? routeMeters.round().clamp(1500, 45000);
+      durationSec =
+          _osrmDurationSec ??
+          (((distMeters / 1000.0) * 180).round() +
+              _additionalStops.length * 180);
+    }
 
-    double geofenceFee = _store.computeGeofenceSurchargeForPoint(dropoffPt);
+    double geofenceFee = _store.computeGeofenceSurchargeForPoint(lastDropoffPt);
     if (_store.isWeatherSurchargeActive) {
       geofenceFee += _store.badWeatherSurchargeConfig;
     }
@@ -1232,6 +1515,14 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
 
     final baseScale = (_store.baseFareConfig / 25000.0).clamp(0.4, 5.0);
     final kmScale = (_store.pricePerKmConfig / 5000.0).clamp(0.4, 5.0);
+    final rawDeclaredVal =
+        double.tryParse(_declaredValueCtrl.text.trim()) ?? 0.0;
+    final safeDeclaredValue = rawDeclaredVal.isFinite && rawDeclaredVal > 0
+        ? rawDeclaredVal.clamp(0.0, PricingEstimate.maxInsuredDeclaredValueVnd)
+        : 0.0;
+    final extraStopCount = _additionalStops
+        .where((s) => (s['address'] ?? '').toString().trim().isNotEmpty)
+        .length;
 
     final preEst = PricingEstimate.calculate(
       serviceType: _selectedService,
@@ -1243,6 +1534,11 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
       configuredStandardPeakSurcharge: _store.peakHourSurchargeConfig,
+      declaredValueVnd: safeDeclaredValue,
+      extraStopCount: extraStopCount,
+      isRoundTrip: _isRoundTrip,
+      greenFundContribution: _greenFundContributed,
+      preferEcoEv: _preferEcoEv,
     );
 
     double discountVal = 0;
@@ -1275,6 +1571,11 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
       baseFareScale: baseScale,
       pricePerKmScale: kmScale,
       configuredStandardPeakSurcharge: _store.peakHourSurchargeConfig,
+      declaredValueVnd: safeDeclaredValue,
+      extraStopCount: extraStopCount,
+      isRoundTrip: _isRoundTrip,
+      greenFundContribution: _greenFundContributed,
+      preferEcoEv: _preferEcoEv,
     );
 
     return Card(
@@ -1378,8 +1679,44 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                         ),
                         _priceRow(
                           'Phụ phí giờ cao điểm & Geofence',
-                          CurrencyFormatter.formatVnd(estimate.surchargeFee),
+                          CurrencyFormatter.formatVnd(
+                            estimate.surchargeFee -
+                                estimate.multiStopFee -
+                                estimate.roundTripFee -
+                                estimate.insuranceFee -
+                                estimate.greenContributionFee,
+                          ),
                         ),
+                        if (estimate.multiStopFee > 0)
+                          _priceRow(
+                            'Phụ phí đa điểm dừng (+$extraStopCount điểm)',
+                            CurrencyFormatter.formatVnd(estimate.multiStopFee),
+                          ),
+                        if (estimate.roundTripFee > 0)
+                          _priceRow(
+                            'Phụ phí giao 2 chiều khứ hồi (+60%)',
+                            CurrencyFormatter.formatVnd(estimate.roundTripFee),
+                          ),
+                        if (estimate.insuranceFee > 0)
+                          _priceRow(
+                            'Phí bảo hiểm khai giá (${CurrencyFormatter.formatVnd(safeDeclaredValue)})',
+                            CurrencyFormatter.formatVnd(estimate.insuranceFee),
+                          ),
+                        if (estimate.greenContributionFee > 0)
+                          _priceRow(
+                            'Đóng góp Quỹ Xanh Vì Tương Lai',
+                            CurrencyFormatter.formatVnd(
+                              estimate.greenContributionFee,
+                            ),
+                            valueColor: AppColors.success,
+                          ),
+                        if (_preferEcoEv &&
+                            estimate.estimatedCo2SavedGrams > 0)
+                          _priceRow(
+                            'Giảm phát thải Xe điện Xanh (Eco EV)',
+                            '-${estimate.estimatedCo2SavedGrams.toStringAsFixed(0)}g CO₂',
+                            valueColor: AppColors.success,
+                          ),
                         _priceRow(
                           code.isEmpty
                               ? 'Giảm giá (Khuyến mãi)'
@@ -1579,6 +1916,10 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     additionalStops: List<Map<String, dynamic>>.from(
                       _additionalStops,
                     ),
+                    preferEcoEv: _preferEcoEv,
+                    declaredValueVnd: safeDeclaredValue,
+                    isRoundTrip: _isRoundTrip,
+                    greenFundContributed: _greenFundContributed,
                   );
                   if (_isScheduledDelivery) {
                     await _store.scheduleOrder(
@@ -1589,10 +1930,13 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     );
                   }
                   if (!context.mounted) return;
+                  final batchInfo = created.batchGroupId != null
+                      ? ' • Đã ghép cặp đơn 2H (${created.batchGroupId})'
+                      : '';
                   messenger.showSnackBar(
                     SnackBar(
                       content: Text(
-                        'Đã đặt đơn hàng ${created.trackingCode} thành công!',
+                        'Đã đặt đơn hàng ${created.trackingCode} thành công!$batchInfo',
                       ),
                     ),
                   );
@@ -1603,7 +1947,10 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     _pkgDescCtrl.clear();
                     _voucherCtrl.clear();
                     _codCtrl.clear();
+                    _declaredValueCtrl.clear();
                     _additionalStops.clear();
+                    _isRoundTrip = false;
+                    _lastTspSavedMeters = null;
                     _pinnedDropoffLocation = null;
                     _osrmPreviewPoints = null;
                     _osrmDistMeters = null;
@@ -1941,6 +2288,83 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                       ),
                     ),
                   ),
+                if (activeOrder.preferEcoEv || activeOrder.co2SavedGrams > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFDF5),
+                      border: Border.all(color: AppColors.success),
+                    ),
+                    child: Text(
+                      'Xe điện Xanh • -${activeOrder.co2SavedGrams.toStringAsFixed(0)}g CO₂',
+                      style: const TextStyle(
+                        color: AppColors.ink,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                if (activeOrder.batchGroupId != null &&
+                    activeOrder.batchGroupId!.trim().isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE0F2FE),
+                      border: Border.all(color: const Color(0xFF0EA5E9)),
+                    ),
+                    child: Text(
+                      'Ghép đơn 2H: ${activeOrder.batchGroupId}',
+                      style: const TextStyle(
+                        color: AppColors.ink,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                if (activeOrder.declaredValueVnd > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      border: Border.all(color: AppColors.ink),
+                    ),
+                    child: Text(
+                      'Bảo hiểm: ${CurrencyFormatter.formatVnd(activeOrder.declaredValueVnd)}',
+                      style: const TextStyle(
+                        color: AppColors.ink,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+                if (activeOrder.isRoundTrip)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEDE9FE),
+                      border: Border.all(color: AppColors.violet),
+                    ),
+                    child: const Text(
+                      'Giao 2 chiều (Khứ hồi)',
+                      style: TextStyle(
+                        color: AppColors.violet,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
               ],
             ),
             if (_store.customerOrders.length > 1) ...[
@@ -2154,6 +2578,37 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
               spacing: 8,
               runSpacing: 8,
               children: [
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: const Color(0xFFECFDF5),
+                    side: const BorderSide(color: AppColors.ink, width: 1.2),
+                  ),
+                  onPressed: () {
+                    final shareLink =
+                        'https://ghst.vn/#/track?code=${Uri.encodeComponent(activeOrder.trackingCode)}';
+                    Clipboard.setData(ClipboardData(text: shareLink));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Đã sao chép Link theo dõi công khai: $shareLink',
+                        ),
+                      ),
+                    );
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => PublicOrderTrackingScreen(
+                          initialQuery: activeOrder.trackingCode,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.share_location_rounded,
+                    size: 17,
+                    color: AppColors.success,
+                  ),
+                  label: const Text('Chia sẻ hành trình (/track)'),
+                ),
                 if (activeOrder.assignedDriverName != null)
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(

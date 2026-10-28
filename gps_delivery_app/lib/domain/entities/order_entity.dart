@@ -34,6 +34,15 @@ class OrderEntity extends Equatable {
   final String? podImageUrl;
   final DateTime createdAt;
   final DateTime? deliveredAt;
+  final bool preferEcoEv;
+  final double declaredValueVnd;
+  final double insuranceFee;
+  final bool isRoundTrip;
+  final int extraStopCount;
+  final String? batchGroupId;
+  final double co2SavedGrams;
+  final bool greenFundContributed;
+  final String? publicTrackingToken;
 
   const OrderEntity({
     required this.id,
@@ -64,6 +73,15 @@ class OrderEntity extends Equatable {
     this.podImageUrl,
     required this.createdAt,
     this.deliveredAt,
+    this.preferEcoEv = false,
+    this.declaredValueVnd = 0.0,
+    this.insuranceFee = 0.0,
+    this.isRoundTrip = false,
+    this.extraStopCount = 0,
+    this.batchGroupId,
+    this.co2SavedGrams = 0.0,
+    this.greenFundContributed = false,
+    this.publicTrackingToken,
   });
 
   OrderEntity transitionTo(
@@ -110,6 +128,15 @@ class OrderEntity extends Equatable {
       deliveredAt: nextStatus == OrderStatus.delivered
           ? (deliveredAt ?? this.deliveredAt ?? DateTime.now())
           : this.deliveredAt,
+      preferEcoEv: preferEcoEv,
+      declaredValueVnd: declaredValueVnd,
+      insuranceFee: insuranceFee,
+      isRoundTrip: isRoundTrip,
+      extraStopCount: extraStopCount,
+      batchGroupId: batchGroupId,
+      co2SavedGrams: co2SavedGrams,
+      greenFundContributed: greenFundContributed,
+      publicTrackingToken: publicTrackingToken,
     );
   }
 
@@ -140,6 +167,15 @@ class OrderEntity extends Equatable {
     'payment_status': paymentStatus,
     'status': status.dbCode,
     'pod_image_url': podImageUrl,
+    'prefer_eco_ev': preferEcoEv,
+    'declared_value_vnd': declaredValueVnd,
+    'insurance_fee': insuranceFee,
+    'is_round_trip': isRoundTrip,
+    'extra_stop_count': extraStopCount,
+    'batch_group_id': batchGroupId,
+    'co2_saved_grams': co2SavedGrams,
+    'green_fund_contributed': greenFundContributed,
+    'public_tracking_token': publicTrackingToken,
     'created_at': createdAt.toIso8601String(),
     if (deliveredAt != null) 'delivered_at': deliveredAt!.toIso8601String(),
   };
@@ -223,6 +259,16 @@ class OrderEntity extends Equatable {
         map['delivered_at'],
         map['delivered_at_ms'],
       ),
+      preferEcoEv: map['prefer_eco_ev'] == true || map['prefer_eco_ev'] == 1,
+      declaredValueVnd: (map['declared_value_vnd'] as num? ?? 0.0).toDouble(),
+      insuranceFee: (map['insurance_fee'] as num? ?? 0.0).toDouble(),
+      isRoundTrip: map['is_round_trip'] == true || map['is_round_trip'] == 1,
+      extraStopCount: (map['extra_stop_count'] as num? ?? 0).toInt(),
+      batchGroupId: map['batch_group_id']?.toString(),
+      co2SavedGrams: (map['co2_saved_grams'] as num? ?? 0.0).toDouble(),
+      greenFundContributed: map['green_fund_contributed'] == true ||
+          map['green_fund_contributed'] == 1,
+      publicTrackingToken: map['public_tracking_token']?.toString(),
     );
   }
 

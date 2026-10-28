@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/env_config.dart';
 import '../../../core/gps/gps_integrity_validator.dart';
+import '../../../core/gps/grab_food_recommendation_engine.dart';
 import '../../../core/gps/kalman_gps_filter.dart';
 import '../../../core/gps/smart_dispatch_engine.dart';
 import '../../../core/utils/geo_math.dart';
@@ -23,6 +24,7 @@ import '../remote/supabase_postgis_datasource.dart';
 import 'sqlite_offline_queue_datasource.dart';
 
 import '../../models/app_state_records.dart';
+export '../../../core/gps/grab_food_recommendation_engine.dart';
 export '../../models/app_state_records.dart';
 
 part 'app_state_seed_and_hydration.dart';
@@ -138,6 +140,7 @@ class AppStateStore extends ChangeNotifier {
   final List<CodReconciliationRecord> codReconciliations = [];
   final List<GeofenceZoneRecord> geofenceZones = [];
   final List<RbacRoleRecord> rbacRoles = [];
+  final List<FoodMenuItemRecord> merchantMenuItems = [];
   final List<Map<String, dynamic>> systemAuditLogs = [];
 
   AppStateStore._internal() {
@@ -843,8 +846,28 @@ class AppStateStore extends ChangeNotifier {
     if (storeLower.isEmpty && repLower.isEmpty) return const [];
     return orders.where((o) {
       final custLower = o.customerName.trim().toLowerCase();
-      return (storeLower.isNotEmpty && custLower == storeLower) ||
+      final grabStoreLower = GrabFoodRecommendationEngine
+          .extractGrabFoodStoreNameFromDescription(o.packageDescription)
+          ?.trim()
+          .toLowerCase();
+      return (storeLower.isNotEmpty &&
+              (custLower == storeLower || grabStoreLower == storeLower)) ||
           (repLower.isNotEmpty && custLower == repLower);
+    }).toList();
+  }
+
+  /// Danh sách thực đơn ăn uống (GrabFood) thuộc riêng cửa hàng B2B đang đăng nhập
+  List<FoodMenuItemRecord> get activeMerchantPersonalMenuItems {
+    final activeMer = activeMerchantRecord;
+    final merId = (activeMer?.id ?? '').trim();
+    final storeLower = (activeMer?.storeName ?? merchantStoreName)
+        .trim()
+        .toLowerCase();
+    if (merId.isEmpty && storeLower.isEmpty) return const [];
+    return merchantMenuItems.where((item) {
+      if (merId.isNotEmpty && item.merchantId.trim() == merId) return true;
+      return storeLower.isNotEmpty &&
+          item.storeName.trim().toLowerCase() == storeLower;
     }).toList();
   }
 

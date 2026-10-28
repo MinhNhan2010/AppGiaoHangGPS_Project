@@ -64,6 +64,18 @@ class GeoMath {
     return inside;
   }
 
+  /// Độ lệch góc phương vị nhỏ nhất [0..180] độ giữa hai hướng di chuyển
+  static double angularDifferenceDegrees(double bearingA, double bearingB) {
+    final diff = (bearingA - bearingB).abs() % 360.0;
+    return diff > 180.0 ? 360.0 - diff : diff;
+  }
+
+  /// Ước tính lượng khí thải CO2 giảm được khi giao bằng xe máy điện thay xe xăng (~48g CO2/km)
+  static double estimateEvCo2SavedGrams(int distanceMeters) {
+    if (distanceMeters <= 0) return 0.0;
+    return (distanceMeters / 1000.0) * 48.0;
+  }
+
   static double _degToRad(double deg) => deg * (math.pi / 180.0);
   static double _radToDeg(double rad) => rad * (180.0 / math.pi);
 }

@@ -26,6 +26,16 @@ enum DeliveryServiceType {
     defaultPricePerKm: 4000,
     defaultPeakSurcharge: 0,
   ),
+  sameDay2h(
+    dbCode: 'SAME_DAY_2H',
+    displayName: 'Giao nhanh 2H (Ghép đơn)',
+    subtitle:
+        'Cam kết nội thành 2 giờ, tiết kiệm tới 30% nhờ ghép đơn cùng hướng.',
+    etaLabel: 'Trong 2 giờ',
+    defaultBaseFare: 12000,
+    defaultPricePerKm: 5500,
+    defaultPeakSurcharge: 8000,
+  ),
   truck(
     dbCode: 'TRUCK',
     displayName: 'Giao hàng lớn',
@@ -60,6 +70,12 @@ enum DeliveryServiceType {
     final lower = trimmed.toLowerCase();
     if (upper == 'EXPRESS') return DeliveryServiceType.express30m;
     if (upper == 'ECONOMY') return DeliveryServiceType.saving;
+    if (upper == 'SAME_DAY_2H' ||
+        upper == '2H' ||
+        upper.contains('GHÉP ĐƠN') ||
+        upper.contains('GHEP DON')) {
+      return DeliveryServiceType.sameDay2h;
+    }
     return DeliveryServiceType.values.firstWhere(
       (e) => e.dbCode == upper || e.name.toLowerCase() == lower,
       orElse: () => DeliveryServiceType.express30m,

@@ -121,12 +121,34 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
         _rejectedOrderCodes.contains(o.trackingCode)) {
       return false;
     }
-    if (o.serviceType == DeliveryServiceType.truck) {
-      final vLower = (_store.activeDriverRecord?.vehicleType ?? _vehicleType)
-          .toLowerCase();
-      if (!vLower.contains('tải') &&
-          !vLower.contains('van') &&
-          !vLower.contains('truck')) {
+    final activeDrv = _store.activeDriverRecord;
+    final vLower = (activeDrv?.vehicleType ?? _vehicleType).toLowerCase();
+    final isTruck =
+        vLower.contains('tải') ||
+        vLower.contains('van') ||
+        vLower.contains('truck');
+    if (o.serviceType == DeliveryServiceType.truck && !isTruck) {
+      return false;
+    }
+    if (o.serviceType != DeliveryServiceType.truck && isTruck) {
+      return false;
+    }
+    if (activeDrv != null) {
+      if (o.preferEcoEv && !activeDrv.isElectricVehicle) {
+        return false;
+      }
+      final routeMeters = o.isRoundTrip
+          ? (o.distanceMeters * 2)
+          : o.distanceMeters;
+      if (!SmartDispatchEngine.hasSufficientEvBatteryForOrder(
+        driver: activeDrv,
+        pickupLocation: o.pickupLocation,
+        orderRouteMeters: routeMeters,
+      )) {
+        return false;
+      }
+      final isHighValue = o.declaredValueVnd >= 3000000 || o.codAmount >= 2000000;
+      if (isHighValue && activeDrv.rating > 0 && activeDrv.rating < 4.5) {
         return false;
       }
     }
@@ -274,6 +296,14 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
       pickupLocation: targetOrder.pickupLocation,
       drivers: _store.drivers,
       excludedDriverIds: _rejectedDriverIds,
+      requireElectricVehicle: targetOrder.preferEcoEv,
+      preferElectricVehicle: targetOrder.preferEcoEv,
+      totalOrderRouteMeters: targetOrder.isRoundTrip
+          ? (targetOrder.distanceMeters * 2)
+          : targetOrder.distanceMeters,
+      declaredValueVnd: targetOrder.declaredValueVnd,
+      codAmount: targetOrder.codAmount,
+      serviceType: targetOrder.serviceType,
     );
     if (ranked.isNotEmpty) {
       _rejectedDriverIds.add(ranked.first.driver.id);

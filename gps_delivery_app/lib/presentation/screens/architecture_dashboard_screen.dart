@@ -13,6 +13,7 @@ import '../bloc/system_architecture_cubit.dart';
 import '../customer/customer_subsystem_views.dart';
 import '../driver/driver_subsystem_views.dart';
 import '../merchant/merchant_subsystem_views.dart';
+import 'public_order_tracking_screen.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/in_app_google_oauth_dialog.dart';
 import '../widgets/studio_design_widgets.dart';
@@ -1496,6 +1497,42 @@ class _ArchitectureDashboardScreenState
                     ),
                   ),
                 ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.ink,
+                backgroundColor: const Color(0xFFECFDF5),
+                side: const BorderSide(color: AppColors.ink, width: 1.4),
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                ),
+              ),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const PublicOrderTrackingScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(
+                Icons.share_location_rounded,
+                size: 17,
+                color: AppColors.success,
+              ),
+              label: const Text(
+                'Tra cứu vận đơn công khai (/track)',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12.5,
+                  color: AppColors.ink,
+                ),
               ),
             ),
           ),

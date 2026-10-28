@@ -11,6 +11,15 @@ class PricingEstimate extends Equatable {
   final double surchargeFee;
   final double discountAmount;
   final double totalAmount;
+  final double insuranceFee;
+  final double multiStopFee;
+  final double roundTripFee;
+  final double greenContributionFee;
+  final double estimatedCo2SavedGrams;
+
+  static const double maxInsuredDeclaredValueVnd = 30000000.0;
+  static const double extraStopFeePerStopVnd = 5000.0;
+  static const double greenFundContributionUnitVnd = 1000.0;
 
   const PricingEstimate({
     required this.serviceType,
@@ -21,7 +30,19 @@ class PricingEstimate extends Equatable {
     required this.surchargeFee,
     required this.discountAmount,
     required this.totalAmount,
+    this.insuranceFee = 0.0,
+    this.multiStopFee = 0.0,
+    this.roundTripFee = 0.0,
+    this.greenContributionFee = 0.0,
+    this.estimatedCo2SavedGrams = 0.0,
   });
+
+  /// Tính phí bảo hiểm khai giá hàng hóa (0.5% giá trị khai báo, tối thiểu 2.000đ, tối đa 150.000đ, đền bù tối đa 30.000.000đ).
+  static double calculateInsuranceFee(double declaredValueVnd) {
+    if (!declaredValueVnd.isFinite || declaredValueVnd <= 0) return 0.0;
+    final clamped = declaredValueVnd.clamp(0.0, maxInsuredDeclaredValueVnd);
+    return (clamped * 0.005).clamp(2000.0, 150000.0).roundToDouble();
+  }
 
   /// Tính toán chính xác cước phí giao hàng theo bảng giá dịch vụ và phụ phí.
   factory PricingEstimate.calculate({
@@ -34,6 +55,11 @@ class PricingEstimate extends Equatable {
     double baseFareScale = 1.0,
     double pricePerKmScale = 1.0,
     double? configuredStandardPeakSurcharge,
+    double declaredValueVnd = 0.0,
+    int extraStopCount = 0,
+    bool isRoundTrip = false,
+    bool greenFundContribution = false,
+    bool preferEcoEv = false,
   }) {
     final safeDistMeters = math.max(0, distanceMeters);
     final safeDurationSec = math.max(0, durationSeconds);
@@ -66,7 +92,21 @@ class PricingEstimate extends Equatable {
               ? resolvedStandardPeak
               : serviceType.defaultPeakSurcharge)
         : 0.0;
-    final surchargeFee = peakFee + safeGeofence;
+
+    final insuranceFee = calculateInsuranceFee(declaredValueVnd);
+    final multiStopFee = math.max(0, extraStopCount) * extraStopFeePerStopVnd;
+    final roundTripFee =
+        isRoundTrip ? ((baseFare + distanceFare) * 0.60).roundToDouble() : 0.0;
+    final greenContributionFee =
+        greenFundContribution ? greenFundContributionUnitVnd : 0.0;
+    final estimatedCo2SavedGrams = preferEcoEv ? (distanceKm * 48.0) : 0.0;
+
+    final surchargeFee = peakFee +
+        safeGeofence +
+        multiStopFee +
+        roundTripFee +
+        insuranceFee +
+        greenContributionFee;
     final subtotal = baseFare + distanceFare + surchargeFee;
     final effectiveDiscount = safeVoucher.clamp(0.0, subtotal);
     final totalAmount = math.max(0.0, subtotal - effectiveDiscount);
@@ -80,6 +120,11 @@ class PricingEstimate extends Equatable {
       surchargeFee: surchargeFee,
       discountAmount: effectiveDiscount,
       totalAmount: totalAmount,
+      insuranceFee: insuranceFee,
+      multiStopFee: multiStopFee,
+      roundTripFee: roundTripFee,
+      greenContributionFee: greenContributionFee,
+      estimatedCo2SavedGrams: estimatedCo2SavedGrams,
     );
   }
 
@@ -93,5 +138,10 @@ class PricingEstimate extends Equatable {
         surchargeFee,
         discountAmount,
         totalAmount,
+        insuranceFee,
+        multiStopFee,
+        roundTripFee,
+        greenContributionFee,
+        estimatedCo2SavedGrams,
       ];
 }

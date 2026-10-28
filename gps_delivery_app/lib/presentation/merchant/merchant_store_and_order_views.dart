@@ -1360,6 +1360,14 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
     if (_isKeepCold) {
       geofenceFee += 10000;
     }
+    final cleanDeclaredPreview = _singleDeclaredValueCtrl.text
+        .trim()
+        .replaceAll('.', '')
+        .replaceAll(',', '');
+    final rawDeclaredVal = double.tryParse(cleanDeclaredPreview) ?? 0.0;
+    final merchantDeclaredVal = rawDeclaredVal.isFinite && rawDeclaredVal > 0
+        ? rawDeclaredVal.clamp(0.0, PricingEstimate.maxInsuredDeclaredValueVnd)
+        : 0.0;
     final merchantEst = PricingEstimate.calculate(
       serviceType: _merchantServiceType,
       distanceMeters: distMeters,
@@ -1370,6 +1378,9 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
       baseFareScale: (_store.baseFareConfig / 25000.0).clamp(0.4, 5.0),
       pricePerKmScale: (_store.pricePerKmConfig / 5000.0).clamp(0.4, 5.0),
       configuredStandardPeakSurcharge: _store.peakHourSurchargeConfig,
+      declaredValueVnd: merchantDeclaredVal,
+      isRoundTrip: _merchantIsRoundTrip,
+      preferEcoEv: _merchantPreferEcoEv,
     );
     final cleanCodPreview =
         _singleCodCtrl.text.trim().replaceAll('.', '').replaceAll(',', '');
@@ -1689,6 +1700,19 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     ),
                     const SizedBox(height: 12),
                     TextField(
+                      controller: _singleDeclaredValueCtrl,
+                      onChanged: (_) => _rebuildMerchantUi(() {}),
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: 'Khai giá bảo hiểm B2B (VNĐ - tùy chọn)',
+                        suffixText: 'VND',
+                        helperText: merchantDeclaredVal > 0
+                            ? 'Phí bảo hiểm 0.5%: ${CurrencyFormatter.formatVnd(PricingEstimate.calculateInsuranceFee(merchantDeclaredVal))}'
+                            : 'Đền bù tối đa 30tr VNĐ • Lọc Tài xế chuẩn >= 4.5★',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
                       controller: _singleNoteCtrl,
                       maxLines: 2,
                       decoration: const InputDecoration(
@@ -1698,6 +1722,7 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                     const SizedBox(height: 8),
                     Wrap(
                       spacing: 8,
+                      runSpacing: 6,
                       children: [
                         FilterChip(
                           label: const Text('Hàng dễ vỡ'),
@@ -1708,6 +1733,28 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                           label: const Text('Giữ lạnh'),
                           selected: _isKeepCold,
                           onSelected: (v) => _rebuildMerchantUi(() => _isKeepCold = v),
+                        ),
+                        FilterChip(
+                          avatar: const Icon(
+                            Icons.electric_moped_rounded,
+                            size: 15,
+                            color: AppColors.success,
+                          ),
+                          label: const Text('Xe điện Xanh (Eco EV)'),
+                          selected: _merchantPreferEcoEv,
+                          onSelected: (v) =>
+                              _rebuildMerchantUi(() => _merchantPreferEcoEv = v),
+                        ),
+                        FilterChip(
+                          avatar: const Icon(
+                            Icons.swap_horiz_rounded,
+                            size: 15,
+                            color: Color(0xFF5B33E6),
+                          ),
+                          label: const Text('Giao 2 chiều (Khứ hồi)'),
+                          selected: _merchantIsRoundTrip,
+                          onSelected: (v) =>
+                              _rebuildMerchantUi(() => _merchantIsRoundTrip = v),
                         ),
                       ],
                     ),
@@ -1812,6 +1859,15 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                               ),
                             ],
                           ),
+                          RadioListTile<DeliveryServiceType>(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            value: DeliveryServiceType.sameDay2h,
+                            title: Text(
+                              'Giao nhanh 2H (Ghép đơn cùng hướng - Tiết kiệm B2B)',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -1902,6 +1958,22 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                         'Phí vận chuyển',
                         CurrencyFormatter.formatVnd(totalEstimated),
                       ),
+                      if (dCoord != null && merchantEst.insuranceFee > 0) ...[
+                        const SizedBox(height: 8),
+                        _merchantEstimateRow(
+                          'Trong đó Phí bảo hiểm (0.5%)',
+                          CurrencyFormatter.formatVnd(merchantEst.insuranceFee),
+                        ),
+                      ],
+                      if (dCoord != null &&
+                          _merchantPreferEcoEv &&
+                          merchantEst.estimatedCo2SavedGrams > 0) ...[
+                        const SizedBox(height: 8),
+                        _merchantEstimateRow(
+                          'Giảm phát thải Eco EV',
+                          '-${merchantEst.estimatedCo2SavedGrams.toStringAsFixed(0)}g CO₂',
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       _merchantEstimateRow(
                         'Tiền thu hộ COD',
@@ -2096,6 +2168,9 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
                                 _store.merchantStoreName,
                         customPickupLocation: pCoord,
                         customDropoffLocation: targetDropoffCoord,
+                        preferEcoEv: _merchantPreferEcoEv,
+                        declaredValueVnd: merchantDeclaredVal,
+                        isRoundTrip: _merchantIsRoundTrip,
                       );
                       _rebuildMerchantUi(() {
                         _singleNameCtrl.clear();
@@ -2931,6 +3006,615 @@ extension _MerchantStoreAndOrderViews on _MerchantSubsystemEntryState {
           ],
         );
       },
+    );
+  }
+
+  Widget _buildMerchantGrabFoodMenuManagerView(BuildContext context) {
+    final activeMer = _store.activeMerchantRecord;
+    final personalWhs = _store.merchantPersonalWarehouses;
+    final primaryWh =
+        personalWhs.where((w) => w.isPrimary).firstOrNull ??
+        personalWhs.firstOrNull;
+    final activeStoreName =
+        activeMer?.storeName.trim().isNotEmpty == true
+        ? activeMer!.storeName.trim()
+        : (_store.merchantStoreName.trim().isNotEmpty
+              ? _store.merchantStoreName.trim()
+              : 'Quán Đối tác B2B');
+    final activeStoreAddr =
+        primaryWh?.address.trim().isNotEmpty == true
+        ? primaryWh!.address.trim()
+        : (_shopAddressCtrl.text.trim().isNotEmpty
+              ? _shopAddressCtrl.text.trim()
+              : 'Chưa cấu hình kho lấy hàng (dùng tọa độ mặc định)');
+    final myMenuItems = _store.activeMerchantPersonalMenuItems;
+
+    const slotOptions = <(String, String)>[
+      ('breakfast', 'Bữa sáng (05-10h)'),
+      ('lunch', 'Cơm trưa (11-13h)'),
+      ('afternoonTea', 'Trà chiều (14-16h)'),
+      ('dinner', 'Ăn tối (17-21h)'),
+      ('lateNight', 'Đêm khuya (22-04h)'),
+    ];
+
+    Widget buildDishEditorCard() {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.ink, width: 1.5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0xFF00B14F),
+              offset: Offset(4, 4),
+              blurRadius: 0,
+            ),
+          ],
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  Text(
+                    _editingMenuItemId != null
+                        ? 'Cập nhật món ăn ($_editingMenuItemId)'
+                        : 'Đăng món mới lên GrabFood',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  if (_editingMenuItemId != null)
+                    TextButton(
+                      onPressed: () => _rebuildMerchantUi(() {
+                        _editingMenuItemId = null;
+                        _menuDishNameCtrl.clear();
+                        _menuDishDescCtrl.clear();
+                        _menuDishPriceCtrl.text = '49000';
+                        _menuDishPrepCtrl.text = '12';
+                      }),
+                      child: const Text('Hủy sửa'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.all(10),
+                color: const Color(0xFFF0FDF4),
+                child: Text(
+                  'Quán hiển thị: $activeStoreName\nĐiểm lấy món GPS: $activeStoreAddr',
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.ink,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _menuDishNameCtrl,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Tên món ăn / đồ uống',
+                  hintText: 'VD: Bún Bò Huế Đặc Biệt / Trà Đào Cam Sả...',
+                ),
+              ),
+              const SizedBox(height: 10),
+              LayoutBuilder(
+                builder: (context, rowConstraints) {
+                  final priceField = TextField(
+                    controller: _menuDishPriceCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Giá bán (VNĐ)',
+                    ),
+                  );
+                  final prepField = TextField(
+                    controller: _menuDishPrepCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      labelText: 'Chuẩn bị (phút)',
+                    ),
+                  );
+                  if (rowConstraints.maxWidth < 420) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        priceField,
+                        const SizedBox(height: 10),
+                        prepField,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: priceField),
+                      const SizedBox(width: 10),
+                      Expanded(child: prepField),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              DropdownButtonFormField<String>(
+                isExpanded: true,
+                initialValue: _menuDishCategory,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Nhóm ẩm thực (hiển thị bộ lọc Khách hàng)',
+                ),
+                items: <String>{
+                  ...GrabFoodRecommendationEngine.supportedCategories,
+                  _menuDishCategory,
+                }.map((cat) {
+                  return DropdownMenuItem(
+                    value: cat,
+                    child: Text(cat, overflow: TextOverflow.ellipsis),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  if (val != null) {
+                    _rebuildMerchantUi(() => _menuDishCategory = val);
+                  }
+                },
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _menuDishDescCtrl,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  labelText: 'Mô tả thành phần / khẩu phần',
+                  hintText: 'VD: Nước hầm xương 10h, tặng kèm rau sống & ớt sa tế',
+                ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Khung giờ mở bán (đề xuất thông minh theo giờ):',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: slotOptions.map((opt) {
+                  final selected = _menuDishMealSlots.contains(opt.$1);
+                  return FilterChip(
+                    visualDensity: VisualDensity.compact,
+                    selected: selected,
+                    selectedColor: AppColors.acid,
+                    label: Text(
+                      opt.$2,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: selected ? FontWeight.w900 : FontWeight.w600,
+                      ),
+                    ),
+                    onSelected: (on) {
+                      _rebuildMerchantUi(() {
+                        if (on) {
+                          _menuDishMealSlots.add(opt.$1);
+                        } else if (_menuDishMealSlots.length > 1) {
+                          _menuDishMealSlots.remove(opt.$1);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '🌱 Sử dụng bao bì Xanh (hộp bã mía / giấy)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Switch.adaptive(
+                    activeThumbColor: const Color(0xFF00B14F),
+                    value: _menuDishEco,
+                    onChanged: (v) => _rebuildMerchantUi(() => _menuDishEco = v),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '❄ Đồ uống lạnh / Kem (tự động gắn túi giữ nhiệt)',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Switch.adaptive(
+                    activeThumbColor: const Color(0xFF0284C7),
+                    value: _menuDishCold,
+                    onChanged: (v) =>
+                        _rebuildMerchantUi(() => _menuDishCold = v),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '🔥 Đang có Ưu đãi / Món Signature của quán',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Switch.adaptive(
+                    activeThumbColor: AppColors.pink,
+                    value: _menuDishPromo,
+                    onChanged: (v) =>
+                        _rebuildMerchantUi(() => _menuDishPromo = v),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF00B14F),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                ),
+                onPressed: () async {
+                  final dishName = _menuDishNameCtrl.text.trim();
+                  final price =
+                      double.tryParse(
+                        _menuDishPriceCtrl.text
+                            .replaceAll('.', '')
+                            .replaceAll(',', '')
+                            .trim(),
+                      ) ??
+                      0.0;
+                  final prep =
+                      int.tryParse(_menuDishPrepCtrl.text.trim()) ?? 15;
+                  if (dishName.isEmpty || price <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        backgroundColor: AppColors.danger,
+                        content: Text(
+                          'Vui lòng nhập Tên món và Giá bán hợp lệ (> 0đ)!',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  final saved = await _store.upsertMerchantMenuItem(
+                    id: _editingMenuItemId,
+                    name: dishName,
+                    priceVnd: price,
+                    description: _menuDishDescCtrl.text,
+                    category: _menuDishCategory,
+                    prepMinutes: prep,
+                    mealSlots: _menuDishMealSlots.toList(),
+                    isEcoPackaging: _menuDishEco,
+                    isColdItem: _menuDishCold,
+                    hasPromoBadge: _menuDishPromo,
+                  );
+                  if (!context.mounted) return;
+                  _rebuildMerchantUi(() {
+                    _editingMenuItemId = null;
+                    _menuDishNameCtrl.clear();
+                    _menuDishDescCtrl.clear();
+                    _menuDishPriceCtrl.text = '49000';
+                    _menuDishPrepCtrl.text = '12';
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Đã đồng bộ món "${saved.name}" lên kênh Gợi ý Ăn uống Khách hàng!',
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.publish_rounded, size: 18),
+                label: Text(
+                  _editingMenuItemId != null
+                      ? 'Lưu cập nhật món ăn'
+                      : 'Đăng món lên GrabFood',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget buildDishListCard() {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.ink, width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Thực đơn Đối tác B2B (${myMenuItems.length} món)',
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+                color: AppColors.ink,
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Các món đang ở trạng thái "Còn món" sẽ xuất hiện ngay lập tức kèm nhãn ĐỐI TÁC B2B trên ứng dụng Khách hàng.',
+              style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+            ),
+            const Divider(height: 18),
+            if (myMenuItems.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(18),
+                color: AppColors.paper,
+                child: const Column(
+                  children: [
+                    Icon(
+                      Icons.restaurant_outlined,
+                      size: 34,
+                      color: AppColors.textSecondary,
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Cửa hàng chưa đăng món ăn nào lên GrabFood',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 13,
+                        color: AppColors.ink,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      'Điền thông tin món ăn ở biểu mẫu để tiếp cận khách hàng quanh bán kính kho lấy hàng của bạn.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ...myMenuItems.map((item) {
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: item.isAvailable
+                        ? AppColors.paper
+                        : const Color(0xFFF3F4F6),
+                    border: Border.all(color: AppColors.ink, width: 1.1),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            color: item.isAvailable
+                                ? const Color(0xFF00B14F)
+                                : AppColors.danger,
+                            child: Text(
+                              item.isAvailable ? 'CÒN MÓN' : 'TẠM HẾT',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            color: AppColors.violet,
+                            child: Text(
+                              item.category,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          if (item.isColdItem)
+                            const Text(
+                              '❄ Đồ lạnh',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0369A1),
+                              ),
+                            ),
+                          if (item.isEcoPackaging)
+                            const Text(
+                              '🌱 Bao bì Xanh',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF166534),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.name,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      if (item.description.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          item.description,
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      Text(
+                        '${CurrencyFormatter.formatVnd(item.priceVnd)} • Chuẩn bị ${item.prepMinutes}p • Đã bán ${item.soldCount}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          fontFamily: 'Consolas',
+                          color: Color(0xFF00853B),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () async {
+                              await _store.toggleMerchantMenuItemAvailability(
+                                item.id,
+                              );
+                            },
+                            icon: Icon(
+                              item.isAvailable
+                                  ? Icons.pause_circle_outline
+                                  : Icons.play_circle_outline,
+                              size: 15,
+                            ),
+                            label: Text(
+                              item.isAvailable ? 'Báo tạm hết' : 'Mở bán lại',
+                              style: const TextStyle(fontSize: 11.5),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: () => _rebuildMerchantUi(() {
+                              _editingMenuItemId = item.id;
+                              _menuDishNameCtrl.text = item.name;
+                              _menuDishPriceCtrl.text = item.priceVnd
+                                  .round()
+                                  .toString();
+                              _menuDishPrepCtrl.text = item.prepMinutes
+                                  .toString();
+                              _menuDishDescCtrl.text = item.description;
+                              _menuDishCategory = item.category;
+                              _menuDishMealSlots
+                                ..clear()
+                                ..addAll(item.mealSlots);
+                              _menuDishEco = item.isEcoPackaging;
+                              _menuDishCold = item.isColdItem;
+                              _menuDishPromo = item.hasPromoBadge;
+                            }),
+                            icon: const Icon(Icons.edit_outlined, size: 15),
+                            label: const Text(
+                              'Sửa',
+                              style: TextStyle(fontSize: 11.5),
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              foregroundColor: AppColors.danger,
+                            ),
+                            onPressed: () async {
+                              await _store.deleteMerchantMenuItem(item.id);
+                            },
+                            icon: const Icon(Icons.delete_outline, size: 15),
+                            label: const Text(
+                              'Xóa',
+                              style: TextStyle(fontSize: 11.5),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                );
+              }),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          'Quản lý Thực đơn Ăn uống Đối tác B2B (GrabFood)',
+          style: TextStyle(
+            fontSize: 21,
+            fontWeight: FontWeight.w900,
+            color: AppColors.ink,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Đồng bộ thời gian thực món ăn, khung giờ phục vụ và bao bì Xanh sang ứng dụng Khách hàng',
+          style: TextStyle(fontSize: 12.5, color: AppColors.textSecondary),
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 860) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  buildDishEditorCard(),
+                  const SizedBox(height: 16),
+                  buildDishListCard(),
+                ],
+              );
+            }
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 5, child: buildDishEditorCard()),
+                const SizedBox(width: 16),
+                Expanded(flex: 6, child: buildDishListCard()),
+              ],
+            );
+          },
+        ),
+      ],
     );
   }
 }

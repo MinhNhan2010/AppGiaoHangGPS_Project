@@ -590,6 +590,8 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       existing.phone = normPhone;
       existing.citizenId = citizenId.trim();
       existing.vehicleType = vehicleType.trim();
+      existing.isElectricVehicle =
+          DriverApplicantRecord.inferElectricVehicle(vehicleType.trim());
       existing.licensePlate = licensePlate.trim();
       if (vehicleColor.trim().isNotEmpty) {
         existing.vehicleColor = vehicleColor.trim();
@@ -672,6 +674,8 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       'wallet_balance': record.walletBalance,
       'bank_name': record.bankName,
       'bank_account': record.bankAccount,
+      'is_electric_vehicle': record.isElectricVehicle ? 1 : 0,
+      'battery_percent': record.batteryPercent,
       'attached_kyc_docs_json': jsonEncode(record.attachedKycDocs),
       'created_at': DateTime.now().toIso8601String(),
     });
@@ -682,6 +686,8 @@ extension AppStateAuthAndGpsOps on AppStateStore {
         'rejectedCount': record.rejectedCount,
         'bankName': record.bankName,
         'bankAccount': record.bankAccount,
+        'isElectricVehicle': record.isElectricVehicle,
+        'batteryPercent': record.batteryPercent,
         'attachedKycDocs': record.attachedKycDocs,
       },
     );
@@ -836,6 +842,36 @@ extension AppStateAuthAndGpsOps on AppStateStore {
       );
     }
     _persistMutation('SET_DRIVER_ONLINE', {'isOnline': online});
+    _notifyStoreChanged();
+  }
+
+  /// Cập nhật % dung lượng pin xe điện (SoC) cho tài xế đang hoạt động để điều phối thông minh
+  void updateActiveDriverBatteryPercent(int batteryPercent) {
+    final drv = activeDriverRecord;
+    if (drv == null) return;
+    final clamped = batteryPercent.clamp(0, 100);
+    drv.batteryPercent = clamped;
+    _sqliteDb.updateRows(
+      'drivers',
+      {
+        'battery_percent': clamped,
+        'is_electric_vehicle': drv.isElectricVehicle ? 1 : 0,
+      },
+      where: 'id = ?',
+      whereArgs: [drv.id],
+    );
+    _sqliteDb.upsertEntityRecord(
+      tableName: 'driver_meta',
+      recordId: drv.id,
+      payload: {
+        'rejectedCount': drv.rejectedCount,
+        'bankName': drv.bankName,
+        'bankAccount': drv.bankAccount,
+        'isElectricVehicle': drv.isElectricVehicle,
+        'batteryPercent': drv.batteryPercent,
+        'attachedKycDocs': drv.attachedKycDocs,
+      },
+    );
     _notifyStoreChanged();
   }
 
@@ -1381,6 +1417,10 @@ extension AppStateAuthAndGpsOps on AppStateStore {
           : 'STANDARD';
       final svc = svcStr.contains('EXPRESS')
           ? DeliveryServiceType.express30m
+          : svcStr.contains('2H') ||
+                svcStr.contains('SAME_DAY') ||
+                svcStr.contains('GHEP')
+          ? DeliveryServiceType.sameDay2h
           : svcStr.contains('TRUCK') ||
                 svcStr.contains('LARGE') ||
                 svcStr.contains('TAI')
@@ -1392,15 +1432,22 @@ extension AppStateAuthAndGpsOps on AppStateStore {
           ? cols[7].trim()
           : '';
 
+      final fallbackWarehouse = merchantPersonalWarehouses.isNotEmpty
+          ? merchantPersonalWarehouses.first
+          : (merchantWarehouses.where((w) => w.isPrimary).firstOrNull ??
+                merchantWarehouses.firstOrNull);
       final resolvedPickup = rowCustomPickup.isNotEmpty
           ? rowCustomPickup
           : (customPickupAddress?.trim().isNotEmpty == true
                 ? customPickupAddress!.trim()
-                : (merchantPersonalWarehouses.isNotEmpty
-                      ? merchantPersonalWarehouses.first.address
-                      : ''));
+                : (fallbackWarehouse?.address ?? ''));
       final pickupPt =
           SmartDispatchEngine.tryResolveAddressToCoordinate(resolvedPickup) ??
+          (rowCustomPickup.isEmpty &&
+                  (customPickupAddress == null ||
+                      customPickupAddress.trim().isEmpty)
+              ? fallbackWarehouse?.location
+              : null) ??
           liveDeviceLocation;
       final dropoffPt = SmartDispatchEngine.tryResolveAddressToCoordinate(
         address,

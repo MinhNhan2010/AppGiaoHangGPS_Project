@@ -181,6 +181,39 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                                         minimumSize: Size.zero,
                                       ),
                                       onPressed: () {
+                                        final shareUrl =
+                                            'https://ghst.vn/#/track?code=${Uri.encodeComponent(o.trackingCode)}';
+                                        Clipboard.setData(
+                                          ClipboardData(text: shareUrl),
+                                        );
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) =>
+                                                PublicOrderTrackingScreen(
+                                                  initialQuery: o.trackingCode,
+                                                ),
+                                          ),
+                                        );
+                                      },
+                                      icon: const Icon(
+                                        Icons.share_location_rounded,
+                                        size: 14,
+                                        color: AppColors.success,
+                                      ),
+                                      label: const Text(
+                                        'Link Track',
+                                        style: TextStyle(fontSize: 11.5),
+                                      ),
+                                    ),
+                                    TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        minimumSize: Size.zero,
+                                      ),
+                                      onPressed: () {
                                         final idx = shopOrders.indexOf(o);
                                         _rebuildMerchantUi(() {
                                           if (idx >= 0) {
@@ -1489,6 +1522,16 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
       0,
       (sum, o) => sum + o.totalAmount,
     );
+    final shopCo2SavedGrams = shopOrders
+        .where((o) => o.status != OrderStatus.cancelled)
+        .fold<double>(0.0, (sum, o) => sum + o.co2SavedGrams);
+    final shopBatch2hCount = shopOrders
+        .where(
+          (o) =>
+              o.serviceType == DeliveryServiceType.sameDay2h &&
+              o.status != OrderStatus.cancelled,
+        )
+        .length;
     final now = DateTime.now();
     final recent7dOrders =
         shopOrders.where((o) => o.daysAgoFrom(now) <= 6).toList();
@@ -1606,6 +1649,18 @@ extension _MerchantTrackingAndFinanceViews on _MerchantSubsystemEntryState {
                     'Tổng COD đã nhận',
                     CurrencyFormatter.formatVnd(totalCod),
                     AppColors.success,
+                    width: cardW,
+                  ),
+                  _codCard(
+                    'ESG Giảm phát thải CO₂',
+                    '-${(shopCo2SavedGrams / 1000.0).toStringAsFixed(2)} kg CO₂',
+                    AppColors.success,
+                    width: cardW,
+                  ),
+                  _codCard(
+                    'Đơn Giao 2H (Ghép cặp)',
+                    '$shopBatch2hCount đơn',
+                    const Color(0xFF0EA5E9),
                     width: cardW,
                   ),
                 ],

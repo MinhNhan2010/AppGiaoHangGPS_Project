@@ -1237,6 +1237,9 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
         ? (ratedOrders.fold<int>(0, (s, o) => s + o.ratingStars!) /
             ratedOrders.length)
         : (activeDrv?.rating ?? 0.0);
+    final periodCo2SavedGrams = periodOrders
+        .where((o) => o.status != OrderStatus.cancelled)
+        .fold<double>(0.0, (s, o) => s + o.co2SavedGrams);
 
     final dayLabels = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
     int weekdayIndexOfOrder(ActiveOrderRecord o) {
@@ -1428,6 +1431,44 @@ extension _DriverWalletAndAnalyticsViews on _DriverSubsystemEntryState {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF064E3B),
+              border: Border.all(color: const Color(0xFF4ADE80)),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.eco_rounded,
+                  color: Color(0xFF4ADE80),
+                  size: 26,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Chỉ số Giao hàng Xanh ESG (Giảm phát thải Xe điện)',
+                        style: TextStyle(color: Colors.white70, fontSize: 11.5),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '-${(periodCo2SavedGrams / 1000.0).toStringAsFixed(2)} kg CO₂ (${periodCo2SavedGrams.toStringAsFixed(0)}g)',
+                        style: const TextStyle(
+                          color: Color(0xFF4ADE80),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 14),
           Container(

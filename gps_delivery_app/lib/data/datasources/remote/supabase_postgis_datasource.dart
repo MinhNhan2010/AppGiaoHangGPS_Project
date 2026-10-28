@@ -126,6 +126,14 @@ class SupabasePostgisDatasource {
   static String _normalizeVehicleType(Object? raw) {
     final v = (raw ?? 'MOTORBIKE').toString().trim();
     final up = v.toUpperCase();
+    final low = v.toLowerCase();
+    if (up == 'EV_MOTORBIKE' ||
+        up.contains('EV') ||
+        low.contains('điện') ||
+        low.contains('dien') ||
+        low.contains('vinfast')) {
+      return 'EV_MOTORBIKE';
+    }
     if (up == 'VAN' || v.contains('Van')) return 'VAN';
     if (up == 'TRUCK_1T' || v.contains('1 Tấn') || v.contains('1T')) {
       return 'TRUCK_1T';
@@ -267,6 +275,12 @@ class SupabasePostgisDatasource {
           'rejected_count': (src['rejected_count'] as num?)?.toInt() ?? 0,
           if (src['bank_name'] != null) 'bank_name': src['bank_name'],
           if (src['bank_account'] != null) 'bank_account': src['bank_account'],
+          'is_electric_vehicle':
+              src['is_electric_vehicle'] == true ||
+              src['is_electric_vehicle'] == 1 ||
+              _normalizeVehicleType(src['vehicle_type']) == 'EV_MOTORBIKE',
+          'battery_percent':
+              ((src['battery_percent'] as num?)?.toInt() ?? 95).clamp(0, 100),
           'approval_status': _normalizeApprovalStatus(src['approval_status']),
           'wallet_balance': (src['wallet_balance'] as num?)?.toDouble() ?? 0.0,
         };
@@ -442,6 +456,23 @@ class SupabasePostgisDatasource {
           if (src['pod_image_url'] != null || src['pod_image_note'] != null)
             'pod_image_url': src['pod_image_url'] ?? src['pod_image_note'],
           if (src['pod_otp_code'] != null) 'pod_otp_code': src['pod_otp_code'],
+          'prefer_eco_ev':
+              src['prefer_eco_ev'] == true || src['prefer_eco_ev'] == 1,
+          'declared_value_vnd':
+              (src['declared_value_vnd'] as num?)?.toDouble() ?? 0.0,
+          'insurance_fee': (src['insurance_fee'] as num?)?.toDouble() ?? 0.0,
+          'is_round_trip':
+              src['is_round_trip'] == true || src['is_round_trip'] == 1,
+          'extra_stop_count': (src['extra_stop_count'] as num?)?.toInt() ?? 0,
+          if (src['batch_group_id'] != null)
+            'batch_group_id': src['batch_group_id'],
+          'co2_saved_grams':
+              (src['co2_saved_grams'] as num?)?.toDouble() ?? 0.0,
+          'green_fund_contributed':
+              src['green_fund_contributed'] == true ||
+              src['green_fund_contributed'] == 1,
+          if (src['public_tracking_token'] != null)
+            'public_tracking_token': src['public_tracking_token'],
           if (src['delivered_at'] != null)
             'delivered_at': src['delivered_at']
           else if (src['delivered_at_ms'] is num)
@@ -700,6 +731,51 @@ class SupabasePostgisDatasource {
                   e.key.startsWith('Khiếu nại:'),
             ),
           ),
+        };
+      case 'merchant_menu_items':
+        final lat = (src['latitude'] as num?)?.toDouble() ?? 10.7769;
+        final lng = (src['longitude'] as num?)?.toDouble() ?? 106.6953;
+        List<dynamic> slots = const [
+          'breakfast',
+          'lunch',
+          'afternoonTea',
+          'dinner',
+        ];
+        final rawSlots = src['meal_slots_json'];
+        if (rawSlots is String && rawSlots.trim().isNotEmpty) {
+          try {
+            final parsed = jsonDecode(rawSlots);
+            if (parsed is List) slots = parsed;
+          } catch (_) {}
+        } else if (rawSlots is List) {
+          slots = rawSlots;
+        }
+        return <String, dynamic>{
+          'id': toDeterministicUuid((src['id'] ?? 'MENU-01').toString()),
+          'merchant_id': toDeterministicUuid(
+            (src['merchant_id'] ?? 'MER-01').toString(),
+          ),
+          'store_name': (src['store_name'] ?? '').toString(),
+          'store_address': (src['store_address'] ?? '').toString(),
+          'store_location':
+              src['store_location'] ?? 'SRID=4326;POINT($lng $lat)',
+          'name': (src['name'] ?? '').toString(),
+          'description': (src['description'] ?? '').toString(),
+          'category': (src['category'] ?? 'Cơm • Bún • Phở').toString(),
+          'price_vnd': (src['price_vnd'] as num?)?.toDouble() ?? 0.0,
+          'prep_minutes': (src['prep_minutes'] as num?)?.toInt() ?? 15,
+          'meal_slots_json': slots,
+          'is_eco_packaging':
+              src['is_eco_packaging'] == true || src['is_eco_packaging'] == 1,
+          'is_cold_item':
+              src['is_cold_item'] == true || src['is_cold_item'] == 1,
+          'has_promo_badge':
+              src['has_promo_badge'] == true || src['has_promo_badge'] == 1,
+          'is_available': src['is_available'] == null
+              ? true
+              : (src['is_available'] == true || src['is_available'] == 1),
+          'rating': (src['rating'] as num?)?.toDouble() ?? 4.8,
+          'sold_count': (src['sold_count'] as num?)?.toInt() ?? 0,
         };
       default:
         if (src.containsKey('id') && src['id'] is String) {

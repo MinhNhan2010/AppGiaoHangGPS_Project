@@ -293,6 +293,15 @@ extension AppStateSeedAndHydration on AppStateStore {
               walletBalance: walletVal,
               bankName: colBank ?? meta?['bankName']?.toString() ?? '',
               bankAccount: colAcct ?? meta?['bankAccount']?.toString() ?? '',
+              isElectricVehicle: r['is_electric_vehicle'] == 1 ||
+                  r['is_electric_vehicle'] == true ||
+                  meta?['isElectricVehicle'] == true ||
+                  DriverApplicantRecord.inferElectricVehicle(
+                    r['vehicle_type'].toString(),
+                  ),
+              batteryPercent: (r['battery_percent'] as num?)?.toInt() ??
+                  (meta?['batteryPercent'] as num?)?.toInt() ??
+                  95,
               attachedKycDocs: parsedDocs,
             );
           }),
@@ -798,6 +807,14 @@ extension AppStateSeedAndHydration on AppStateStore {
       merchantCodBalance =
           (activeMerchantRecord ?? merchantApplicants.first).codBalance;
     }
+
+    final menuRows = await _sqliteDb.queryRows(
+      'merchant_menu_items',
+      orderBy: 'created_at_ms DESC',
+    );
+    merchantMenuItems
+      ..clear()
+      ..addAll(menuRows.map(FoodMenuItemRecord.fromSqlRow));
 
     final persistedLogs = await _sqliteDb.getEntityRecords('system_audit_logs');
     if (persistedLogs.isNotEmpty) {

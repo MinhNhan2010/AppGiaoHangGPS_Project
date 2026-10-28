@@ -177,6 +177,7 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                           const InputDecoration(labelText: 'Loại xe'),
                       items: <String>{
                         'Xe máy',
+                        'Xe máy điện (VinFast EV)',
                         'Xe tải 500kg',
                         'Xe tải nhỏ',
                         'Xe bán tải',
@@ -638,6 +639,71 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                     ),
                   ],
                 ),
+                if (activeDrv != null && activeDrv.isElectricVehicle) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFECFDF5),
+                      border: Border.all(color: const Color(0xFF14B866)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.electric_moped_rounded,
+                              size: 16,
+                              color: Color(0xFF059669),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Xe điện Xanh • Pin SoC: ${activeDrv.batteryPercent}% (Khả dụng ~${(SmartDispatchEngine.estimateEvUsableRangeMeters(activeDrv.batteryPercent) / 1000.0).toStringAsFixed(1)} km)',
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF065F46),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            trackHeight: 3,
+                            thumbShape: const RoundSliderThumbShape(
+                              enabledThumbRadius: 7,
+                            ),
+                            overlayShape: const RoundSliderOverlayShape(
+                              overlayRadius: 12,
+                            ),
+                          ),
+                          child: Slider(
+                            value: activeDrv.batteryPercent
+                                .clamp(5, 100)
+                                .toDouble(),
+                            min: 5,
+                            max: 100,
+                            divisions: 19,
+                            activeColor: activeDrv.batteryPercent < 20
+                                ? AppColors.danger
+                                : const Color(0xFF14B866),
+                            onChanged: (val) {
+                              _store.updateActiveDriverBatteryPercent(
+                                val.round(),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -946,12 +1012,25 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
       pickupLocation: targetOrder.pickupLocation,
       drivers: _store.drivers,
       excludedDriverIds: _rejectedDriverIds,
+      requireElectricVehicle: targetOrder.preferEcoEv,
+      preferElectricVehicle: targetOrder.preferEcoEv,
+      totalOrderRouteMeters: targetOrder.isRoundTrip
+          ? (targetOrder.distanceMeters * 2)
+          : targetOrder.distanceMeters,
+      declaredValueVnd: targetOrder.declaredValueVnd,
+      codAmount: targetOrder.codAmount,
+      serviceType: targetOrder.serviceType,
     );
     final topCandidate =
         rankedCandidates.isNotEmpty ? rankedCandidates.first : null;
     final isTimerRunning = _dispatchCountdownTimer?.isActive ?? false;
-    final expectedNetDriverEarning =
-        (targetOrder.deliveryFee + targetOrder.surchargeFee) * 0.80;
+    final greenDeduction = targetOrder.greenFundContributed ? 1000.0 : 0.0;
+    final driverCommissionBase = (targetOrder.deliveryFee +
+            targetOrder.surchargeFee -
+            targetOrder.insuranceFee -
+            greenDeduction)
+        .clamp(0.0, double.infinity);
+    final expectedNetDriverEarning = driverCommissionBase * 0.80;
     final popupOrders = searchingOrders;
 
     return Card(
@@ -1128,6 +1207,100 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                       color: AppColors.accent,
                     ),
                   ),
+                  if (targetOrder.preferEcoEv ||
+                      targetOrder.batchGroupId != null ||
+                      targetOrder.declaredValueVnd > 0 ||
+                      targetOrder.extraStopCount > 0 ||
+                      targetOrder.isRoundTrip) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        if (targetOrder.preferEcoEv)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            color: const Color(0xFFDCFCE7),
+                            child: Text(
+                              'Xe điện Xanh • -${targetOrder.co2SavedGrams.toStringAsFixed(0)}g CO₂',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF065F46),
+                              ),
+                            ),
+                          ),
+                        if (targetOrder.batchGroupId != null &&
+                            targetOrder.batchGroupId!.trim().isNotEmpty)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            color: const Color(0xFFE0F2FE),
+                            child: Text(
+                              'Đơn ghép 2H: ${targetOrder.batchGroupId}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF0369A1),
+                              ),
+                            ),
+                          ),
+                        if (targetOrder.declaredValueVnd > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            color: const Color(0xFFFEF3C7),
+                            child: Text(
+                              'Bảo hiểm khai giá: ${CurrencyFormatter.formatVnd(targetOrder.declaredValueVnd)}',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF92400E),
+                              ),
+                            ),
+                          ),
+                        if (targetOrder.extraStopCount > 0)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            color: const Color(0xFFEDE9FE),
+                            child: Text(
+                              'Đa điểm dừng (+${targetOrder.extraStopCount} trạm)',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF5B33E6),
+                              ),
+                            ),
+                          ),
+                        if (targetOrder.isRoundTrip)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            color: const Color(0xFFFCE7F3),
+                            child: const Text(
+                              'Giao 2 chiều (Khứ hồi)',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF9D174D),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -1196,12 +1369,17 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
                         return;
                       }
                       final drvBal = currentActiveDrv.walletBalance;
-                      if (drvBal < 200000) {
+                      final minEscrow =
+                          SmartDispatchEngine.requiredMinWalletForOrder(
+                            codAmount: targetOrder.codAmount,
+                            declaredValueVnd: targetOrder.declaredValueVnd,
+                          );
+                      if (drvBal < minEscrow) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             backgroundColor: AppColors.warning,
                             content: Text(
-                              'Ví ký quỹ (${CurrencyFormatter.formatVnd(drvBal)}) chưa đạt tối thiểu 200.000đ để nhận đơn mới. Đang chuyển tới Ví Thu nhập...',
+                              'Ví ký quỹ (${CurrencyFormatter.formatVnd(drvBal)}) chưa đạt tối thiểu ${CurrencyFormatter.formatVnd(minEscrow)} cho đơn hàng này. Đang chuyển tới Ví Thu nhập...',
                             ),
                           ),
                         );
@@ -2078,6 +2256,128 @@ extension _DriverOnboardingAndDispatchViews on _DriverSubsystemEntryState {
               ),
             ],
             const SizedBox(height: 12),
+            if (ord.extraStopCount > 0 || ord.isRoundTrip) ...[
+              FutureBuilder<List<Map<String, dynamic>>>(
+                future: _store.orderStopsFor(ord.id),
+                builder: (context, snapshot) {
+                  final stops = snapshot.data ?? const [];
+                  if (stops.isEmpty) return const SizedBox.shrink();
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5F1E8),
+                      border: Border.all(color: AppColors.ink),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Checklist Lộ trình Đa điểm dừng / Khứ hồi (${stops.length} trạm)',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 13,
+                            color: AppColors.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        ...stops.map((s) {
+                          final seqNo = (s['sequence_no'] as num?)?.toInt() ?? 0;
+                          final stopType = (s['stop_type'] ?? 'DROPOFF').toString();
+                          final isCompleted =
+                              (s['status'] ?? 'PENDING').toString() ==
+                              'COMPLETED';
+                          final addr = (s['address'] ?? '').toString();
+                          final rName = (s['recipient_name'] ?? '').toString();
+                          final stopOtp = (s['otp_code'] ?? '').toString();
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isCompleted
+                                      ? Icons.check_circle_rounded
+                                      : (stopType == 'RETURN'
+                                            ? Icons.keyboard_return_rounded
+                                            : Icons.location_on_outlined),
+                                  size: 18,
+                                  color: isCompleted
+                                      ? const Color(0xFF14B866)
+                                      : AppColors.violet,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Trạm #${seqNo + 1}${stopType == 'RETURN' ? ' (Khứ hồi về điểm lấy)' : ''}: $addr',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w800,
+                                          decoration: isCompleted
+                                              ? TextDecoration.lineThrough
+                                              : null,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Người nhận: ${rName.isEmpty ? ord.recipientName : rName}${stopOtp.isNotEmpty ? ' • OTP trạm: $stopOtp' : ''}',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (!isCompleted && isInTransit)
+                                  OutlinedButton(
+                                    style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                    ),
+                                    onPressed: () async {
+                                      final messenger = ScaffoldMessenger.of(
+                                        context,
+                                      );
+                                      final ok = await _store.completeOrderStop(
+                                        orderId: ord.id,
+                                        sequenceNo: seqNo,
+                                        otpInput: stopOtp.isNotEmpty
+                                            ? stopOtp
+                                            : null,
+                                      );
+                                      if (!mounted) return;
+                                      if (ok) {
+                                        _rebuildDriverUi(() {});
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: Text(
+                                              'Đã xác nhận hoàn thành Trạm #${seqNo + 1}!',
+                                            ),
+                                          ),
+                                        );
+                                      }
+                                    },
+                                    child: const Text(
+                                      'Xong trạm',
+                                      style: TextStyle(fontSize: 11),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
             PodGpsWatermarkPhotoCard(
               driverLocation: _store.verifiedDriverLocations[_store.activeDriverId],
               recipientName: _podRecipientCtrl.text,

@@ -191,6 +191,89 @@ extension _AdminOverviewAndFleetViews on _AdminSubsystemEntryState {
             );
           },
         ),
+        const SizedBox(height: 14),
+        Builder(
+          builder: (context) {
+            final evDriversCount =
+                _store.drivers.where((d) => d.isElectricVehicle).length;
+            final co2Kg = _store.totalSystemCo2SavedGrams / 1000.0;
+            final greenFund = _store.totalGreenFundContributedVnd;
+            final batchedCount = _store.orders
+                .where(
+                  (o) =>
+                      o.batchGroupId != null &&
+                      o.batchGroupId!.trim().isNotEmpty,
+                )
+                .length;
+            final insuredCount =
+                _store.orders.where((o) => o.declaredValueVnd > 0).length;
+            return Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFECFDF5),
+                border: Border.all(color: const Color(0xFF15131E)),
+              ),
+              child: Wrap(
+                spacing: 18,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text.rich(
+                    TextSpan(
+                      children: [
+                        const WidgetSpan(
+                          alignment: PlaceholderAlignment.middle,
+                          child: Padding(
+                            padding: EdgeInsets.only(right: 6),
+                            child: Icon(
+                              Icons.eco_rounded,
+                              size: 16,
+                              color: Color(0xFF16A34A),
+                            ),
+                          ),
+                        ),
+                        TextSpan(
+                          text:
+                              'ESG Xe điện: $evDriversCount xe • Giảm ${co2Kg.toStringAsFixed(2)} kg CO₂',
+                        ),
+                      ],
+                    ),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF15131E),
+                    ),
+                  ),
+                  Text(
+                    'Quỹ Xanh: ${CurrencyFormatter.formatVnd(greenFund)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF166534),
+                    ),
+                  ),
+                  Text(
+                    'Ghép đơn 2H cùng hướng: $batchedCount đơn',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF5B33E6),
+                    ),
+                  ),
+                  Text(
+                    'Bảo hiểm khai giá: $insuredCount đơn',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF9A3412),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
         const SizedBox(height: 20),
         LayoutBuilder(
           builder: (context, rowConstraints) {

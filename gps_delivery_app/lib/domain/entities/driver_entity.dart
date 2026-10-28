@@ -17,6 +17,8 @@ class DriverEntity extends Equatable {
   final double acceptanceRate;
   final String approvalStatus;
   final double walletBalance;
+  final bool isElectricVehicle;
+  final int batteryPercent;
 
   const DriverEntity({
     required this.id,
@@ -32,6 +34,8 @@ class DriverEntity extends Equatable {
     this.acceptanceRate = 100.0,
     this.approvalStatus = 'PENDING',
     this.walletBalance = 0.0,
+    this.isElectricVehicle = false,
+    this.batteryPercent = 95,
   });
 
   /// Điểm điều phối thông minh đa tiêu chí
@@ -73,12 +77,19 @@ class DriverEntity extends Equatable {
     final computedAcceptance = (trips + rejected) > 0
         ? (trips / (trips + rejected)) * 100.0
         : 100.0;
+    final vType = (map['vehicle_type'] ?? 'MOTORBIKE').toString();
+    final rawEv = map['is_electric_vehicle'];
+    final inferredEv = rawEv == true ||
+        rawEv == 1 ||
+        vType.toUpperCase().contains('EV') ||
+        vType.toLowerCase().contains('điện') ||
+        vType.toLowerCase().contains('dien');
     return DriverEntity(
       id: (map['id'] ?? '').toString(),
       phone: (map['phone'] ?? '').toString(),
       fullName: (map['full_name'] ?? '').toString(),
       licensePlate: (map['license_plate'] ?? '').toString(),
-      vehicleType: (map['vehicle_type'] ?? 'MOTORBIKE').toString(),
+      vehicleType: vType,
       citizenId: (map['citizen_id'] ?? '').toString(),
       isOnline: map['is_online'] == true || map['is_online'] == 1,
       currentLocation: parsedPoint,
@@ -89,6 +100,9 @@ class DriverEntity extends Equatable {
           (map['acceptance_rate'] as num? ?? computedAcceptance).toDouble(),
       approvalStatus: (map['approval_status'] ?? 'PENDING').toString(),
       walletBalance: (map['wallet_balance'] as num? ?? 0.0).toDouble(),
+      isElectricVehicle: inferredEv,
+      batteryPercent:
+          ((map['battery_percent'] as num?)?.toInt() ?? 95).clamp(0, 100),
     );
   }
 

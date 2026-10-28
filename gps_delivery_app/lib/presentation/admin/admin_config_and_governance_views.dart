@@ -545,6 +545,8 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
       switch (st) {
         case DeliveryServiceType.express30m:
           return 2700;
+        case DeliveryServiceType.sameDay2h:
+          return 7200;
         case DeliveryServiceType.standard:
           return 7200;
         case DeliveryServiceType.saving:
@@ -751,6 +753,9 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
               final savOrders = _store.orders
                   .where((o) => o.serviceType == DeliveryServiceType.saving)
                   .toList();
+              final batch2hOrders = _store.orders
+                  .where((o) => o.serviceType == DeliveryServiceType.sameDay2h)
+                  .toList();
               final trkOrders = _store.orders
                   .where((o) => o.serviceType == DeliveryServiceType.truck)
                   .toList();
@@ -928,6 +933,15 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                                   ),
                                   DataCell(Text(pctStr(savOrders.length))),
                                   DataCell(Text(slaFor(savOrders))),
+                                ],
+                              ),
+                              DataRow(
+                                cells: [
+                                  const DataCell(
+                                    Text('Giao Nhanh 2H (Ghép đơn)'),
+                                  ),
+                                  DataCell(Text(pctStr(batch2hOrders.length))),
+                                  DataCell(Text(slaFor(batch2hOrders))),
                                 ],
                               ),
                               DataRow(
@@ -2895,16 +2909,18 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
           0,
           (sum, row) => sum + ((row['amount'] as num?)?.toDouble() ?? 0),
         );
-        return ListView(
-          padding: const EdgeInsets.all(20),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                const Expanded(
-                  child: Text(
-                    'Vận hành thương mại',
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-                  ),
+                const Text(
+                  'Vận hành thương mại',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
                 ),
                 OutlinedButton.icon(
                   onPressed: snapshot.connectionState == ConnectionState.waiting
@@ -3088,11 +3104,16 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
             children: [
               Icon(icon, size: 18),
               const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
-          child,
+          Material(type: MaterialType.transparency, child: child),
         ],
       ),
     );
