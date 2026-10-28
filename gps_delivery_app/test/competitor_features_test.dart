@@ -621,4 +621,246 @@ void main() {
       }
     },
   );
+
+  test(
+    'Feature 7a (Shopee x Grab Promo Events): Flash Sale, 7-day Check-in, Lucky Spin Wheel, Mystery Blind Box Gacha & GrabChallenges persist in SQLite and discount real orders',
+    () async {
+      // 1. Register a clean customer account and verify starter wallet without pre-seeding vouchers
+      final promoUser = store.registerUserAccountWithRole(
+        phone: '0944555666',
+        fullName: 'Khách Săn Thưởng Shopee Grab',
+        password: '12345678',
+        role: SubsystemRole.customer,
+        activateSession: true,
+      );
+
+      final initialWallet = store.activeCustomerPromoWallet;
+      expect(initialWallet.ghstCoins, equals(120));
+      expect(initialWallet.spinTickets, equals(2));
+      expect(initialWallet.blindBoxTickets, equals(1));
+      expect(initialWallet.checkInStreak, equals(0));
+      expect(initialWallet.openedBlindBoxes, isEmpty);
+
+      // Verify probability weights sum to 100% and flash window resolver works
+      final wheelWeightSum = PromoEventGamificationEngine.spinWheelSegments
+          .fold<int>(0, (s, seg) => s + seg.weight);
+      final boxWeightSum = PromoEventGamificationEngine.blindBoxPrizePool
+          .fold<int>(0, (s, p) => s + p.weight);
+      expect(wheelWeightSum, equals(100));
+      expect(boxWeightSum, equals(100));
+      final noonWindow = PromoEventGamificationEngine.resolveFlashCountdown(
+        DateTime(2026, 10, 28, 12, 15),
+      );
+      expect(noonWindow.activeWindowLabel, contains('12:00'));
+
+      // 2. Daily 7-day check-in streak + duplicate same-day guard
+      final day1Time = DateTime(2026, 10, 28, 9, 0);
+      final chk1 = store.claimDailyPromoCheckIn(nowOverride: day1Time);
+      expect(chk1.success, isTrue);
+      expect(chk1.coinsDelta, equals(50));
+      expect(store.activeCustomerPromoWallet.checkInStreak, equals(1));
+
+      final chk1Dup = store.claimDailyPromoCheckIn(
+        nowOverride: DateTime(2026, 10, 28, 18, 30),
+      );
+      expect(chk1Dup.success, isFalse);
+
+      final chk2 = store.claimDailyPromoCheckIn(
+        nowOverride: DateTime(2026, 10, 29, 9, 0),
+      );
+      expect(chk2.success, isTrue);
+      expect(chk2.coinsDelta, equals(100));
+      expect(store.activeCustomerPromoWallet.ghstCoins, equals(270));
+
+      // 3. Flash Sale campaign claim mints real voucher into SQLite
+      final flashClaim = store.claimFlashSaleCampaign('CAMP_FLASH_0H_50P');
+      expect(flashClaim.success, isTrue);
+      expect(flashClaim.mintedVoucherCode, equals('FLASH50P'));
+      expect(
+        store.vouchers.any((v) => v.code == 'FLASH50P' && v.isUsable),
+        isTrue,
+      );
+      expect(store.activeCustomerPromoWallet.ghstCoins, equals(290));
+      expect(store.claimFlashSaleCampaign('CAMP_FLASH_0H_50P').success, isFalse);
+
+      // 4. Lucky Spin Wheel: Jackpot 45K voucher + Blind Box Ticket slice + empty-ticket guard
+      final spinJackpot = store.spinLuckyWheel(forcedSegmentIndex: 6);
+      expect(spinJackpot.success, isTrue);
+      expect(spinJackpot.rarity, equals(PromoRarityTier.legendary));
+      expect(spinJackpot.mintedVoucherCode, isNotNull);
+      final spinVoucherCode = spinJackpot.mintedVoucherCode!;
+      expect(spinVoucherCode, startsWith('SPINJP45K-'));
+      expect(store.activeCustomerPromoWallet.spinTickets, equals(1));
+
+      final spinTicketSlice = store.spinLuckyWheel(forcedSegmentIndex: 3);
+      expect(spinTicketSlice.success, isTrue);
+      expect(spinTicketSlice.blindBoxTicketsDelta, equals(1));
+      expect(store.activeCustomerPromoWallet.spinTickets, equals(0));
+      expect(store.activeCustomerPromoWallet.blindBoxTickets, equals(2));
+
+      // Out of spin tickets guard
+      expect(store.spinLuckyWheel().success, isFalse);
+
+      // 5. Mystery Blind Box Gacha: open SSR 60K box, prevent reopening same box until board reset
+      final boxOpen = store.openMysteryBlindBox(
+        0,
+        forcedPrizeId: 'BB_SSR_60K',
+      );
+      expect(boxOpen.success, isTrue);
+      expect(boxOpen.rarity, equals(PromoRarityTier.legendary));
+      expect(boxOpen.mintedVoucherCode, startsWith('BOXSSR60K-'));
+      expect(store.activeCustomerPromoWallet.openedBlindBoxes.containsKey(0), isTrue);
+
+      // Reopening already-unsealed box #0 is blocked
+      expect(store.openMysteryBlindBox(0).success, isFalse);
+
+      // Resetting the 6-box board reseals all boxes while keeping rewards
+      store.resetMysteryBlindBoxBoard();
+      expect(store.activeCustomerPromoWallet.openedBlindBoxes, isEmpty);
+
+      // 6. Exchange GHST Xu for +1 Spin Ticket
+      final beforeExchangeSpins = store.activeCustomerPromoWallet.spinTickets;
+      final exchangeRes = store.exchangePromoCoins(targetType: 'SPIN_TICKET');
+      expect(exchangeRes.success, isTrue);
+      expect(
+        store.activeCustomerPromoWallet.spinTickets,
+        equals(beforeExchangeSpins + 1),
+      );
+
+      // 7. Cold-reload from SQLite preserves minted vouchers and promo wallet state
+      expect(promoUser, isNotNull);
+      await store.reloadFromSqlite();
+      store.applyAuthenticatedUserSession(
+        promoUser!,
+        activeWorkspaceRole: SubsystemRole.customer,
+      );
+      expect(
+        store.vouchers.any((v) => v.code == spinVoucherCode && v.isUsable),
+        isTrue,
+      );
+      expect(store.activeCustomerPromoWallet.totalSpinsCount, equals(2));
+      expect(store.activeCustomerPromoWallet.totalBlindBoxesOpened, equals(1));
+
+      // 8. Apply Spin Wheel voucher to a real GPS delivery order & claim GrabChallenges mission
+      final discountedOrder = store.createNewOrder(
+        pickupAddress: 'Chợ Bến Thành, Quận 1, TP. HCM',
+        dropoffAddress: 'Landmark 81, Bình Thạnh, TP. HCM',
+        recipientName: 'Người Nhận Ưu Đãi',
+        recipientPhone: '0909123456',
+        packageDescription: 'Quà tặng sự kiện Vòng Xoay',
+        weightKg: 1.5,
+        dimensionsCm: '20 x 15 x 10 cm',
+        serviceType: DeliveryServiceType.express30m,
+        codAmount: 0,
+        paymentMethod: 'Tiền mặt (COD)',
+        voucherCode: spinVoucherCode,
+      );
+      expect(discountedOrder.discountAmount, greaterThan(0));
+
+      final missionClaim = store.claimPromoMissionReward('MIS_FIRST_SHIP');
+      expect(missionClaim.success, isTrue);
+      expect(missionClaim.spinTicketsDelta, equals(1));
+
+      store.clearAuthenticatedSession();
+    },
+  );
+
+  testWidgets(
+    'Feature 7b (Promo Events UI): Home Banner, Flash Sale, Lucky Spin Wheel & Mystery Blind Box render cleanly across mobile/desktop and animate without overflow',
+    (tester) async {
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      for (final viewport in const [
+        Size(360, 800),
+        Size(412, 915),
+        Size(768, 1024),
+        Size(1024, 768),
+        Size(1440, 900),
+        Size(1920, 1080),
+      ]) {
+        tester.view.physicalSize = viewport;
+        tester.view.devicePixelRatio = 1.0;
+
+        // 1. Customer Home Dashboard (index 0) shows Shopee x Grab Event banner
+        await tester.pumpWidget(
+          MaterialApp(
+            key: ValueKey('promo_home_${viewport.width.toInt()}'),
+            home: const Scaffold(
+              body: CustomerSubsystemEntry(forcedScreenIndex: 0),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(tester.takeException(), isNull);
+        expect(find.textContaining('SHOPEE × GRAB EVENT'), findsWidgets);
+
+        // 2. Promo & Gamification Hub (index 12) switches cleanly across all 4 sub-tabs
+        await tester.pumpWidget(
+          MaterialApp(
+            key: ValueKey('promo_hub_${viewport.width.toInt()}'),
+            home: const Scaffold(
+              body: CustomerSubsystemEntry(forcedScreenIndex: 12),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(tester.takeException(), isNull);
+        expect(
+          find.textContaining('SHOPEE FLASH × GRAB REWARDS'),
+          findsOneWidget,
+        );
+
+        // Switch to Tab 1: Vòng Xoay May Mắn
+        final spinTabFinder = find.text('Vòng Xoay May Mắn');
+        await tester.ensureVisible(spinTabFinder);
+        await tester.tap(spinTabFinder);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(tester.takeException(), isNull);
+        expect(
+          find.textContaining('100% TRÚNG QUÀ THẬT'),
+          findsOneWidget,
+        );
+
+        // Animate a live Spin Wheel turn on 1440x900 desktop viewport
+        if (viewport.width == 1440 &&
+            store.activeCustomerPromoWallet.spinTickets > 0) {
+          final spinBtn = find.text('Bấm Quay Thưởng (-1 Vé)');
+          await tester.ensureVisible(spinBtn);
+          await tester.tap(spinBtn);
+          await tester.pump(const Duration(milliseconds: 200));
+          expect(find.text('Vòng xoay đang chạy...'), findsOneWidget);
+          await tester.pump(const Duration(milliseconds: 2700));
+          expect(tester.takeException(), isNull);
+          final closeDialogBtn = find.text('Tiếp tục săn thưởng');
+          if (closeDialogBtn.evaluate().isNotEmpty) {
+            await tester.tap(closeDialogBtn);
+            await tester.pump(const Duration(milliseconds: 150));
+          }
+        }
+
+        // Switch to Tab 2: Hộp Mù Bí Ẩn
+        final boxTabFinder = find.text('Hộp Mù Bí Ẩn');
+        await tester.ensureVisible(boxTabFinder);
+        await tester.tap(boxTabFinder);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(tester.takeException(), isNull);
+        expect(
+          find.textContaining('Bàn Gacha 6 Hộp Mù Bí Ẩn (Mystery Blind Box)'),
+          findsOneWidget,
+        );
+        expect(find.text('BOX #01'), findsOneWidget);
+        expect(find.text('BOX #06'), findsOneWidget);
+
+        // Switch to Tab 3: Kho Voucher
+        final walletTabFinder = find.text('Kho Voucher');
+        await tester.ensureVisible(walletTabFinder);
+        await tester.tap(walletTabFinder);
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
 }

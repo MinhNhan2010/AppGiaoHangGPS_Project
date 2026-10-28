@@ -658,15 +658,6 @@ extension _CustomerAuthAndAddressViews on _CustomerSubsystemEntryState {
   }
 
   Widget _buildDedicatedVoucherUc11View() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text('Ưu đãi', style: Theme.of(context).textTheme.titleLarge),
-        const SizedBox(height: 16),
-        _buildVoucherChoices(
-          onSelected: (code) => _applyVoucherAndProceed(context, code),
-        ),
-      ],
-    );
+    return _buildPromoEventsAndVoucherHubView(context);
   }
 }

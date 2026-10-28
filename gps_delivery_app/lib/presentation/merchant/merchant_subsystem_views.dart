@@ -473,9 +473,10 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   int _merchantPillarForScreen(int screenIdx) {
     if (screenIdx == 5 || screenIdx == 4 || screenIdx == 6) return 0;
     if (screenIdx == 2 || screenIdx == 3) return 1;
-    if (screenIdx == 7 || screenIdx == 8) return 2;
-    if (screenIdx == 9 || screenIdx == 10) return 3;
-    return 4; // 0, 1
+    if (screenIdx == 11) return 2;
+    if (screenIdx == 7 || screenIdx == 8) return 3;
+    if (screenIdx == 9 || screenIdx == 10) return 4;
+    return 5; // 0, 1
   }
 
   void _onMerchantPillarSelected(int pillarIdx) {
@@ -488,12 +489,15 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           _selectedScreenIndex = 2;
           break;
         case 2:
-          _selectedScreenIndex = 7;
+          _selectedScreenIndex = 11;
           break;
         case 3:
-          _selectedScreenIndex = 9;
+          _selectedScreenIndex = 7;
           break;
         case 4:
+          _selectedScreenIndex = 9;
+          break;
+        case 5:
           _selectedScreenIndex = 1;
           break;
       }
@@ -505,6 +509,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       case 0:
         return const [
           (Icons.location_searching_outlined, 'Theo dõi đơn hàng Shop', 5),
+          (Icons.print_outlined, 'Tra cứu & In vận đơn A6', 4),
         ];
       case 1:
         return const [
@@ -513,6 +518,11 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
         ];
       case 2:
         return const [
+          (Icons.restaurant_menu_rounded, 'Thực đơn Ăn uống (GrabFood)', 11),
+          (Icons.warehouse_outlined, 'Cấu hình Kho & Điểm lấy bếp', 1),
+        ];
+      case 3:
+        return const [
           (Icons.fact_check_outlined, 'Đối soát công nợ COD', 7),
           (
             Icons.account_balance_wallet_outlined,
@@ -520,7 +530,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
             8,
           ),
         ];
-      case 3:
+      case 4:
         return const [
           (Icons.bar_chart_outlined, 'Báo cáo & Thống kê Shop', 9),
           (Icons.support_agent_outlined, 'Gửi khiếu nại & Hỗ trợ', 10),
@@ -528,7 +538,6 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
       default:
         return const [
           (Icons.warehouse_outlined, 'Điểm lấy hàng & Cấu hình Kho', 1),
-          (Icons.restaurant_menu_rounded, 'Thực đơn Ăn uống (GrabFood)', 11),
           (Icons.storefront_outlined, 'Hồ sơ & Xác thực pháp lý', 0),
         ];
     }
@@ -591,33 +600,60 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
   }
 
   Widget _buildMerchantDarkSidebar(double sidebarWidth) {
-    const pillars = <(IconData, String, String, int)>[
-      (
-        Icons.inventory_2_outlined,
-        'Quản lý Vận đơn',
-        'Theo dõi • In A6 • Xử lý đơn',
-        0,
-      ),
-      (Icons.add_box_outlined, 'Tạo đơn gửi hàng', 'Đơn lẻ & Nhập lô CSV', 1),
-      (
-        Icons.account_balance_wallet_outlined,
-        'Đối soát & Ví COD',
-        'Công nợ & Rút tiền ngân hàng',
-        2,
-      ),
-      (
-        Icons.insights_rounded,
-        'Báo cáo & Hỗ trợ',
-        'Thống kê doanh thu & Khiếu nại',
-        3,
-      ),
-      (
-        Icons.storefront_outlined,
-        'Cửa hàng & Kho',
-        'Kho lấy hàng • Thực đơn • Hồ sơ',
-        4,
-      ),
-    ];
+    const pillarGroups =
+        <(String, List<(IconData, String, String, int)>)>[
+          (
+            'VẬN HÀNH ĐƠN HÀNG',
+            [
+              (
+                Icons.inventory_2_outlined,
+                'Quản lý Vận đơn',
+                'Theo dõi • In A6 • Xử lý đơn',
+                0,
+              ),
+              (
+                Icons.add_box_outlined,
+                'Tạo đơn gửi hàng',
+                'Đơn lẻ & Nhập lô CSV',
+                1,
+              ),
+            ],
+          ),
+          (
+            'ẨM THỰC & TÀI CHÍNH',
+            [
+              (
+                Icons.restaurant_menu_rounded,
+                'Thực đơn GrabFood',
+                'Đăng món • Giá • Tồn kho B2B',
+                2,
+              ),
+              (
+                Icons.account_balance_wallet_outlined,
+                'Đối soát & Ví COD',
+                'Công nợ & Rút tiền ngân hàng',
+                3,
+              ),
+            ],
+          ),
+          (
+            'CỬA HÀNG & BÁO CÁO',
+            [
+              (
+                Icons.insights_rounded,
+                'Báo cáo & Hỗ trợ',
+                'Thống kê doanh thu & Khiếu nại',
+                4,
+              ),
+              (
+                Icons.storefront_outlined,
+                'Cửa hàng & Kho',
+                'Kho lấy hàng & Hồ sơ pháp lý',
+                5,
+              ),
+            ],
+          ),
+        ];
     final activePillar = _merchantPillarForScreen(_selectedScreenIndex);
 
     return Container(
@@ -692,85 +728,100 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
               ),
             ),
             const Divider(color: AppColors.techLine, height: 1),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Expanded(
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    ...pillars.map((p) {
-                      final selected = activePillar == p.$4;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 3,
-                        ),
-                        child: InkWell(
-                          onTap: () => _onMerchantPillarSelected(p.$4),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 11,
-                            ),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? AppColors.violet.withValues(alpha: 0.26)
-                                  : Colors.transparent,
-                              border: selected
-                                  ? const Border(
-                                      left: BorderSide(
-                                        color: AppColors.acid,
-                                        width: 4,
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  p.$1,
-                                  color: selected
-                                      ? AppColors.acid
-                                      : AppColors.techMuted,
-                                  size: 19,
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        p.$2,
-                                        style: TextStyle(
-                                          color: selected
-                                              ? Colors.white
-                                              : Colors.white70,
-                                          fontSize: 12.5,
-                                          fontWeight: selected
-                                              ? FontWeight.w800
-                                              : FontWeight.w600,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 1),
-                                      Text(
-                                        p.$3,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: AppColors.techMuted,
-                                          fontSize: 10.5,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
+                    for (final group in pillarGroups) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 12, 3),
+                        child: Text(
+                          group.$1,
+                          style: const TextStyle(
+                            color: AppColors.techMuted,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 0.9,
                           ),
                         ),
-                      );
-                    }),
+                      ),
+                      ...group.$2.map((p) {
+                        final selected = activePillar == p.$4;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 2,
+                          ),
+                          child: InkWell(
+                            onTap: () => _onMerchantPillarSelected(p.$4),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 9,
+                              ),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? AppColors.violet.withValues(alpha: 0.26)
+                                    : Colors.transparent,
+                                border: selected
+                                    ? const Border(
+                                        left: BorderSide(
+                                          color: AppColors.acid,
+                                          width: 4,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    p.$1,
+                                    color: selected
+                                        ? AppColors.acid
+                                        : AppColors.techMuted,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          p.$2,
+                                          style: TextStyle(
+                                            color: selected
+                                                ? Colors.white
+                                                : Colors.white70,
+                                            fontSize: 12.5,
+                                            fontWeight: selected
+                                                ? FontWeight.w800
+                                                : FontWeight.w600,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 1),
+                                        Text(
+                                          p.$3,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: AppColors.techMuted,
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ),
               ),
@@ -809,6 +860,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 560;
+        final showMenuQuickBtn = constraints.maxWidth >= 720;
         return Container(
           height: 58,
           padding: EdgeInsets.symmetric(horizontal: isCompact ? 12 : 24),
@@ -837,6 +889,36 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                   ),
                 ),
               ),
+              if (showMenuQuickBtn) ...[
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: _selectedScreenIndex == 11
+                        ? AppColors.techBg
+                        : Colors.white,
+                    backgroundColor: _selectedScreenIndex == 11
+                        ? AppColors.acid
+                        : Colors.white.withValues(alpha: 0.16),
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.zero,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    minimumSize: Size.zero,
+                  ),
+                  onPressed: () => setState(() => _selectedScreenIndex = 11),
+                  icon: const Icon(Icons.restaurant_menu_rounded, size: 15),
+                  label: const Text(
+                    'Thực đơn B2B',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
               if (!isCompact) ...[
                 Stack(
                   clipBehavior: Clip.none,
@@ -955,7 +1037,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
 
   Widget _buildMerchantContextualSubTabBar(double hPad) {
     final subTabs = _subTabsForActivePillar();
-    if (subTabs.length < 2 && _selectedScreenIndex == 5) {
+    if (subTabs.length < 2) {
       return const SizedBox.shrink();
     }
     return Container(
@@ -970,8 +1052,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
           children: subTabs.map((tab) {
             final selected =
                 _selectedScreenIndex == tab.$3 ||
-                (tab.$3 == 5 &&
-                    (_selectedScreenIndex == 4 || _selectedScreenIndex == 6));
+                (tab.$3 == 5 && _selectedScreenIndex == 6);
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: InkWell(
@@ -1020,6 +1101,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
     const items = [
       (Icons.inventory_2_outlined, 'Đơn hàng'),
       (Icons.add_box_outlined, 'Tạo đơn'),
+      (Icons.restaurant_menu_rounded, 'Thực đơn'),
       (Icons.account_balance_wallet_outlined, 'Ví COD'),
       (Icons.insights_rounded, 'Báo cáo'),
       (Icons.storefront_outlined, 'Cửa hàng'),
@@ -1038,6 +1120,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
             child: InkWell(
               onTap: () => _onMerchantPillarSelected(idx),
               child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
                 decoration: BoxDecoration(
                   border: selected
                       ? const Border(
@@ -1048,7 +1131,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(items[idx].$1, color: color, size: 20),
+                    Icon(items[idx].$1, color: color, size: 19),
                     const SizedBox(height: 2),
                     Text(
                       items[idx].$2,
@@ -1056,7 +1139,7 @@ class _MerchantSubsystemEntryState extends State<MerchantSubsystemEntry> {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: color,
-                        fontSize: 10.5,
+                        fontSize: 10,
                         fontWeight: selected
                             ? FontWeight.w900
                             : FontWeight.w600,

@@ -462,11 +462,21 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
   }
 
   Widget _buildDriverStudioSidebar(double sidebarWidth) {
-    const menuItems = <(IconData, String, int)>[
-      (Icons.radar_rounded, 'Trạng thái & Bản đồ GPS', 1),
-      (Icons.history_rounded, 'Lịch sử giao hàng', 9),
-      (Icons.account_balance_wallet_outlined, 'Thu nhập & Ví tài xế', 6),
-      (Icons.insights_rounded, 'Hồ sơ & hiệu suất', 8),
+    const navGroups = <(String, List<(IconData, String, int)>)>[
+      (
+        'ĐIỀU PHỐI & LỘ TRÌNH',
+        [
+          (Icons.radar_rounded, 'Trạng thái & Bản đồ GPS', 1),
+          (Icons.history_rounded, 'Lịch sử giao hàng', 9),
+        ],
+      ),
+      (
+        'TÀI CHÍNH & HỒ SƠ',
+        [
+          (Icons.account_balance_wallet_outlined, 'Thu nhập & Ví tài xế', 6),
+          (Icons.insights_rounded, 'Hồ sơ & hiệu suất', 8),
+        ],
+      ),
     ];
     final activeOrd =
         _store.activeDriverInProgressOrder ??
@@ -474,6 +484,9 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
             .where(_isSearchingOrderCompatibleWithActiveDriver)
             .firstOrNull;
     final hasActiveTrip = _store.isDriverOnline && activeOrd != null;
+    final drvRec = _store.activeDriverRecord;
+    final isEv = drvRec?.isElectricVehicle ?? false;
+    final batPct = drvRec?.batteryPercent ?? 100;
 
     return Container(
       width: sidebarWidth,
@@ -487,7 +500,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 22, 16, 18),
+              padding: const EdgeInsets.fromLTRB(18, 18, 14, 14),
               child: Row(
                 children: [
                   Container(
@@ -497,8 +510,10 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                       color: AppColors.acid,
                       border: Border.all(color: AppColors.techBg),
                     ),
-                    child: const Icon(
-                      Icons.two_wheeler_rounded,
+                    child: Icon(
+                      isEv
+                          ? Icons.electric_moped_rounded
+                          : Icons.two_wheeler_rounded,
                       color: AppColors.techBg,
                       size: 22,
                     ),
@@ -533,6 +548,43 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 ],
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  border: Border.all(color: AppColors.techLine),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      isEv ? Icons.battery_charging_full_rounded : Icons.verified_rounded,
+                      size: 15,
+                      color: isEv ? const Color(0xFF4ADE80) : AppColors.acid,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        isEv
+                            ? 'Xe điện EV • Pin $batPct% • ★ ${(drvRec?.rating ?? 5.0).toStringAsFixed(1)}'
+                            : '${drvRec?.vehicleType ?? "Xe máy"} • ★ ${(drvRec?.rating ?? 5.0).toStringAsFixed(1)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const Divider(color: AppColors.techLine, height: 1),
             const SizedBox(height: 8),
             Expanded(
@@ -540,76 +592,9 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    ...menuItems.map((item) {
-                      final selected =
-                          _selectedScreenIndex == item.$3 ||
-                          (item.$3 == 1 &&
-                              (_selectedScreenIndex == 2 ||
-                                  _selectedScreenIndex == 3 ||
-                                  _selectedScreenIndex == 4 ||
-                                  _selectedScreenIndex == 5 ||
-                                  _selectedScreenIndex == 7)) ||
-                          (item.$3 == 8 && _selectedScreenIndex == 0);
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 2,
-                        ),
-                        child: InkWell(
-                          onTap: () =>
-                              setState(() => _selectedScreenIndex = item.$3),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 11,
-                            ),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? AppColors.violet.withValues(alpha: 0.25)
-                                  : Colors.transparent,
-                              border: selected
-                                  ? const Border(
-                                      left: BorderSide(
-                                        color: AppColors.acid,
-                                        width: 4.0,
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  item.$1,
-                                  size: 19,
-                                  color: selected
-                                      ? AppColors.acid
-                                      : AppColors.techMuted,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    item.$2,
-                                    style: TextStyle(
-                                      color: selected
-                                          ? Colors.white
-                                          : AppColors.techMuted,
-                                      fontSize: 13,
-                                      fontWeight: selected
-                                          ? FontWeight.w800
-                                          : FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      );
-                    }),
                     if (hasActiveTrip) ...[
-                      const SizedBox(height: 12),
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
                         child: InkWell(
                           onTap: () => setState(() {
                             _selectedScreenIndex =
@@ -618,7 +603,7 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                                 : 3;
                           }),
                           child: Container(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.all(11),
                             decoration: BoxDecoration(
                               color: AppColors.acid.withValues(alpha: 0.14),
                               border: Border.all(
@@ -682,6 +667,87 @@ class _DriverSubsystemEntryState extends State<DriverSubsystemEntry> {
                           ),
                         ),
                       ),
+                    ],
+                    for (final group in navGroups) ...[
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 12, 4),
+                        child: Text(
+                          group.$1,
+                          style: const TextStyle(
+                            color: AppColors.techMuted,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 0.9,
+                          ),
+                        ),
+                      ),
+                      ...group.$2.map((item) {
+                        final selected =
+                            _selectedScreenIndex == item.$3 ||
+                            (item.$3 == 1 &&
+                                (_selectedScreenIndex == 2 ||
+                                    _selectedScreenIndex == 3 ||
+                                    _selectedScreenIndex == 4 ||
+                                    _selectedScreenIndex == 5 ||
+                                    _selectedScreenIndex == 7)) ||
+                            (item.$3 == 8 && _selectedScreenIndex == 0);
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 2,
+                          ),
+                          child: InkWell(
+                            onTap: () =>
+                                setState(() => _selectedScreenIndex = item.$3),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? AppColors.violet.withValues(alpha: 0.25)
+                                    : Colors.transparent,
+                                border: selected
+                                    ? const Border(
+                                        left: BorderSide(
+                                          color: AppColors.acid,
+                                          width: 4.0,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    item.$1,
+                                    size: 19,
+                                    color: selected
+                                        ? AppColors.acid
+                                        : AppColors.techMuted,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      item.$2,
+                                      style: TextStyle(
+                                        color: selected
+                                            ? Colors.white
+                                            : AppColors.techMuted,
+                                        fontSize: 13,
+                                        fontWeight: selected
+                                            ? FontWeight.w800
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
                     ],
                   ],
                 ),

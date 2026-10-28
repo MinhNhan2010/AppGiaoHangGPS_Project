@@ -169,12 +169,37 @@ extension _AdminConfigAndGovernanceViews on _AdminSubsystemEntryState {
                       'Quản lý Chiến dịch Khuyến mãi & Voucher',
                       style: Theme.of(context).textTheme.headlineMedium,
                     ),
-                    OutlinedButton.icon(
-                      onPressed: canEditSystem
-                          ? () => _showCreateVoucherDialog(context)
-                          : null,
-                      icon: const Icon(Icons.add_circle_outline, size: 16),
-                      label: const Text('Phát hành mã mới'),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: canEditSystem
+                              ? () {
+                                  final added =
+                                      _store.publishPresetFlashCampaignsForAdmin();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(
+                                        added > 0
+                                            ? 'Đã phát hành $added chiến dịch Flash Sale (Shopee × Grab) vào kho ưu đãi toàn hệ thống!'
+                                            : 'Toàn bộ chiến dịch Flash Sale (Shopee × Grab) đã sẵn sàng trong hệ thống.',
+                                      ),
+                                    ),
+                                  );
+                                }
+                              : null,
+                          icon: const Icon(Icons.bolt_rounded, size: 16),
+                          label: const Text('Gói Flash Sale (Shopee/Grab)'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: canEditSystem
+                              ? () => _showCreateVoucherDialog(context)
+                              : null,
+                          icon: const Icon(Icons.add_circle_outline, size: 16),
+                          label: const Text('Phát hành mã mới'),
+                        ),
+                      ],
                     ),
                   ],
                 ),

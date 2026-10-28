@@ -370,305 +370,421 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
               ),
             ],
             const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                border: Border.all(color: AppColors.ink, width: 1.1),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+            Builder(
+              builder: (context) {
+                final showMultiStopBody =
+                    _expandMultiStopSection ||
+                    _additionalStops.isNotEmpty ||
+                    _isRoundTrip;
+                return Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    border: Border.all(color: AppColors.ink, width: 1.1),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Expanded(
-                        child: Text(
-                          'Giao nhiều điểm',
-                          style: TextStyle(fontWeight: FontWeight.w900),
+                      InkWell(
+                        onTap: () => _rebuildCustomerUi(
+                          () => _expandMultiStopSection =
+                              !_expandMultiStopSection,
                         ),
-                      ),
-                      Text(
-                        '${_additionalStops.length}/4 điểm thêm',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Thêm điểm giao phụ để tạo một đơn có nhiều người nhận.',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                  if (_additionalStops.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    ..._additionalStops.asMap().entries.map((entry) {
-                      final index = entry.key;
-                      final stop = entry.value;
-                      return ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: CircleAvatar(
-                          radius: 13,
-                          backgroundColor: AppColors.pink,
-                          child: Text(
-                            '${index + 2}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                            ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
                           ),
-                        ),
-                        title: Text(
-                          stop['address'].toString(),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        subtitle: Text(
-                          '${stop['recipientName'] ?? ''} • ${stop['recipientPhone'] ?? ''}',
-                        ),
-                        trailing: IconButton(
-                          tooltip: 'Xóa điểm giao',
-                          onPressed: () => _rebuildCustomerUi(
-                            () => _additionalStops.removeAt(index),
-                          ),
-                          icon: const Icon(Icons.close_rounded, size: 18),
-                        ),
-                      );
-                    }),
-                  ],
-                  if (_additionalStops.length < 4) ...[
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: _extraDropoffCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Địa chỉ điểm giao phụ',
-                        prefixIcon: Icon(
-                          Icons.add_location_alt_outlined,
-                          size: 18,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _extraRecipientNameCtrl,
-                            decoration: const InputDecoration(
-                              labelText: 'Người nhận',
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: TextField(
-                            controller: _extraRecipientPhoneCtrl,
-                            keyboardType: TextInputType.phone,
-                            decoration: const InputDecoration(labelText: 'SĐT'),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      alignment: WrapAlignment.end,
-                      children: [
-                        if (_additionalStops.isNotEmpty)
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.ink,
-                              foregroundColor: AppColors.acid,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 8,
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.alt_route_rounded,
+                                size: 18,
+                                color: AppColors.violet,
                               ),
-                            ),
-                            onPressed: () {
-                              if (_dropoffCtrl.text.trim().isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      'Vui lòng nhập Điểm giao chính trước khi tối ưu thứ tự đa điểm!',
+                              const SizedBox(width: 8),
+                              const Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Giao nhiều điểm (2-Opt TSP) & Khứ hồi 2 chiều',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 12.5,
+                                      ),
+                                    ),
+                                    SizedBox(height: 1),
+                                    Text(
+                                      'Tùy chọn thêm tối đa 4 điểm giao phụ hoặc quay về điểm lấy',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 7,
+                                  vertical: 3,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: (_additionalStops.isNotEmpty ||
+                                          _isRoundTrip)
+                                      ? AppColors.acid
+                                      : Colors.white,
+                                  border: Border.all(
+                                    color: AppColors.ink,
+                                    width: 1,
+                                  ),
+                                ),
+                                child: Text(
+                                  '${_additionalStops.length}/4${_isRoundTrip ? " • 2 chiều" : ""}',
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                    color: AppColors.ink,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Icon(
+                                showMultiStopBody
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                                size: 20,
+                                color: AppColors.ink,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (showMultiStopBody)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Divider(height: 10),
+                              if (_additionalStops.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                ..._additionalStops.asMap().entries.map((
+                                  entry,
+                                ) {
+                                  final index = entry.key;
+                                  final stop = entry.value;
+                                  return ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: CircleAvatar(
+                                      radius: 13,
+                                      backgroundColor: AppColors.pink,
+                                      child: Text(
+                                        '${index + 2}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      stop['address'].toString(),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      '${stop['recipientName'] ?? ''} • ${stop['recipientPhone'] ?? ''}',
+                                    ),
+                                    trailing: IconButton(
+                                      tooltip: 'Xóa điểm giao',
+                                      onPressed: () => _rebuildCustomerUi(
+                                        () => _additionalStops.removeAt(index),
+                                      ),
+                                      icon: const Icon(
+                                        Icons.close_rounded,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  );
+                                }),
+                              ],
+                              if (_additionalStops.length < 4) ...[
+                                const SizedBox(height: 6),
+                                TextField(
+                                  controller: _extraDropoffCtrl,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Địa chỉ điểm giao phụ',
+                                    prefixIcon: Icon(
+                                      Icons.add_location_alt_outlined,
+                                      size: 18,
                                     ),
                                   ),
-                                );
-                                return;
-                              }
-                              final allStops = <Map<String, dynamic>>[
-                                {
-                                  'address': _dropoffCtrl.text.trim(),
-                                  'recipientName': _recipientNameCtrl.text
-                                      .trim(),
-                                  'recipientPhone': _recipientPhoneCtrl.text
-                                      .trim(),
-                                  if (_pinnedDropoffLocation != null) ...{
-                                    'latitude':
-                                        _pinnedDropoffLocation!.latitude,
-                                    'longitude':
-                                        _pinnedDropoffLocation!.longitude,
-                                  },
-                                },
-                                ..._additionalStops.map(
-                                  (s) => Map<String, dynamic>.from(s),
                                 ),
-                              ];
-                              final tspRes =
-                                  SmartDispatchEngine.optimizeMultiStopRoute(
-                                    pickup: pPt,
-                                    stops: allStops,
-                                    isRoundTrip: _isRoundTrip,
-                                  );
-                              if (tspRes.optimizedStops.isEmpty) return;
-                              final outboundRes =
-                                  SmartDispatchEngine.optimizeMultiStopRoute(
-                                    pickup: pPt,
-                                    stops: tspRes.optimizedStops,
-                                    isRoundTrip: false,
-                                  );
-                              final firstStop = tspRes.optimizedStops.first;
-                              _rebuildCustomerUi(() {
-                                _dropoffCtrl.text =
-                                    (firstStop['address'] ?? '').toString();
-                                _recipientNameCtrl.text =
-                                    (firstStop['recipientName'] ?? '')
-                                        .toString();
-                                _recipientPhoneCtrl.text =
-                                    (firstStop['recipientPhone'] ?? '')
-                                        .toString();
-                                if (firstStop['latitude'] is num &&
-                                    firstStop['longitude'] is num) {
-                                  _pinnedDropoffLocation = GeoPoint(
-                                    latitude:
-                                        (firstStop['latitude'] as num)
-                                            .toDouble(),
-                                    longitude:
-                                        (firstStop['longitude'] as num)
-                                            .toDouble(),
-                                  );
-                                }
-                                _additionalStops
-                                  ..clear()
-                                  ..addAll(tspRes.optimizedStops.skip(1));
-                                _osrmPreviewPoints = tspRes.routePolyline;
-                                _osrmDistMeters =
-                                    outboundRes.optimizedDistanceMeters;
-                                _osrmDurationSec =
-                                    outboundRes.estimatedDurationSeconds;
-                                _lastTspSavedMeters =
-                                    tspRes.savedDistanceMeters;
-                              });
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    tspRes.savedDistanceMeters > 0
-                                        ? 'Đã tối ưu 2-Opt TSP ${tspRes.optimizedStops.length} điểm giao • Tiết kiệm ${(tspRes.savedDistanceMeters / 1000.0).toStringAsFixed(2)} km!'
-                                        : 'Thứ tự ${tspRes.optimizedStops.length} điểm giao hiện tại đã là lộ trình ngắn nhất!',
+                                const SizedBox(height: 6),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _extraRecipientNameCtrl,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Người nhận',
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _extraRecipientPhoneCtrl,
+                                        keyboardType: TextInputType.phone,
+                                        decoration: const InputDecoration(
+                                          labelText: 'SĐT',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 6,
+                                  alignment: WrapAlignment.end,
+                                  children: [
+                                    if (_additionalStops.isNotEmpty)
+                                      ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppColors.ink,
+                                          foregroundColor: AppColors.acid,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 8,
+                                          ),
+                                        ),
+                                        onPressed: () {
+                                          if (_dropoffCtrl.text
+                                              .trim()
+                                              .isEmpty) {
+                                            ScaffoldMessenger.of(
+                                              context,
+                                            ).showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                  'Vui lòng nhập Điểm giao chính trước khi tối ưu thứ tự đa điểm!',
+                                                ),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          final allStops =
+                                              <Map<String, dynamic>>[
+                                                {
+                                                  'address': _dropoffCtrl.text
+                                                      .trim(),
+                                                  'recipientName':
+                                                      _recipientNameCtrl.text
+                                                          .trim(),
+                                                  'recipientPhone':
+                                                      _recipientPhoneCtrl.text
+                                                          .trim(),
+                                                  if (_pinnedDropoffLocation !=
+                                                      null) ...{
+                                                    'latitude':
+                                                        _pinnedDropoffLocation!
+                                                            .latitude,
+                                                    'longitude':
+                                                        _pinnedDropoffLocation!
+                                                            .longitude,
+                                                  },
+                                                },
+                                                ..._additionalStops.map(
+                                                  (s) =>
+                                                      Map<String, dynamic>.from(
+                                                        s,
+                                                      ),
+                                                ),
+                                              ];
+                                          final tspRes =
+                                              SmartDispatchEngine.optimizeMultiStopRoute(
+                                                pickup: pPt,
+                                                stops: allStops,
+                                                isRoundTrip: _isRoundTrip,
+                                              );
+                                          if (tspRes.optimizedStops.isEmpty) {
+                                            return;
+                                          }
+                                          final outboundRes =
+                                              SmartDispatchEngine.optimizeMultiStopRoute(
+                                                pickup: pPt,
+                                                stops: tspRes.optimizedStops,
+                                                isRoundTrip: false,
+                                              );
+                                          final firstStop =
+                                              tspRes.optimizedStops.first;
+                                          _rebuildCustomerUi(() {
+                                            _dropoffCtrl.text =
+                                                (firstStop['address'] ?? '')
+                                                    .toString();
+                                            _recipientNameCtrl.text =
+                                                (firstStop['recipientName'] ??
+                                                        '')
+                                                    .toString();
+                                            _recipientPhoneCtrl.text =
+                                                (firstStop['recipientPhone'] ??
+                                                        '')
+                                                    .toString();
+                                            if (firstStop['latitude'] is num &&
+                                                firstStop['longitude'] is num) {
+                                              _pinnedDropoffLocation = GeoPoint(
+                                                latitude:
+                                                    (firstStop['latitude']
+                                                            as num)
+                                                        .toDouble(),
+                                                longitude:
+                                                    (firstStop['longitude']
+                                                            as num)
+                                                        .toDouble(),
+                                              );
+                                            }
+                                            _additionalStops
+                                              ..clear()
+                                              ..addAll(
+                                                tspRes.optimizedStops.skip(1),
+                                              );
+                                            _osrmPreviewPoints =
+                                                tspRes.routePolyline;
+                                            _osrmDistMeters = outboundRes
+                                                .optimizedDistanceMeters;
+                                            _osrmDurationSec = outboundRes
+                                                .estimatedDurationSeconds;
+                                            _lastTspSavedMeters =
+                                                tspRes.savedDistanceMeters;
+                                          });
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                tspRes.savedDistanceMeters > 0
+                                                    ? 'Đã tối ưu 2-Opt TSP ${tspRes.optimizedStops.length} điểm giao • Tiết kiệm ${(tspRes.savedDistanceMeters / 1000.0).toStringAsFixed(2)} km!'
+                                                    : 'Thứ tự ${tspRes.optimizedStops.length} điểm giao hiện tại đã là lộ trình ngắn nhất!',
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        icon: const Icon(
+                                          Icons.route_rounded,
+                                          size: 15,
+                                        ),
+                                        label: const Text(
+                                          'Tối ưu đa điểm (2-Opt TSP)',
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    OutlinedButton.icon(
+                                      onPressed: () {
+                                        final address = _extraDropoffCtrl.text
+                                            .trim();
+                                        if (address.isEmpty) return;
+                                        _rebuildCustomerUi(() {
+                                          _additionalStops.add({
+                                            'address': address,
+                                            'recipientName':
+                                                _extraRecipientNameCtrl.text
+                                                    .trim(),
+                                            'recipientPhone':
+                                                _extraRecipientPhoneCtrl.text
+                                                    .trim(),
+                                          });
+                                          _extraDropoffCtrl.clear();
+                                          _extraRecipientNameCtrl.clear();
+                                          _extraRecipientPhoneCtrl.clear();
+                                          _lastTspSavedMeters = null;
+                                        });
+                                      },
+                                      icon: const Icon(Icons.add, size: 16),
+                                      label: const Text('Thêm điểm giao'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                              if (_lastTspSavedMeters != null) ...[
+                                const SizedBox(height: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFECFDF5),
+                                    border: Border.all(
+                                      color: AppColors.success,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _lastTspSavedMeters! > 0
+                                        ? 'Lộ trình đa điểm đã sắp xếp tối ưu bằng Nearest-Neighbor + 2-Opt (rút ngắn ${(_lastTspSavedMeters! / 1000.0).toStringAsFixed(2)} km).'
+                                    : 'Thứ tự các trạm giao đã tối ưu theo thuật toán 2-Opt TSP.',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: AppColors.ink,
+                                    ),
                                   ),
                                 ),
-                              );
-                            },
-                            icon: const Icon(Icons.route_rounded, size: 15),
-                            label: const Text(
-                              'Tối ưu đa điểm (2-Opt TSP)',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w800,
+                              ],
+                              const Divider(height: 16),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Giao hàng 2 chiều (Khứ hồi về điểm lấy)',
+                                          style: TextStyle(
+                                            fontSize: 12.5,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          'Tài xế mang chứng từ / hàng đổi trả quay lại điểm lấy (+60% cước cơ bản & km)',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Switch.adaptive(
+                                    activeThumbColor: AppColors.violet,
+                                    value: _isRoundTrip,
+                                    onChanged: (val) => _rebuildCustomerUi(() {
+                                      _isRoundTrip = val;
+                                      _lastTspSavedMeters = null;
+                                    }),
+                                  ),
+                                ],
                               ),
-                            ),
+                            ],
                           ),
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            final address = _extraDropoffCtrl.text.trim();
-                            if (address.isEmpty) return;
-                            _rebuildCustomerUi(() {
-                              _additionalStops.add({
-                                'address': address,
-                                'recipientName': _extraRecipientNameCtrl.text
-                                    .trim(),
-                                'recipientPhone': _extraRecipientPhoneCtrl.text
-                                    .trim(),
-                              });
-                              _extraDropoffCtrl.clear();
-                              _extraRecipientNameCtrl.clear();
-                              _extraRecipientPhoneCtrl.clear();
-                              _lastTspSavedMeters = null;
-                            });
-                          },
-                          icon: const Icon(Icons.add, size: 16),
-                          label: const Text('Thêm điểm giao'),
                         ),
-                      ],
-                    ),
-                  ],
-                  if (_lastTspSavedMeters != null) ...[
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFECFDF5),
-                        border: Border.all(color: AppColors.success),
-                      ),
-                      child: Text(
-                        _lastTspSavedMeters! > 0
-                            ? 'Lộ trình đa điểm đã sắp xếp tối ưu bằng Nearest-Neighbor + 2-Opt (rút ngắn ${(_lastTspSavedMeters! / 1000.0).toStringAsFixed(2)} km).'
-                            : 'Thứ tự các trạm giao đã tối ưu theo thuật toán 2-Opt TSP.',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.ink,
-                        ),
-                      ),
-                    ),
-                  ],
-                  const Divider(height: 16),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Giao hàng 2 chiều (Khứ hồi về điểm lấy)',
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                            SizedBox(height: 2),
-                            Text(
-                              'Tài xế mang chứng từ / hàng đổi trả quay lại điểm lấy (+60% cước cơ bản & km)',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Switch.adaptive(
-                        activeThumbColor: AppColors.violet,
-                        value: _isRoundTrip,
-                        onChanged: (val) => _rebuildCustomerUi(() {
-                          _isRoundTrip = val;
-                          _lastTspSavedMeters = null;
-                        }),
-                      ),
                     ],
                   ),
-                ],
-              ),
+                );
+              },
             ),
             const SizedBox(height: 16),
             const Text(
@@ -760,28 +876,89 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
               ],
             ),
             const SizedBox(height: 10),
-            TextField(
-              controller: _declaredValueCtrl,
-              keyboardType: TextInputType.number,
-              onChanged: (_) => _rebuildCustomerUi(() {}),
-              decoration: InputDecoration(
-                labelText: 'Khai giá bảo hiểm hàng hóa (VNĐ - tùy chọn)',
-                hintText: 'VD: 5000000 (Phí 0.5%, đền bù tối đa 30.000.000đ)',
-                prefixIcon: const Icon(
-                  Icons.verified_user_outlined,
-                  size: 18,
-                  color: AppColors.violet,
-                ),
-                helperText: (() {
-                  final rawVal =
-                      double.tryParse(_declaredValueCtrl.text.trim()) ?? 0.0;
-                  if (rawVal <= 0) {
-                    return 'Đơn khai giá >= 3.000.000đ tự động lọc Tài xế chuẩn >= 4.5★ & ký quỹ >= 500.000đ';
-                  }
-                  final fee = PricingEstimate.calculateInsuranceFee(rawVal);
-                  return 'Phí bảo hiểm khai giá (0.5%): ${CurrencyFormatter.formatVnd(fee)}';
-                })(),
-              ),
+            Builder(
+              builder: (context) {
+                final hasDeclaredVal = _declaredValueCtrl.text
+                    .trim()
+                    .isNotEmpty;
+                final showInsuranceInput =
+                    _expandInsuranceSection || hasDeclaredVal;
+                final rawVal =
+                    double.tryParse(_declaredValueCtrl.text.trim()) ?? 0.0;
+                final fee = PricingEstimate.calculateInsuranceFee(rawVal);
+                return Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    border: Border.all(color: AppColors.ink, width: 1.1),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      InkWell(
+                        onTap: () => _rebuildCustomerUi(
+                          () => _expandInsuranceSection =
+                              !_expandInsuranceSection,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 9,
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.verified_user_outlined,
+                                size: 17,
+                                color: AppColors.violet,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  rawVal > 0
+                                      ? 'Khai giá bảo hiểm: +${CurrencyFormatter.formatVnd(fee)} (0.5%)'
+                                      : 'Khai giá bảo hiểm hàng hóa (0.5% • Tùy chọn)',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.ink,
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                showInsuranceInput
+                                    ? Icons.expand_less_rounded
+                                    : Icons.expand_more_rounded,
+                                size: 19,
+                                color: AppColors.ink,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      if (showInsuranceInput)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                          child: TextField(
+                            controller: _declaredValueCtrl,
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => _rebuildCustomerUi(() {}),
+                            decoration: InputDecoration(
+                              labelText:
+                                  'Giá trị hàng hóa khai báo (VNĐ)',
+                              hintText:
+                                  'VD: 5000000 (Đền bù tối đa 30.000.000đ)',
+                              helperText: rawVal <= 0
+                                  ? 'Đơn >= 3.000.000đ tự lọc Tài xế >= 4.5★ & ký quỹ >= 500k'
+                                  : 'Phí bảo hiểm khai giá (0.5%): ${CurrencyFormatter.formatVnd(fee)}',
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 10),
             TextField(
@@ -923,7 +1100,7 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                 border: Border.all(color: AppColors.ink, width: 1.4),
               ),
               child: Map3dPerspectiveWidget(
-                height: 450,
+                height: 300,
                 mode: MapViewMode.customerPreview,
                 is3dMode: _store.isMap3dEnabled,
                 speedKmh: 0,
@@ -990,12 +1167,12 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                 },
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 14),
             Row(
               children: [
                 const Expanded(
                   child: Text(
-                    'Chọn gói dịch vụ giao hàng',
+                    '4. Chọn gói dịch vụ giao hàng',
                     style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14),
                   ),
                 ),
@@ -1007,7 +1184,7 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                       : _selectedService == DeliveryServiceType.saving
                       ? Icon3dStyle.walletVault
                       : Icon3dStyle.gpsPinRadar,
-                  size: 36,
+                  size: 34,
                   showRadarPulse: false,
                   isSelected: true,
                 ),
@@ -1034,6 +1211,25 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                 const SizedBox(width: 10),
                 Expanded(
                   child: _buildUc04ServiceCard(
+                    title: 'Giao nhanh 2H (Ghép đơn)',
+                    eta: 'Ghép đơn cùng hướng • 2H',
+                    priceLabel:
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
+                    icon: Icons.hub_rounded,
+                    iconColor: const Color(0xFF0EA5E9),
+                    selected: _selectedService == DeliveryServiceType.sameDay2h,
+                    onTap: () => _rebuildCustomerUi(() {
+                      _selectedService = DeliveryServiceType.sameDay2h;
+                    }),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildUc04ServiceCard(
                     title: 'Giao tiêu chuẩn',
                     eta: 'Trong 2 giờ',
                     priceLabel:
@@ -1046,11 +1242,7 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     }),
                   ),
                 ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
+                const SizedBox(width: 10),
                 Expanded(
                   child: _buildUc04ServiceCard(
                     title: 'Giao tiết kiệm',
@@ -1065,153 +1257,161 @@ extension _CustomerOrderAndPricingViews on _CustomerSubsystemEntryState {
                     }),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _buildUc04ServiceCard(
-                    title: 'Giao hàng lớn',
-                    eta: 'Xe tải / Hàng cồng kềnh',
-                    priceLabel:
-                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.truck))}',
-                    icon: Icons.fire_truck_rounded,
-                    iconColor: AppColors.ink,
-                    selected: _selectedService == DeliveryServiceType.truck,
-                    onTap: () => _rebuildCustomerUi(() {
-                      _selectedService = DeliveryServiceType.truck;
-                    }),
-                  ),
-                ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             _buildUc04ServiceCard(
-              title: 'Giao nhanh 2H (Ghép đơn)',
-              eta: 'Ghép cặp cùng hướng Bearing <= 25° • Tiết kiệm nội thành',
+              title: 'Giao hàng lớn',
+              eta: 'Xe tải / Hàng cồng kềnh • Hỗ trợ bốc xếp',
               priceLabel:
-                  'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
-              icon: Icons.hub_rounded,
-              iconColor: const Color(0xFF0EA5E9),
-              selected: _selectedService == DeliveryServiceType.sameDay2h,
+                  'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.truck))}',
+              icon: Icons.fire_truck_rounded,
+              iconColor: AppColors.ink,
+              selected: _selectedService == DeliveryServiceType.truck,
               onTap: () => _rebuildCustomerUi(() {
-                _selectedService = DeliveryServiceType.sameDay2h;
+                _selectedService = DeliveryServiceType.truck;
               }),
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                FilterChip(
-                  visualDensity: VisualDensity.compact,
-                  avatar: Icon(
-                    Icons.electric_moped_rounded,
-                    size: 15,
-                    color: _preferEcoEv ? Colors.white : AppColors.success,
-                  ),
-                  label: Text(
-                    _preferEcoEv
-                        ? 'Xe điện Xanh (Eco EV • -48g CO₂/km)'
-                        : 'Ưu tiên Xe điện Xanh (Eco EV)',
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                border: Border.all(color: AppColors.ink, width: 1.1),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Tùy chọn Giao Xanh & Hẹn giờ lấy hàng',
                     style: TextStyle(
                       fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                      color: _preferEcoEv ? Colors.white : AppColors.ink,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
                     ),
                   ),
-                  selected: _preferEcoEv,
-                  selectedColor: AppColors.success,
-                  onSelected: (v) => _rebuildCustomerUi(() {
-                    _preferEcoEv = v;
-                  }),
-                ),
-                FilterChip(
-                  visualDensity: VisualDensity.compact,
-                  avatar: Icon(
-                    Icons.park_rounded,
-                    size: 15,
-                    color: _greenFundContributed
-                        ? Colors.white
-                        : AppColors.success,
-                  ),
-                  label: Text(
-                    'Góp 1.000đ Quỹ Xanh',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                      color: _greenFundContributed
-                          ? Colors.white
-                          : AppColors.ink,
-                    ),
-                  ),
-                  selected: _greenFundContributed,
-                  selectedColor: const Color(0xFF059669),
-                  onSelected: (v) => _rebuildCustomerUi(() {
-                    _greenFundContributed = v;
-                  }),
-                ),
-                FilterChip(
-                  visualDensity: VisualDensity.compact,
-                  avatar: Icon(
-                    Icons.event_available_rounded,
-                    size: 15,
-                    color: _isScheduledDelivery
-                        ? Colors.white
-                        : AppColors.violet,
-                  ),
-                  label: Text(
-                    _isScheduledDelivery
-                        ? 'Hẹn khung giờ lấy: $_scheduledDeliverySlot'
-                        : 'Đặt lịch hẹn giờ lấy hàng',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
-                      color: _isScheduledDelivery
-                          ? Colors.white
-                          : AppColors.ink,
-                    ),
-                  ),
-                  selected: _isScheduledDelivery,
-                  selectedColor: AppColors.violet,
-                  onSelected: (v) =>
-                      _rebuildCustomerUi(() => _isScheduledDelivery = v),
-                ),
-              ],
-            ),
-            if (_isScheduledDelivery) ...[
-              const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children:
-                    const [
-                      '09:00 - 11:00',
-                      '13:00 - 15:00',
-                      '15:00 - 17:00',
-                      '18:00 - 20:00',
-                    ].map((slot) {
-                      final isSlotSelected = _scheduledDeliverySlot == slot;
-                      return ChoiceChip(
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      FilterChip(
                         visualDensity: VisualDensity.compact,
+                        avatar: Icon(
+                          Icons.electric_moped_rounded,
+                          size: 15,
+                          color:
+                              _preferEcoEv ? Colors.white : AppColors.success,
+                        ),
                         label: Text(
-                          slot,
+                          _preferEcoEv
+                              ? 'Xe điện Xanh (Eco EV • -48g CO₂/km)'
+                              : 'Ưu tiên Xe điện Xanh (Eco EV)',
                           style: TextStyle(
-                            fontSize: 11.5,
+                            fontSize: 11,
                             fontWeight: FontWeight.w800,
-                            color: isSlotSelected
+                            color: _preferEcoEv ? Colors.white : AppColors.ink,
+                          ),
+                        ),
+                        selected: _preferEcoEv,
+                        selectedColor: AppColors.success,
+                        onSelected: (v) => _rebuildCustomerUi(() {
+                          _preferEcoEv = v;
+                        }),
+                      ),
+                      FilterChip(
+                        visualDensity: VisualDensity.compact,
+                        avatar: Icon(
+                          Icons.park_rounded,
+                          size: 15,
+                          color: _greenFundContributed
+                              ? Colors.white
+                              : AppColors.success,
+                        ),
+                        label: Text(
+                          'Góp 1.000đ Quỹ Xanh',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: _greenFundContributed
                                 ? Colors.white
                                 : AppColors.ink,
                           ),
                         ),
-                        selected: isSlotSelected,
-                        selectedColor: AppColors.violet,
-                        onSelected: (_) => _rebuildCustomerUi(
-                          () => _scheduledDeliverySlot = slot,
+                        selected: _greenFundContributed,
+                        selectedColor: const Color(0xFF059669),
+                        onSelected: (v) => _rebuildCustomerUi(() {
+                          _greenFundContributed = v;
+                        }),
+                      ),
+                      FilterChip(
+                        visualDensity: VisualDensity.compact,
+                        avatar: Icon(
+                          Icons.event_available_rounded,
+                          size: 15,
+                          color: _isScheduledDelivery
+                              ? Colors.white
+                              : AppColors.violet,
                         ),
-                      );
-                    }).toList(),
+                        label: Text(
+                          _isScheduledDelivery
+                              ? 'Hẹn khung giờ lấy: $_scheduledDeliverySlot'
+                              : 'Đặt lịch hẹn giờ lấy hàng',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: _isScheduledDelivery
+                                ? Colors.white
+                                : AppColors.ink,
+                          ),
+                        ),
+                        selected: _isScheduledDelivery,
+                        selectedColor: AppColors.violet,
+                        onSelected: (v) =>
+                            _rebuildCustomerUi(() => _isScheduledDelivery = v),
+                      ),
+                    ],
+                  ),
+                  if (_isScheduledDelivery) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children:
+                          const [
+                            '09:00 - 11:00',
+                            '13:00 - 15:00',
+                            '15:00 - 17:00',
+                            '18:00 - 20:00',
+                          ].map((slot) {
+                            final isSlotSelected =
+                                _scheduledDeliverySlot == slot;
+                            return ChoiceChip(
+                              visualDensity: VisualDensity.compact,
+                              label: Text(
+                                slot,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  color: isSlotSelected
+                                      ? Colors.white
+                                      : AppColors.ink,
+                                ),
+                              ),
+                              selected: isSlotSelected,
+                              selectedColor: AppColors.violet,
+                              onSelected: (_) => _rebuildCustomerUi(
+                                () => _scheduledDeliverySlot = slot,
+                              ),
+                            );
+                          }).toList(),
+                    ),
+                  ],
+                ],
               ),
-            ],
-            const SizedBox(height: 18),
+            ),
+            const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               height: 48,

@@ -295,7 +295,7 @@ extension _CustomerGrabFoodViews on _CustomerSubsystemEntryState {
           else
             LayoutBuilder(
               builder: (context, constraints) {
-                final isTwoCol = constraints.maxWidth >= 660;
+                final isTwoCol = constraints.maxWidth >= 500;
                 final cardWidth = isTwoCol
                     ? (constraints.maxWidth - 10) / 2
                     : constraints.maxWidth;
@@ -1712,12 +1712,41 @@ extension _CustomerGrabFoodViews on _CustomerSubsystemEntryState {
                 ),
               ],
             ),
+            const SizedBox(height: 6),
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                const Text(
+                  'Mã giảm phí giao món:',
+                  style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900),
+                ),
+                InkWell(
+                  onTap: () => _openPromoHubAtTab(1),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF7ED),
+                      border: Border.all(color: const Color(0xFFEE4D2D)),
+                    ),
+                    child: const Text(
+                      '🎁 Vòng Xoay / Hộp Mù săn mã →',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFFEE4D2D),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
             if (usableVouchers.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              const Text(
-                'Mã giảm phí giao món:',
-                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w900),
-              ),
               const SizedBox(height: 4),
               Wrap(
                 spacing: 6,

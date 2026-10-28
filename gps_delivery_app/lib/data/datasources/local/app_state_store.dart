@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
@@ -12,6 +13,7 @@ import '../../../core/gps/gps_integrity_validator.dart';
 import '../../../core/gps/grab_food_recommendation_engine.dart';
 import '../../../core/gps/kalman_gps_filter.dart';
 import '../../../core/gps/smart_dispatch_engine.dart';
+import '../../../core/promotions/promo_event_gamification_engine.dart';
 import '../../../core/utils/geo_math.dart';
 import '../../../core/utils/platform_file_and_browser_bridge.dart';
 import '../../../core/utils/security_and_barcode_utils.dart';
@@ -25,6 +27,7 @@ import 'sqlite_offline_queue_datasource.dart';
 
 import '../../models/app_state_records.dart';
 export '../../../core/gps/grab_food_recommendation_engine.dart';
+export '../../../core/promotions/promo_event_gamification_engine.dart';
 export '../../models/app_state_records.dart';
 
 part 'app_state_seed_and_hydration.dart';

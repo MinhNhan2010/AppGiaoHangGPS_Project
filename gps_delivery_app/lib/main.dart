@@ -58,7 +58,10 @@ class GpsDeliveryApp extends StatelessWidget {
         },
         initialRoute:
             initialRoute ??
-            (Uri.base.path == '/admin' || Uri.base.path == '/admin/'
+            (Uri.base.path == '/admin' ||
+                    Uri.base.path == '/admin/' ||
+                    Uri.base.fragment == '/admin' ||
+                    Uri.base.fragment == '/admin/'
                 ? '/admin'
                 : (Uri.base.fragment.startsWith('/track')
                       ? Uri.base.fragment

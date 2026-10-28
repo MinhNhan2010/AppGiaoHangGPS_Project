@@ -22,6 +22,7 @@ part 'customer_auth_and_address_views.dart';
 part 'customer_order_and_pricing_views.dart';
 part 'customer_history_and_profile_views.dart';
 part 'customer_grab_food_views.dart';
+part 'customer_promo_events_views.dart';
 
 /// Phân hệ Khách hàng (Customer App) - 14 màn hình chuẩn thiết kế gốc (uc02..uc12, uc41, uc42)
 class CustomerSubsystemEntry extends StatefulWidget {
@@ -133,6 +134,13 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   bool _foodGreenFund = false;
   String? _selectedFoodVoucherCode;
 
+  // Trạng thái Sự kiện Khuyến mãi, Vòng Xoay & Hộp Mù (Shopee × Grab)
+  int _selectedPromoHubTabIndex = 0;
+
+  // Trạng thái thu gọn các mục nâng cao trong biểu mẫu Tạo đơn
+  bool _expandMultiStopSection = false;
+  bool _expandInsuranceSection = false;
+
   static const List<String> _screenTitles = [
     'Trang chủ',
     'Sổ địa chỉ nhận hàng',
@@ -146,7 +154,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     'Gửi khiếu nại & Hỗ trợ',
     'Hồ sơ cá nhân',
     'Trung tâm thông báo',
-    'Kho mã ưu đãi & Khuyến mãi',
+    'Ưu đãi & Săn thưởng (Shopee × Grab)',
     'Ăn uống & Gợi ý (GrabFood)',
   ];
 
@@ -250,42 +258,39 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
     super.dispose();
   }
 
-  // 4-tab bottom navigation giống hệt uc03, uc06, uc41, uc42:
-  // 0: Trang chủ | 1: Đơn hàng | 2: Thông báo | 3: Hồ sơ
+  // Thanh điều hướng đáy 5 tab phong cách Super-App (Grab / Be / Xanh SM):
+  // 0: Trang chủ | 1: Giao hàng | 2: Ăn uống | 3: Đơn hàng | 4: Hồ sơ
   int _bottomNavIndexForScreen(int screenIdx) {
-    if (screenIdx == 0 ||
-        screenIdx == 2 ||
-        screenIdx == 3 ||
-        screenIdx == 1 ||
-        screenIdx == 12 ||
-        screenIdx == 13) {
-      return 0; // Trang chủ & Đặt đơn
-    }
+    if (screenIdx == 0) return 0;
+    if (screenIdx == 2 || screenIdx == 3) return 1;
+    if (screenIdx == 13) return 2;
     if (screenIdx == 4 ||
         screenIdx == 5 ||
-        screenIdx == 7 ||
         screenIdx == 6 ||
+        screenIdx == 7 ||
         screenIdx == 8 ||
         screenIdx == 9) {
-      return 1; // Đơn hàng & Theo dõi GPS
+      return 3;
     }
-    if (screenIdx == 11) return 2; // Thông báo
-    return 3; // Hồ sơ (10)
+    return 4; // Hồ sơ (10), Sổ địa chỉ (1), Thông báo (11), Ưu đãi (12)
   }
 
   void _onBottomNavTapped(int navIdx) {
     setState(() {
       switch (navIdx) {
         case 0:
-          _selectedScreenIndex = 0; // Trang chủ tổng quan
+          _selectedScreenIndex = 0; // Trang chủ Super-App
           break;
         case 1:
-          _selectedScreenIndex = 7; // Lịch sử đơn hàng
+          _selectedScreenIndex = 2; // Đặt giao hàng
           break;
         case 2:
-          _selectedScreenIndex = 11; // Thông báo
+          _selectedScreenIndex = 13; // Ăn uống GrabFood
           break;
         case 3:
+          _selectedScreenIndex = 7; // Đơn hàng của tôi
+          break;
+        case 4:
           _selectedScreenIndex = 10; // Hồ sơ cá nhân
           break;
       }
@@ -359,15 +364,75 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   }
 
   Widget _buildCustomerStudioSidebar(double sidebarWidth) {
-    const menuItems = <(IconData, String, int)>[
-      (Icons.home_outlined, 'Trang chủ', 0),
-      (Icons.restaurant_menu_rounded, 'Ăn uống (GrabFood)', 13),
-      (Icons.add_box_outlined, 'Tạo đơn hàng mới', 2),
-      (Icons.receipt_long_outlined, 'Đơn hàng', 7),
-      (Icons.bookmarks_outlined, 'Sổ địa chỉ nhận hàng', 1),
-      (Icons.local_offer_outlined, 'Ưu đãi', 12),
-      (Icons.notifications_none_rounded, 'Trung tâm thông báo', 11),
-      (Icons.person_outline_rounded, 'Hồ sơ cá nhân', 10),
+    final unreadNotis = _store.customerNotifications
+        .where((n) => !n.isRead)
+        .length;
+    final usableVouchers = _store.vouchers.where((v) => v.isUsable).length;
+    final cartQty = _grabFoodCart.fold<int>(0, (s, e) => s + e.quantity);
+    final activeOrdersCount = _store.customerOrders
+        .where(
+          (o) =>
+              o.status != OrderStatus.delivered &&
+              o.status != OrderStatus.cancelled &&
+              o.paymentStatus != 'RETURNED',
+        )
+        .length;
+
+    final menuGroups = <(String, List<(IconData, String, int, String?, Color?)>)>[
+      (
+        'DỊCH VỤ CHÍNH',
+        [
+          (Icons.home_outlined, 'Trang chủ', 0, null, null),
+          (Icons.add_box_outlined, 'Tạo đơn hàng mới', 2, null, null),
+          (
+            Icons.restaurant_menu_rounded,
+            'Ăn uống (GrabFood)',
+            13,
+            cartQty > 0 ? '$cartQty' : 'MỚI',
+            const Color(0xFF00B14F),
+          ),
+        ],
+      ),
+      (
+        'ĐƠN HÀNG & BẢN ĐỒ',
+        [
+          (
+            Icons.receipt_long_outlined,
+            'Đơn hàng',
+            7,
+            activeOrdersCount > 0 ? '$activeOrdersCount' : null,
+            AppColors.acid,
+          ),
+          (
+            Icons.my_location_rounded,
+            'Theo dõi hành trình GPS',
+            4,
+            null,
+            null,
+          ),
+          (Icons.bookmarks_outlined, 'Sổ địa chỉ nhận hàng', 1, null, null),
+        ],
+      ),
+      (
+        'ƯU ĐÃI & CÁ NHÂN',
+        [
+          (
+            Icons.redeem_rounded,
+            'Săn thưởng & Ưu đãi',
+            12,
+            usableVouchers > 0 ? '$usableVouchers' : 'HOT',
+            const Color(0xFFEE4D2D),
+          ),
+          (
+            Icons.notifications_none_rounded,
+            'Trung tâm thông báo',
+            11,
+            unreadNotis > 0 ? '$unreadNotis' : null,
+            AppColors.pink,
+          ),
+          (Icons.person_outline_rounded, 'Hồ sơ cá nhân', 10, null, null),
+        ],
+      ),
     ];
 
     return Container(
@@ -382,7 +447,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 16, 18),
+              padding: const EdgeInsets.fromLTRB(20, 18, 16, 16),
               child: Row(
                 children: [
                   Container(
@@ -413,13 +478,15 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                           ),
                         ),
                         Text(
-                          'GIAO HÀNG SIÊU TỐC',
+                          'SUPER-APP GIAO NHẬN & ẨM THỰC',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: AppColors.acid,
-                            fontSize: 9.5,
+                            fontSize: 9.0,
                             fontWeight: FontWeight.w800,
                             fontFamily: 'Consolas',
-                            letterSpacing: 0.8,
+                            letterSpacing: 0.6,
                           ),
                         ),
                       ],
@@ -429,77 +496,120 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               ),
             ),
             const Divider(color: AppColors.techLine, height: 1),
-            const SizedBox(height: 8),
             Expanded(
               child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    ...menuItems.map((item) {
-                      final selected =
-                          _selectedScreenIndex == item.$3 ||
-                          (item.$3 == 2 && _selectedScreenIndex == 3) ||
-                          (item.$3 == 4 &&
-                              (_selectedScreenIndex == 5 ||
-                                  _selectedScreenIndex == 6 ||
-                                  _selectedScreenIndex == 8 ||
-                                  _selectedScreenIndex == 9));
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 2,
-                        ),
-                        child: InkWell(
-                          onTap: () =>
-                              setState(() => _selectedScreenIndex = item.$3),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 11,
-                            ),
-                            decoration: BoxDecoration(
-                              color: selected
-                                  ? AppColors.violet.withValues(alpha: 0.25)
-                                  : Colors.transparent,
-                              border: selected
-                                  ? const Border(
-                                      left: BorderSide(
-                                        color: AppColors.acid,
-                                        width: 4.0,
-                                      ),
-                                    )
-                                  : null,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  item.$1,
-                                  size: 19,
-                                  color: selected
-                                      ? AppColors.acid
-                                      : AppColors.techMuted,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    item.$2,
-                                    style: TextStyle(
-                                      color: selected
-                                          ? Colors.white
-                                          : AppColors.techMuted,
-                                      fontSize: 13,
-                                      fontWeight: selected
-                                          ? FontWeight.w800
-                                          : FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
+                    for (var gIdx = 0; gIdx < menuGroups.length; gIdx++) ...[
+                      if (gIdx > 0) const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 4, 14, 4),
+                        child: Text(
+                          menuGroups[gIdx].$1,
+                          style: const TextStyle(
+                            color: AppColors.techMuted,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                            fontFamily: 'Consolas',
+                            letterSpacing: 0.9,
                           ),
                         ),
-                      );
-                    }),
+                      ),
+                      ...menuGroups[gIdx].$2.map((item) {
+                        final selected =
+                            _selectedScreenIndex == item.$3 ||
+                            (item.$3 == 2 && _selectedScreenIndex == 3) ||
+                            (item.$3 == 4 &&
+                                (_selectedScreenIndex == 5 ||
+                                    _selectedScreenIndex == 6 ||
+                                    _selectedScreenIndex == 8 ||
+                                    _selectedScreenIndex == 9));
+                        final badgeText = item.$4;
+                        final badgeColor = item.$5 ?? AppColors.acid;
+                        final useLightBadgeText =
+                            badgeColor != AppColors.acid;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 1.5,
+                          ),
+                          child: InkWell(
+                            onTap: () =>
+                                setState(() => _selectedScreenIndex = item.$3),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 9.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? AppColors.violet.withValues(alpha: 0.25)
+                                    : Colors.transparent,
+                                border: selected
+                                    ? const Border(
+                                        left: BorderSide(
+                                          color: AppColors.acid,
+                                          width: 4.0,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    item.$1,
+                                    size: 18,
+                                    color: selected
+                                        ? AppColors.acid
+                                        : AppColors.techMuted,
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Text(
+                                      item.$2,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: selected
+                                            ? Colors.white
+                                            : AppColors.techMuted,
+                                        fontSize: 12.5,
+                                        fontWeight: selected
+                                            ? FontWeight.w800
+                                            : FontWeight.w500,
+                                      ),
+                                    ),
+                                  ),
+                                  if (badgeText != null) ...[
+                                    const SizedBox(width: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 5,
+                                        vertical: 1.5,
+                                      ),
+                                      color: badgeColor,
+                                      child: Text(
+                                        badgeText,
+                                        style: TextStyle(
+                                          color: useLightBadgeText
+                                              ? Colors.white
+                                              : AppColors.ink,
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w900,
+                                          fontFamily: 'Consolas',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
                   ],
                 ),
               ),
@@ -537,7 +647,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
   Widget _buildCustomerWhiteTopBar() {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showProfileText = constraints.maxWidth >= 720;
+        final showProfileText = constraints.maxWidth >= 920;
         final isCompactBar = constraints.maxWidth < 600;
         return Container(
           height: 64,
@@ -570,6 +680,68 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   ),
                 ),
               ),
+              if (constraints.maxWidth >= 1100 &&
+                  _selectedScreenIndex != 12) ...[
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFFEE4D2D),
+                    side: const BorderSide(
+                      color: Color(0xFFEE4D2D),
+                      width: 1.3,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                  ),
+                  onPressed: () => setState(() => _selectedScreenIndex = 12),
+                  icon: const Icon(
+                    Icons.casino_outlined,
+                    size: 15,
+                    color: Color(0xFFEE4D2D),
+                  ),
+                  label: const Text(
+                    'Săn quà',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              if (constraints.maxWidth >= 680 &&
+                  _selectedScreenIndex != 13) ...[
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF00853B),
+                    side: const BorderSide(
+                      color: Color(0xFF00B14F),
+                      width: 1.3,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 11,
+                      vertical: 8,
+                    ),
+                  ),
+                  onPressed: () => setState(() => _selectedScreenIndex = 13),
+                  icon: const Icon(
+                    Icons.restaurant_menu_rounded,
+                    size: 15,
+                    color: Color(0xFF00B14F),
+                  ),
+                  label: Text(
+                    _grabFoodCart.isEmpty
+                        ? 'Ăn uống'
+                        : 'Giỏ (${_grabFoodCart.fold<int>(0, (s, e) => s + e.quantity)})',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
               if (_selectedScreenIndex != 0 && _selectedScreenIndex != 2) ...[
                 FilledButton.icon(
                   style: FilledButton.styleFrom(
@@ -650,32 +822,39 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                     ),
                     if (showProfileText) ...[
                       const SizedBox(width: 8),
-                      Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _store.customerFullName,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w900,
-                              fontSize: 12.5,
-                              color: AppColors.ink,
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 150),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _store.customerFullName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 12.5,
+                                color: AppColors.ink,
+                              ),
                             ),
-                          ),
-                          Text(
-                            (_store.customerEmail.isNotEmpty &&
-                                    !_store.customerEmail.endsWith(
-                                      '@giaohanggps.vn',
-                                    ))
-                                ? _store.customerEmail
-                                : _store.displayCustomerPhone,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: AppColors.textSecondary,
-                              fontFamily: 'Consolas',
+                            Text(
+                              (_store.customerEmail.isNotEmpty &&
+                                      !_store.customerEmail.endsWith(
+                                        '@giaohanggps.vn',
+                                      ))
+                                  ? _store.customerEmail
+                                  : _store.displayCustomerPhone,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: AppColors.textSecondary,
+                                fontFamily: 'Consolas',
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ],
                   ],
@@ -690,8 +869,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   bool get _isCustomerSubScreen =>
       _selectedScreenIndex != 0 &&
+      _selectedScreenIndex != 2 &&
+      _selectedScreenIndex != 13 &&
       _selectedScreenIndex != 7 &&
-      _selectedScreenIndex != 11 &&
       _selectedScreenIndex != 10;
 
   void _navigateBackFromCustomerSubScreen() {
@@ -711,8 +891,11 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   Widget _buildCustomerTopAppBar(BuildContext context) {
     final activeOrder = _store.activeCustomerOrderRecord;
+    final unreadNotis = _store.customerNotifications
+        .where((n) => !n.isRead)
+        .length;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: AppColors.techBg,
         border: Border.all(color: AppColors.ink, width: 1.5),
@@ -734,18 +917,18 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               icon: const Icon(
                 Icons.arrow_back_rounded,
                 color: AppColors.acid,
-                size: 22,
+                size: 21,
               ),
             ),
             const SizedBox(width: 4),
           ] else ...[
             const Animated3dIconBadge(
               style: Icon3dStyle.scooterExpress,
-              size: 38,
+              size: 36,
               showRadarPulse: false,
               animateIdle: false,
             ),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
           ],
           Expanded(
             child: Column(
@@ -753,7 +936,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               children: [
                 Text(
                   _selectedScreenIndex == 0
-                      ? 'VỊ TRÍ LẤY HÀNG • ${_store.customerDefaultAddress.isNotEmpty ? _store.customerDefaultAddress : "Chưa chọn"}'
+                      ? 'VỊ TRÍ • ${_store.customerDefaultAddress.isNotEmpty ? _store.customerDefaultAddress : "Chưa chọn"}'
                       : 'GHST EXPRESS • KHÁCH HÀNG',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -762,7 +945,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                     fontSize: 9.5,
                     fontWeight: FontWeight.w900,
                     fontFamily: 'Consolas',
-                    letterSpacing: 0.6,
+                    letterSpacing: 0.5,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -772,7 +955,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 15,
+                    fontSize: 14.5,
                     fontWeight: FontWeight.w900,
                     letterSpacing: -0.4,
                   ),
@@ -784,7 +967,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: AppColors.techMuted,
-                      fontSize: 10.5,
+                      fontSize: 10.0,
                       fontWeight: FontWeight.w700,
                       fontFamily: 'Consolas',
                     ),
@@ -792,8 +975,44 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
               ],
             ),
           ),
+          InkWell(
+            onTap: () => setState(() => _selectedScreenIndex = 11),
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.notifications_none_rounded,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                if (unreadNotis > 0)
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
+                      color: AppColors.pink,
+                      child: Text(
+                        '$unreadNotis',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
           if (widget.onLogout != null) ...[
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.white,
@@ -803,15 +1022,16 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   borderRadius: BorderRadius.zero,
                 ),
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
+                  horizontal: 8,
+                  vertical: 7,
                 ),
+                minimumSize: Size.zero,
               ),
               onPressed: widget.onLogout,
-              icon: const Icon(Icons.logout_rounded, size: 14),
+              icon: const Icon(Icons.logout_rounded, size: 13),
               label: const Text(
                 'Đăng xuất',
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+                style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800),
               ),
             ),
           ],
@@ -822,15 +1042,17 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
 
   Widget _buildDesignCustomerBottomBar() {
     final activeNav = _bottomNavIndexForScreen(_selectedScreenIndex);
+    final cartQty = _grabFoodCart.fold<int>(0, (s, e) => s + e.quantity);
     const items = [
       (Icons.home_rounded, 'Trang chủ'),
-      (Icons.inventory_2_outlined, 'Đơn hàng'),
-      (Icons.notifications_none_rounded, 'Thông báo'),
+      (Icons.local_shipping_outlined, 'Giao hàng'),
+      (Icons.restaurant_menu_rounded, 'Ăn uống'),
+      (Icons.receipt_long_outlined, 'Đơn hàng'),
       (Icons.person_outline_rounded, 'Hồ sơ'),
     ];
 
     return Container(
-      height: 64,
+      height: 62,
       decoration: BoxDecoration(
         color: AppColors.techBg,
         border: Border.all(color: AppColors.ink, width: 1.5),
@@ -863,9 +1085,8 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                     Stack(
                       clipBehavior: Clip.none,
                       children: [
-                        Icon(items[idx].$1, color: color, size: 22),
-                        if (idx == 2 &&
-                            _store.customerNotifications.any((n) => !n.isRead))
+                        Icon(items[idx].$1, color: color, size: 20),
+                        if (idx == 2 && cartQty > 0)
                           Positioned(
                             right: -8,
                             top: -4,
@@ -874,9 +1095,9 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                                 horizontal: 4,
                                 vertical: 1,
                               ),
-                              color: AppColors.pink,
+                              color: const Color(0xFF00B14F),
                               child: Text(
-                                '${_store.customerNotifications.where((n) => !n.isRead).length}',
+                                '$cartQty',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 9,
@@ -887,12 +1108,14 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                           ),
                       ],
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     Text(
                       items[idx].$2,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: color,
-                        fontSize: 11.5,
+                        fontSize: 10.5,
                         fontWeight: selected
                             ? FontWeight.w900
                             : FontWeight.w600,
@@ -964,11 +1187,593 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
         ? selectedActive
         : (activeOrders.isNotEmpty ? activeOrders.first : null);
     final usableVoucherCount = _store.vouchers.where((v) => v.isUsable).length;
+    final cartTotalItems = _grabFoodCart.fold<int>(
+      0,
+      (sum, e) => sum + e.quantity,
+    );
     final currentPickupSummary = _store.liveDeviceAddress.trim().isNotEmpty
         ? _store.liveDeviceAddress.trim()
         : (_store.customerDefaultAddress.isNotEmpty
               ? _store.customerDefaultAddress
               : 'Chưa chọn điểm lấy hàng');
+
+    Widget buildServiceSuperAppGrid() {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.ink, width: 1.5),
+          boxShadow: const [
+            BoxShadow(color: AppColors.ink, offset: Offset(3, 3), blurRadius: 0),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.apps_rounded,
+                  size: 17,
+                  color: AppColors.violet,
+                ),
+                const SizedBox(width: 6),
+                const Expanded(
+                  child: Text(
+                    'Dịch vụ Giao nhận & Ăn uống nhanh',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                ),
+                Text(
+                  '6 dịch vụ trực tuyến',
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    fontFamily: 'Consolas',
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (context, gridConstraints) {
+                final columns = gridConstraints.maxWidth >= 520 ? 3 : 2;
+                final spacing = 10.0;
+                final cardWidth =
+                    (gridConstraints.maxWidth - (spacing * (columns - 1))) /
+                    columns;
+                final baseScale = (_store.baseFareConfig / 25000.0).clamp(
+                  0.4,
+                  5.0,
+                );
+                double scaledBase(DeliveryServiceType s) =>
+                    (s.defaultBaseFare * baseScale).roundToDouble();
+
+                final tiles =
+                    <
+                      (
+                        String,
+                        String,
+                        IconData,
+                        Color,
+                        DeliveryServiceType?,
+                        bool,
+                      )
+                    >[
+                      (
+                        'Giao nhanh 30p',
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.express30m))}',
+                        Icons.bolt_rounded,
+                        AppColors.pink,
+                        DeliveryServiceType.express30m,
+                        false,
+                      ),
+                      (
+                        'Ghép đơn 2H',
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
+                        Icons.hub_outlined,
+                        const Color(0xFF0EA5E9),
+                        DeliveryServiceType.sameDay2h,
+                        false,
+                      ),
+                      (
+                        'Tiêu chuẩn 2h',
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.standard))}',
+                        Icons.inventory_2_outlined,
+                        AppColors.violet,
+                        DeliveryServiceType.standard,
+                        false,
+                      ),
+                      (
+                        'Tiết kiệm 4h',
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.saving))}',
+                        Icons.savings_outlined,
+                        AppColors.success,
+                        DeliveryServiceType.saving,
+                        false,
+                      ),
+                      (
+                        'Xe tải nhẹ',
+                        'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.truck))}',
+                        Icons.local_shipping_outlined,
+                        AppColors.ink,
+                        DeliveryServiceType.truck,
+                        false,
+                      ),
+                      (
+                        'Ăn uống GrabFood',
+                        cartTotalItems > 0
+                            ? 'Giỏ: $cartTotalItems món • Đặt ngay'
+                            : 'Gợi ý quán ngon gần bạn',
+                        Icons.restaurant_menu_rounded,
+                        const Color(0xFF00B14F),
+                        null,
+                        true,
+                      ),
+                    ];
+
+                return Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: tiles.map((item) {
+                    final isFoodTile = item.$6;
+                    final isCurrentService =
+                        !isFoodTile &&
+                        _selectedService == item.$5 &&
+                        !_isScheduledDelivery;
+                    return SizedBox(
+                      width: cardWidth,
+                      child: InkWell(
+                        onTap: () => setState(() {
+                          if (isFoodTile) {
+                            _selectedScreenIndex = 13;
+                          } else {
+                            _selectedService = item.$5!;
+                            _isScheduledDelivery = false;
+                            _selectedScreenIndex = 2;
+                          }
+                        }),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: isFoodTile
+                                ? const Color(0xFFF0FDF4)
+                                : Colors.white,
+                            border: Border.all(
+                              color: (isCurrentService || isFoodTile)
+                                  ? item.$4
+                                  : AppColors.ink,
+                              width: (isCurrentService || isFoodTile)
+                                  ? 1.6
+                                  : 1.15,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                color: item.$4.withValues(alpha: 0.14),
+                                child: Icon(item.$3, color: item.$4, size: 18),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      item.$1,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 12.0,
+                                        fontWeight: FontWeight.w900,
+                                        color: AppColors.ink,
+                                      ),
+                                    ),
+                                    Text(
+                                      item.$2,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.w700,
+                                        fontFamily: isFoodTile
+                                            ? null
+                                            : 'Consolas',
+                                        color: isFoodTile
+                                            ? const Color(0xFF00853B)
+                                            : AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget buildCompactHomeMapCard({required double mapHeight}) {
+      final realGpsLoc = _store.liveDeviceLocation;
+      final homeDefaultLoc =
+          realGpsLoc ??
+          _store.customerSavedAddresses
+              .where(
+                (address) =>
+                    address.fullAddress == _store.customerDefaultAddress,
+              )
+              .firstOrNull
+              ?.location;
+      final hasLiveOrd = primaryActiveOrder != null;
+      final autoPreferRealGps =
+          realGpsLoc != null &&
+          hasLiveOrd &&
+          GeoMath.distanceMeters(
+                realGpsLoc,
+                primaryActiveOrder.pickupLocation,
+              ) >
+              5000.0;
+      final showOrderRouteOnHome =
+          hasLiveOrd &&
+          (_homeShowActiveOrderRouteOverride ?? !autoPreferRealGps);
+      final liveRemMeters = showOrderRouteOnHome
+          ? _store.distanceFromDriverToOrderDropoffMeters(primaryActiveOrder)
+          : 0.0;
+      final liveProgress =
+          showOrderRouteOnHome &&
+              primaryActiveOrder.distanceMeters > 0 &&
+              primaryActiveOrder.status != OrderStatus.searching
+          ? (1.0 -
+                    (liveRemMeters / primaryActiveOrder.distanceMeters).clamp(
+                      0.0,
+                      1.0,
+                    ))
+                .clamp(0.05, 0.98)
+          : 0.0;
+      final homeAddressSubtitle = realGpsLoc != null
+          ? (_store.liveDeviceAddress.trim().isNotEmpty
+                ? '${_store.liveDeviceAddress.trim()} • Chạm bản đồ để chọn điểm giao'
+                : 'Chạm vào điểm bất kỳ trên bản đồ để chọn nơi giao hàng')
+          : 'Chạm vào điểm bất kỳ trên bản đồ để chọn nơi giao hàng';
+
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.ink, width: 1.5),
+          boxShadow: const [
+            BoxShadow(color: AppColors.ink, offset: Offset(3, 3), blurRadius: 0),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        showOrderRouteOnHome
+                            ? 'Hành trình trực tiếp • ${primaryActiveOrder.trackingCode}'
+                            : 'Bản đồ định vị trực tiếp',
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      Text(
+                        showOrderRouteOnHome
+                            ? '${primaryActiveOrder.pickupAddress} → ${primaryActiveOrder.dropoffAddress}'
+                            : homeAddressSubtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    if (hasLiveOrd)
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                        ),
+                        onPressed: () async {
+                          if (showOrderRouteOnHome) {
+                            if (_store.liveDeviceLocation == null) {
+                              await _store.acquireCustomerDeviceGps();
+                            }
+                            if (!mounted) return;
+                            setState(
+                              () => _homeShowActiveOrderRouteOverride = false,
+                            );
+                          } else {
+                            setState(
+                              () => _homeShowActiveOrderRouteOverride = true,
+                            );
+                          }
+                        },
+                        icon: Icon(
+                          showOrderRouteOnHome
+                              ? Icons.my_location_rounded
+                              : Icons.route_rounded,
+                          size: 14,
+                        ),
+                        label: Text(
+                          showOrderRouteOnHome
+                              ? 'Vị trí của tôi'
+                              : 'Xem đơn ${primaryActiveOrder.trackingCode}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () => setState(
+                        () => _selectedScreenIndex = showOrderRouteOnHome
+                            ? 4
+                            : 2,
+                      ),
+                      icon: Icon(
+                        showOrderRouteOnHome
+                            ? Icons.open_in_full_rounded
+                            : Icons.edit_location_alt_outlined,
+                        size: 15,
+                      ),
+                      label: Text(
+                        showOrderRouteOnHome ? 'Chi tiết' : 'Mở đặt đơn',
+                        style: const TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Map3dPerspectiveWidget(
+              height: mapHeight,
+              showTopBanner: showOrderRouteOnHome,
+              mode: showOrderRouteOnHome
+                  ? MapViewMode.customerLiveTracking
+                  : MapViewMode.customerPreview,
+              is3dMode: _store.isMap3dEnabled,
+              speedKmh:
+                  showOrderRouteOnHome &&
+                      primaryActiveOrder.status == OrderStatus.inTransit
+                  ? _store.currentSpeedKmh
+                  : 0.0,
+              onToggle3d: _store.toggleMap3d,
+              driverLocation: _store.verifiedLocationForOrder(
+                primaryActiveOrder,
+              ),
+              progressFraction: liveProgress,
+              singlePinPoint: showOrderRouteOnHome ? null : homeDefaultLoc,
+              singlePinLabel: realGpsLoc != null
+                  ? 'Vị trí của bạn'
+                  : 'Điểm lấy hàng',
+              routePoints: showOrderRouteOnHome
+                  ? (_store.activeRoutePolyline.length >= 2 &&
+                            (_store.selectedDriverOrderCode ==
+                                    primaryActiveOrder.trackingCode ||
+                                _store.orders.firstOrNull?.trackingCode ==
+                                    primaryActiveOrder.trackingCode)
+                        ? _store.activeRoutePolyline
+                        : SmartDispatchEngine.generateRoutePolyline(
+                            primaryActiveOrder.pickupLocation,
+                            primaryActiveOrder.dropoffLocation,
+                            segments: 10,
+                          ))
+                  : const <GeoPoint>[],
+              pickupLabel: '[A] Điểm lấy',
+              dropoffLabel: '[B] Điểm giao',
+              nextTurnInstruction: showOrderRouteOnHome
+                  ? '${primaryActiveOrder.status.displayName} • Còn ${(liveRemMeters / 1000).toStringAsFixed(1)} km'
+                  : '',
+              roadName: showOrderRouteOnHome
+                  ? '${primaryActiveOrder.pickupAddress} → ${primaryActiveOrder.dropoffAddress}'
+                  : '',
+              onTapGeoPoint: showOrderRouteOnHome
+                  ? null
+                  : (pt) async {
+                      final addr =
+                          await SmartDispatchEngine.reverseGeocodeCoordinate(
+                            pt,
+                          );
+                      if (!mounted) return;
+                      setState(() {
+                        _pinnedDropoffLocation = pt;
+                        _dropoffCtrl.text = addr;
+                        _osrmPreviewPoints = null;
+                        _osrmDistMeters = null;
+                        _osrmDurationSec = null;
+                        _selectedScreenIndex = 2;
+                      });
+                    },
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget? buildRecentOrdersCard() {
+      if (recentOrders.isEmpty) return null;
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: AppColors.ink, width: 1.4),
+          boxShadow: const [
+            BoxShadow(color: AppColors.ink, offset: Offset(3, 3), blurRadius: 0),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Đơn gần đây ($activeOrdersCount đang giao)',
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  onPressed: () => setState(() => _selectedScreenIndex = 7),
+                  child: const Text(
+                    'Xem tất cả →',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            ...recentOrders.map((ord) {
+              return Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.paper,
+                    border: Border.all(color: AppColors.ink, width: 1.0),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Text(
+                                  ord.trackingCode,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    fontSize: 12,
+                                    fontFamily: 'Consolas',
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  color: AppColors.acid,
+                                  child: Text(
+                                    ord.status.displayName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w900,
+                                      color: AppColors.ink,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${ord.pickupAddress} → ${ord.dropoffAddress}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11.5,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          minimumSize: Size.zero,
+                        ),
+                        onPressed: () {
+                          _store.selectCustomerOrder(ord.trackingCode);
+                          setState(() => _selectedScreenIndex = 4);
+                        },
+                        child: const Text(
+                          'Xem',
+                          style: TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
+        ),
+      );
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -998,13 +1803,13 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Container(
-                      width: 34,
-                      height: 34,
+                      width: 36,
+                      height: 36,
                       color: AppColors.pink,
                       child: const Icon(
                         Icons.location_on_rounded,
                         color: Colors.white,
-                        size: 19,
+                        size: 20,
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1015,7 +1820,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Bạn muốn giao hàng đến đâu?',
+                              'Bạn muốn giao hàng hay đặt món đến đâu?',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -1027,7 +1832,7 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
                             Text(
                               _dropoffCtrl.text.trim().isNotEmpty
                                   ? 'Điểm nhận: ${_dropoffCtrl.text.trim()}'
-                                  : 'Lấy tại: $currentPickupSummary',
+                                  : 'Vị trí hiện tại: $currentPickupSummary',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
@@ -1219,493 +2024,62 @@ class _CustomerSubsystemEntryState extends State<CustomerSubsystemEntry> {
           ),
         ],
         const SizedBox(height: 12),
-        Builder(
-          builder: (context) {
-            final realGpsLoc = _store.liveDeviceLocation;
-            final homeDefaultLoc =
-                realGpsLoc ??
-                _store.customerSavedAddresses
-                    .where(
-                      (address) =>
-                          address.fullAddress == _store.customerDefaultAddress,
-                    )
-                    .firstOrNull
-                    ?.location;
-            final hasLiveOrd = primaryActiveOrder != null;
-            final autoPreferRealGps =
-                realGpsLoc != null &&
-                hasLiveOrd &&
-                GeoMath.distanceMeters(
-                      realGpsLoc,
-                      primaryActiveOrder.pickupLocation,
-                    ) >
-                    5000.0;
-            final showOrderRouteOnHome =
-                hasLiveOrd &&
-                (_homeShowActiveOrderRouteOverride ?? !autoPreferRealGps);
-            final liveRemMeters = showOrderRouteOnHome
-                ? _store.distanceFromDriverToOrderDropoffMeters(
-                    primaryActiveOrder,
-                  )
-                : 0.0;
-            final liveProgress =
-                showOrderRouteOnHome &&
-                    primaryActiveOrder.distanceMeters > 0 &&
-                    primaryActiveOrder.status != OrderStatus.searching
-                ? (1.0 -
-                          (liveRemMeters / primaryActiveOrder.distanceMeters)
-                              .clamp(0.0, 1.0))
-                      .clamp(0.05, 0.98)
-                : 0.0;
-            final homeAddressSubtitle = realGpsLoc != null
-                ? (_store.liveDeviceAddress.trim().isNotEmpty
-                      ? '${_store.liveDeviceAddress.trim()} • Chạm bản đồ để chọn điểm giao'
-                      : 'Chạm vào điểm bất kỳ trên bản đồ để chọn nơi giao hàng')
-                : 'Chạm vào điểm bất kỳ trên bản đồ để chọn nơi giao hàng';
-            return Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: AppColors.ink, width: 1.5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: AppColors.ink,
-                    offset: Offset(3, 3),
-                    blurRadius: 0,
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 10,
-                    runSpacing: 4,
-                    children: [
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 560),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              showOrderRouteOnHome
-                                  ? 'Hành trình trực tiếp • ${primaryActiveOrder.trackingCode}'
-                                  : 'Bản đồ định vị trực tiếp',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.ink,
-                              ),
-                            ),
-                            Text(
-                              showOrderRouteOnHome
-                                  ? '${primaryActiveOrder.pickupAddress} → ${primaryActiveOrder.dropoffAddress}'
-                                  : homeAddressSubtitle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 11.5,
-                                color: AppColors.textSecondary,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          if (hasLiveOrd)
-                            OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                visualDensity: VisualDensity.compact,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 4,
-                                ),
-                              ),
-                              onPressed: () async {
-                                if (showOrderRouteOnHome) {
-                                  if (_store.liveDeviceLocation == null) {
-                                    await _store.acquireCustomerDeviceGps();
-                                  }
-                                  if (!mounted) return;
-                                  setState(
-                                    () => _homeShowActiveOrderRouteOverride =
-                                        false,
-                                  );
-                                } else {
-                                  setState(
-                                    () => _homeShowActiveOrderRouteOverride =
-                                        true,
-                                  );
-                                }
-                              },
-                              icon: Icon(
-                                showOrderRouteOnHome
-                                    ? Icons.my_location_rounded
-                                    : Icons.route_rounded,
-                                size: 14,
-                              ),
-                              label: Text(
-                                showOrderRouteOnHome
-                                    ? 'Vị trí của tôi'
-                                    : 'Xem đơn ${primaryActiveOrder.trackingCode}',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          TextButton.icon(
-                            style: TextButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                            ),
-                            onPressed: () => setState(
-                              () => _selectedScreenIndex = showOrderRouteOnHome
-                                  ? 4
-                                  : 2,
-                            ),
-                            icon: Icon(
-                              showOrderRouteOnHome
-                                  ? Icons.open_in_full_rounded
-                                  : Icons.edit_location_alt_outlined,
-                              size: 15,
-                            ),
-                            label: Text(
-                              showOrderRouteOnHome ? 'Chi tiết' : 'Mở đặt đơn',
-                              style: const TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Map3dPerspectiveWidget(
-                    height: 410,
-                    showTopBanner: showOrderRouteOnHome,
-                    mode: showOrderRouteOnHome
-                        ? MapViewMode.customerLiveTracking
-                        : MapViewMode.customerPreview,
-                    is3dMode: _store.isMap3dEnabled,
-                    speedKmh:
-                        showOrderRouteOnHome &&
-                            primaryActiveOrder.status == OrderStatus.inTransit
-                        ? _store.currentSpeedKmh
-                        : 0.0,
-                    onToggle3d: _store.toggleMap3d,
-                    driverLocation: _store.verifiedLocationForOrder(
-                      primaryActiveOrder,
-                    ),
-                    progressFraction: liveProgress,
-                    singlePinPoint: showOrderRouteOnHome
-                        ? null
-                        : homeDefaultLoc,
-                    singlePinLabel: realGpsLoc != null
-                        ? 'Vị trí của bạn'
-                        : 'Điểm lấy hàng',
-                    routePoints: showOrderRouteOnHome
-                        ? (_store.activeRoutePolyline.length >= 2 &&
-                                  (_store.selectedDriverOrderCode ==
-                                          primaryActiveOrder.trackingCode ||
-                                      _store.orders.firstOrNull?.trackingCode ==
-                                          primaryActiveOrder.trackingCode)
-                              ? _store.activeRoutePolyline
-                              : SmartDispatchEngine.generateRoutePolyline(
-                                  primaryActiveOrder.pickupLocation,
-                                  primaryActiveOrder.dropoffLocation,
-                                  segments: 10,
-                                ))
-                        : const <GeoPoint>[],
-                    pickupLabel: '[A] Điểm lấy',
-                    dropoffLabel: '[B] Điểm giao',
-                    nextTurnInstruction: showOrderRouteOnHome
-                        ? '${primaryActiveOrder.status.displayName} • Còn ${(liveRemMeters / 1000).toStringAsFixed(1)} km'
-                        : '',
-                    roadName: showOrderRouteOnHome
-                        ? '${primaryActiveOrder.pickupAddress} → ${primaryActiveOrder.dropoffAddress}'
-                        : '',
-                    onTapGeoPoint: showOrderRouteOnHome
-                        ? null
-                        : (pt) async {
-                            final addr =
-                                await SmartDispatchEngine.reverseGeocodeCoordinate(
-                                  pt,
-                                );
-                            if (!mounted) return;
-                            setState(() {
-                              _pinnedDropoffLocation = pt;
-                              _dropoffCtrl.text = addr;
-                              _osrmPreviewPoints = null;
-                              _osrmDistMeters = null;
-                              _osrmDurationSec = null;
-                              _selectedScreenIndex = 2;
-                            });
-                          },
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-        const SizedBox(height: 12),
         LayoutBuilder(
-          builder: (context, constraints) {
-            final isWideGrid = constraints.maxWidth >= 720;
-            final baseScale = (_store.baseFareConfig / 25000.0).clamp(0.4, 5.0);
-            double scaledBase(DeliveryServiceType s) =>
-                (s.defaultBaseFare * baseScale).roundToDouble();
-            final serviceItems = [
-              (
-                'Giao nhanh 30p',
-                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.express30m))}',
-                Icons.bolt_rounded,
-                AppColors.pink,
-                DeliveryServiceType.express30m,
-              ),
-              (
-                'Tiêu chuẩn 2h',
-                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.standard))}',
-                Icons.inventory_2_outlined,
-                AppColors.violet,
-                DeliveryServiceType.standard,
-              ),
-              (
-                'Ghép đơn 2H',
-                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.sameDay2h))}',
-                Icons.hub_outlined,
-                const Color(0xFF0EA5E9),
-                DeliveryServiceType.sameDay2h,
-              ),
-              (
-                'Tiết kiệm 4h',
-                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.saving))}',
-                Icons.savings_outlined,
-                AppColors.success,
-                DeliveryServiceType.saving,
-              ),
-              (
-                'Xe tải nhẹ',
-                'Từ ${CurrencyFormatter.formatVnd(scaledBase(DeliveryServiceType.truck))}',
-                Icons.local_shipping_outlined,
-                AppColors.ink,
-                DeliveryServiceType.truck,
-              ),
-            ];
-            return Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: serviceItems.map((item) {
-                final cardWidth = isWideGrid
-                    ? (constraints.maxWidth - 30) / 4
-                    : (constraints.maxWidth - 10) / 2;
-                final isCurrentService =
-                    _selectedService == item.$5 && !_isScheduledDelivery;
-                return SizedBox(
-                  width: cardWidth,
-                  child: InkWell(
-                    onTap: () => setState(() {
-                      _selectedService = item.$5;
-                      _isScheduledDelivery = false;
-                      _selectedScreenIndex = 2;
-                    }),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(
-                          color: isCurrentService ? item.$4 : AppColors.ink,
-                          width: isCurrentService ? 1.8 : 1.2,
-                        ),
-                      ),
-                      child: Row(
+          builder: (context, homeConstraints) {
+            final isTwoColumn = homeConstraints.maxWidth >= 900;
+            final recentCard = buildRecentOrdersCard();
+            if (isTwoColumn) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                    Expanded(
+                      flex: 7,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Container(
-                            width: 32,
-                            height: 32,
-                            color: item.$4.withValues(alpha: 0.12),
-                            child: Icon(item.$3, color: item.$4, size: 18),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item.$1,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w900,
-                                    color: AppColors.ink,
-                                  ),
-                                ),
-                                Text(
-                                  item.$2,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    fontFamily: 'Consolas',
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                          buildServiceSuperAppGrid(),
+                          const SizedBox(height: 12),
+                          _buildHomePromoEventsBanner(context),
+                          const SizedBox(height: 12),
+                          _buildHomeGrabFoodDiscoveryStrip(context),
                         ],
                       ),
                     ),
-                  ),
-                );
-              }).toList(),
-            );
-          },
-        ),
-        const SizedBox(height: 12),
-        _buildHomeGrabFoodDiscoveryStrip(context),
-        if (recentOrders.isNotEmpty) ...[
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: AppColors.ink, width: 1.2),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
+                    const SizedBox(width: 14),
                     Expanded(
-                      child: Text(
-                        'Đơn gần đây ($activeOrdersCount đang giao)',
-                        style: const TextStyle(
-                          fontSize: 13.5,
-                          fontWeight: FontWeight.w900,
-                          color: AppColors.ink,
-                        ),
-                      ),
-                    ),
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () => setState(() => _selectedScreenIndex = 7),
-                      child: const Text(
-                        'Xem tất cả →',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 11.5,
-                        ),
+                      flex: 5,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          buildCompactHomeMapCard(mapHeight: 330),
+                          if (recentCard != null) ...[
+                            const SizedBox(height: 12),
+                            recentCard,
+                          ],
+                        ],
                       ),
                     ),
                   ],
-                ),
-                ...recentOrders.map((ord) {
-                  return Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.paper,
-                        border: Border.all(color: AppColors.ink, width: 1.0),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Wrap(
-                                  spacing: 6,
-                                  runSpacing: 4,
-                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                  children: [
-                                    Text(
-                                      ord.trackingCode,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w900,
-                                        fontSize: 12,
-                                        fontFamily: 'Consolas',
-                                      ),
-                                    ),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      color: AppColors.acid,
-                                      child: Text(
-                                        ord.status.displayName,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w900,
-                                          color: AppColors.ink,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  '${ord.pickupAddress} → ${ord.dropoffAddress}',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 11.5,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              visualDensity: VisualDensity.compact,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              minimumSize: Size.zero,
-                            ),
-                            onPressed: () {
-                              _store.selectCustomerOrder(ord.trackingCode);
-                              setState(() => _selectedScreenIndex = 4);
-                            },
-                            child: const Text(
-                              'Xem',
-                              style: TextStyle(fontSize: 11),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }),
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  buildServiceSuperAppGrid(),
+                  const SizedBox(height: 12),
+                  _buildHomePromoEventsBanner(context),
+                  const SizedBox(height: 12),
+                  _buildHomeGrabFoodDiscoveryStrip(context),
+                  const SizedBox(height: 12),
+                  buildCompactHomeMapCard(mapHeight: 280),
+                if (recentCard != null) ...[
+                  const SizedBox(height: 12),
+                  recentCard,
+                ],
               ],
-            ),
-          ),
-        ],
+            );
+          },
+        ),
       ],
     );
   }
