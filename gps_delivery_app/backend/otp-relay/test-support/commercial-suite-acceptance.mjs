@@ -7,6 +7,9 @@ export async function testCommercialSuite({ db, as, rpc, operator, merchant, dri
 
   await check('P1-P6 reapplying 20261107_cloud_commercial_suite preserves live orders and verifies deployment schema', async () => {
     await db.query(await readFile(new URL('../../../database/migrations/20261107_cloud_commercial_suite.sql', import.meta.url), 'utf8'));
+    await db.query(await readFile(new URL('../../../database/migrations/20261115_driver_wallet_and_showcase_catalog.sql', import.meta.url), 'utf8'));
+    await db.query(await readFile(new URL('../../../database/migrations/20261116_realtime_dispatch_pricing_and_pod_signature.sql', import.meta.url), 'utf8'));
+    await db.query(await readFile(new URL('../../../database/migrations/20261117_vehicle_classes_and_driver_applications.sql', import.meta.url), 'utf8'));
     const { DEPLOYMENT_SCHEMA_SQL } = await import('../deployment-readiness.mjs');
     const schema = (await db.query(DEPLOYMENT_SCHEMA_SQL)).rows[0];
     for (const [key, value] of Object.entries(schema)) assert.equal(value, true, `schema ${key}`);

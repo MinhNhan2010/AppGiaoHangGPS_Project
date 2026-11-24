@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gps_delivery_app/core/config/feature_flags.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_account_session.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_orders_service.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_session_lease.dart';
 import 'package:gps_delivery_app/presentation/screens/cloud_local_import_screen.dart';
 import 'package:gps_delivery_app/presentation/screens/cloud_orders_screen.dart';
+import 'package:gps_delivery_app/presentation/screens/driver_partner_application_screen.dart';
 import 'package:gps_delivery_app/presentation/screens/marketplace_view.dart';
 import 'package:gps_delivery_app/presentation/widgets/cloud_profile_form.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -99,6 +101,11 @@ class PartnerImportFixture extends CloudOrdersService {
 }
 
 void main() {
+  // Covers the legacy commerce modules, hidden by default while the app
+  // focuses on GPS delivery (see GhstFeatures).
+  setUpAll(() => GhstFeatures.commerceEnabled = true);
+  tearDownAll(() => GhstFeatures.commerceEnabled = false);
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
   Future<CloudAccountSession> session(PartnerImportFixture api) async {
     final s = CloudAccountSession(service: api);
@@ -159,12 +166,23 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('request-merchant')));
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('request-merchant')), findsNothing);
-        expect(find.byKey(const ValueKey('request-driver')), findsOneWidget);
+        expect(find.byKey(const ValueKey('request-driver')), findsNothing);
+        expect(find.byKey(const ValueKey('apply-driver')), findsOneWidget);
         expect(current.approvedRoles, {'customer'});
-        await tester.ensureVisible(
-          find.byKey(const ValueKey('request-driver')),
-        );
-        await tester.tap(find.byKey(const ValueKey('request-driver')));
+        await tester.ensureVisible(find.byKey(const ValueKey('apply-driver')));
+        await tester.tap(find.byKey(const ValueKey('apply-driver')));
+        await tester.pumpAndSettle();
+        // Driver partners now register through the full vehicle/KYC form.
+        expect(find.byType(DriverPartnerApplicationScreen), findsOneWidget);
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        api.memberships.add({
+          'role': 'driver',
+          'state': 'pending',
+          'version': 1,
+          'reason': '',
+        });
+        await current.refresh();
         await tester.pumpAndSettle();
         expect(find.text('Chờ duyệt'), findsNWidgets(2));
         for (final membership in api.memberships) {

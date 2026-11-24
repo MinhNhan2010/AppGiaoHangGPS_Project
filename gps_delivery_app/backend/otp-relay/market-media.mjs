@@ -23,6 +23,24 @@ export async function normalizeMarketImage(raw) {
   finally { processing--; }
 }
 
+// Private identity documents (driver partner applications): decoded bytes are already validated by
+// the caller. Re-encode to WebP to drop EXIF/GPS metadata and appended payloads while keeping enough
+// resolution for an operator to read ID numbers.
+export async function normalizeDocumentImage(bytes, expectedFormat) {
+  if (!Buffer.isBuffer(bytes) || !bytes.length || bytes.length > 5_000_000) throw new IntegrationError(400, 'Ảnh giấy tờ không hợp lệ.');
+  if (processing >= 2) throw new IntegrationError(429, 'Đang xử lý ảnh. Vui lòng thử lại.');
+  processing++;
+  try {
+    const input = sharp(bytes, { limitInputPixels: 30_000_000, failOn: 'warning' });
+    const info = await input.metadata();
+    if (info.format !== expectedFormat || info.pages > 1 || !info.width || !info.height ||
+      info.width > 8000 || info.height > 8000) throw new Error('Invalid image');
+    return await input.rotate().resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 88 }).timeout({ seconds: 10 }).toBuffer();
+  } catch { throw new IntegrationError(400, 'Ảnh giấy tờ bị hỏng, sai định dạng hoặc vượt giới hạn kích thước.'); }
+  finally { processing--; }
+}
+
 async function verifyDuplicateBytes(fetcher, url, headers, hash) {
   const existing = await fetcher(url, { redirect: 'error', signal: AbortSignal.timeout(10000), headers });
   if (!existing.ok) throw new Error('Missing duplicate');
@@ -35,7 +53,7 @@ async function verifyDuplicateBytes(fetcher, url, headers, hash) {
   if (createHash('sha256').update(Buffer.concat(chunks)).digest('hex') !== hash) throw new Error('Mismatched duplicate');
 }
 
-async function signPrivateObject({ env, fetcher, req, bucket, objectPath }) {
+export async function signPrivateObject({ env, fetcher, req, bucket, objectPath, expiresIn = 300 }) {
   let response;
   try {
     response = await fetcher(new URL(`/storage/v1/object/sign/${bucket}/${objectPath}`, env.SUPABASE_URL), {
@@ -45,7 +63,7 @@ async function signPrivateObject({ env, fetcher, req, bucket, objectPath }) {
         Authorization: `Bearer ${req.deliveryIdentity.token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ expiresIn: 300 }),
+      body: JSON.stringify({ expiresIn }),
     });
   } catch { throw new IntegrationError(502, 'Không tạo được liên kết xem bằng chứng tạm thời.'); }
   if (response.status === 400 || response.status === 403 || response.status === 404) {
@@ -61,7 +79,7 @@ async function signPrivateObject({ env, fetcher, req, bucket, objectPath }) {
   const rawPath = data?.signedURL || data?.signedUrl;
   if (typeof rawPath !== 'string' || !rawPath.startsWith('/')) throw new IntegrationError(502, 'Liên kết ký tạm thời không hợp lệ.');
   const normalized = rawPath.startsWith('/storage/v1/') ? rawPath : `/storage/v1${rawPath}`;
-  return { url: new URL(normalized, env.SUPABASE_URL).href, expires_in: 300 };
+  return { url: new URL(normalized, env.SUPABASE_URL).href, expires_in: expiresIn };
 }
 
 export function createMarketMedia({ env, fetcher, rpc }) {
@@ -147,13 +165,17 @@ export function createPrivateAttachmentSign({ env, fetcher }) {
 export function createPodUpload({ env, fetcher }) {
   return async req => {
     const d = req.body;
-    if (!d || Array.isArray(d) || Object.keys(d).some(k => !['tracking_code', 'image'].includes(k)) ||
-      typeof d.tracking_code !== 'string' || !/^CL-[A-F0-9]{32}$/.test(d.tracking_code)) {
-      throw new IntegrationError(400, 'Yêu cầu tải ảnh POD không hợp lệ.');
+    const evidenceType = d?.evidence_type ?? 'photo';
+    const signerName = d?.signer_name == null ? '' : typeof d.signer_name === 'string' ? d.signer_name.trim() : null;
+    if (!d || Array.isArray(d) || Object.keys(d).some(k => !['tracking_code', 'image', 'evidence_type', 'signer_name'].includes(k)) ||
+      typeof d.tracking_code !== 'string' || !/^CL-[A-F0-9]{32}$/.test(d.tracking_code) ||
+      !['photo', 'signature'].includes(evidenceType) || signerName === null || signerName.length > 120) {
+      throw new IntegrationError(400, 'Yêu cầu tải bằng chứng giao hàng không hợp lệ.');
     }
     const bytes = await normalizeMarketImage(d.image);
     const hash = createHash('sha256').update(bytes).digest('hex');
-    const objectPath = `${d.tracking_code}/pod-${hash}.webp`;
+    const prefix = evidenceType === 'signature' ? 'signature' : 'pod';
+    const objectPath = `${d.tracking_code}/${prefix}-${hash}.webp`;
     const authHeaders = { apikey: env.SUPABASE_ANON_KEY, Authorization: `Bearer ${req.deliveryIdentity.token}` };
     const target = new URL(`/storage/v1/object/delivery-evidence/${objectPath}`, env.SUPABASE_URL);
     const authReadUrl = new URL(`/storage/v1/object/authenticated/delivery-evidence/${objectPath}`, env.SUPABASE_URL);
@@ -166,7 +188,7 @@ export function createPodUpload({ env, fetcher }) {
       });
       if (uploadResp.status === 403 || uploadResp.status === 401) {
         await uploadResp.body?.cancel();
-        throw new IntegrationError(403, 'Chỉ tài xế đang giao chuyến này hoặc quản trị viên được tải ảnh POD.');
+        throw new IntegrationError(403, 'Chỉ tài xế đang giao chuyến này hoặc quản trị viên được tải bằng chứng POD.');
       }
       if (uploadResp.status === 409 || uploadResp.status === 400) {
         await verifyDuplicateBytes(fetcher, authReadUrl, authHeaders, hash);
@@ -174,14 +196,21 @@ export function createPodUpload({ env, fetcher }) {
       await uploadResp.body?.cancel();
     } catch (error) {
       if (error instanceof IntegrationError) throw error;
-      throw new IntegrationError(502, 'Chưa lưu được ảnh bằng chứng giao hàng.');
+      throw new IntegrationError(502, 'Chưa lưu được tệp bằng chứng giao hàng.');
     }
+    const eventPayload = {
+      path: objectPath,
+      hash,
+      byte_size: bytes.length,
+      evidence_type: evidenceType,
+      ...(evidenceType === 'signature' && signerName ? { signer_name: signerName } : {}),
+    };
     let eventResp;
     try {
       eventResp = await fetcher(new URL('/rest/v1/delivery_live_events', env.SUPABASE_URL), {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
         headers: { ...authHeaders, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify({ room_id: d.tracking_code, kind: 'pod', payload: { path: objectPath, hash, byte_size: bytes.length } }),
+        body: JSON.stringify({ room_id: d.tracking_code, kind: 'pod', payload: eventPayload }),
       });
       await eventResp.body?.cancel();
     } catch { throw new IntegrationError(502, 'Không ghi nhận được sự kiện POD.'); }
@@ -189,7 +218,7 @@ export function createPodUpload({ env, fetcher }) {
       throw new IntegrationError(403, 'Không có quyền ghi nhận bằng chứng POD cho chuyến này.');
     }
     if (!eventResp.ok) throw new IntegrationError(502, 'Cơ sở dữ liệu từ chối sự kiện POD.');
-    return { path: objectPath, byte_size: bytes.length };
+    return { path: objectPath, byte_size: bytes.length, evidence_type: evidenceType };
   };
 }
 
@@ -197,8 +226,8 @@ export function createPodSign({ env, fetcher }) {
   return async req => {
     const d = req.body;
     if (!d || Array.isArray(d) || Object.keys(d).some(k => k !== 'path') ||
-      typeof d.path !== 'string' || !/^CL-[A-F0-9]{32}\/pod-[a-f0-9]{64}\.(webp|jpg|jpeg|png)$/i.test(d.path)) {
-      throw new IntegrationError(400, 'Đường dẫn ảnh POD không hợp lệ.');
+      typeof d.path !== 'string' || !/^CL-[A-F0-9]{32}\/(pod|signature)-[a-f0-9]{64}\.(webp|jpg|jpeg|png)$/i.test(d.path)) {
+      throw new IntegrationError(400, 'Đường dẫn bằng chứng POD không hợp lệ.');
     }
     return signPrivateObject({ env, fetcher, req, bucket: 'delivery-evidence', objectPath: d.path });
   };

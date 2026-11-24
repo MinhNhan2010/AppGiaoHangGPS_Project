@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
@@ -77,17 +78,16 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
     super.dispose();
   }
 
+  bool get _showCommerce =>
+      GhstFeatures.commerceEnabled && !widget.trackingOnly;
+
   Future<void> _load() async {
     if (!_allowed) return;
     final generation = ++_generation;
     setState(() {
       _errors.clear();
       _data.clear();
-      _loading.addAll([
-        'orders',
-        'addresses',
-        if (!widget.trackingOnly) 'catalog',
-      ]);
+      _loading.addAll(['orders', 'addresses', if (_showCommerce) 'catalog']);
     });
     await Future.wait([
       _read(
@@ -102,7 +102,7 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
         () => widget.session.service.request('addresses'),
         generation,
       ),
-      if (!widget.trackingOnly)
+      if (_showCommerce)
         _read(
           'catalog',
           'products',
@@ -230,37 +230,31 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
     if (_allowed) await _load();
   }
 
-  Widget _panel(
-    Widget child, {
-    bool interactive = false,
-    Color? accentGlow,
-  }) => GhstLuminousCard(
-    accentGlow: accentGlow,
-    interactive3d: interactive,
-    maxTilt: 0.018,
-    child: Material(type: MaterialType.transparency, child: child),
-  );
+  Widget _panel(Widget child, {bool interactive = false, Color? accentGlow}) =>
+      GhstLuminousCard(
+        accentGlow: accentGlow,
+        interactive3d: interactive,
+        maxTilt: 0.018,
+        child: Material(type: MaterialType.transparency, child: child),
+      );
 
-  Widget _heading(
-    GhstThemeTokens tokens,
-    String title, {
-    Widget? action,
-  }) => Row(
-    children: [
-      Expanded(
-        child: Text(
-          title,
-          style: TextStyle(
-            fontSize: 14.5,
-            color: tokens.ink,
-            fontWeight: FontWeight.w800,
-            letterSpacing: -0.1,
+  Widget _heading(GhstThemeTokens tokens, String title, {Widget? action}) =>
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 14.5,
+                color: tokens.ink,
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.1,
+              ),
+            ),
           ),
-        ),
-      ),
-      ?action,
-    ],
-  );
+          ?action,
+        ],
+      );
 
   Widget _readState(
     GhstThemeTokens tokens,
@@ -312,7 +306,12 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
     Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _heading(tokens, 'Dịch vụ Giao nhận & Ăn uống nhanh'),
+        _heading(
+          tokens,
+          GhstFeatures.commerceEnabled
+              ? 'Dịch vụ Giao nhận & Ăn uống nhanh'
+              : 'Dịch vụ Giao hàng định vị GPS',
+        ),
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
@@ -332,9 +331,8 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
                 Icon3dStyle.hub2hBatch,
                 tokens.cyan,
                 widget.session.canCreateShippingOrder
-                    ? () => widget.onCreateOrder({
-                        'service_type': 'same_day_2h',
-                      })
+                    ? () =>
+                          widget.onCreateOrder({'service_type': 'same_day_2h'})
                     : null,
               ),
               (
@@ -361,12 +359,19 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
                     ? () => widget.onCreateOrder({'service_type': 'truck'})
                     : null,
               ),
-              (
-                'Ăn uống & Mua sắm',
-                Icon3dStyle.foodMarket,
-                tokens.amber,
-                widget.onCatalog,
-              ),
+              GhstFeatures.commerceEnabled
+                  ? (
+                      'Ăn uống & Mua sắm',
+                      Icon3dStyle.foodMarket,
+                      tokens.amber,
+                      widget.onCatalog,
+                    )
+                  : (
+                      'Theo dõi đơn hàng',
+                      Icon3dStyle.gpsPinRadar,
+                      tokens.amber,
+                      widget.onOrders,
+                    ),
             ];
             return Wrap(
               spacing: 10,
@@ -658,8 +663,10 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'Bạn muốn giao hàng hay đặt món đến đâu?',
+                  Text(
+                    GhstFeatures.commerceEnabled
+                        ? 'Bạn muốn giao hàng hay đặt món đến đâu?'
+                        : 'Bạn muốn giao hàng đến đâu?',
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
@@ -854,11 +861,17 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
             (row) => _route(row).length >= 2,
           )) ...[
             const SizedBox(height: 8),
-            DropdownButtonFormField<String>(icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18), key: ValueKey(routePts.length >= 2 ? _trackedOrder!['id'] : ''), isExpanded: true, initialValue: routePts.length >= 2
+            DropdownButtonFormField<String>(
+              icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18),
+              key: ValueKey(routePts.length >= 2 ? _trackedOrder!['id'] : ''),
+              isExpanded: true,
+              initialValue: routePts.length >= 2
                   ? '${_trackedOrder!['id']}'
-                  : '', decoration: const InputDecoration(
+                  : '',
+              decoration: const InputDecoration(
                 labelText: 'Hành trình đơn hàng',
-              ), items: [
+              ),
+              items: [
                 const DropdownMenuItem(
                   value: '',
                   child: Text('Địa chỉ đã lưu'),
@@ -869,7 +882,9 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
                       value: '${order['id']}',
                       child: Text('${order['tracking_code'] ?? order['id']}'),
                     ),
-              ], onChanged: (id) => setState(() => _trackedId = id),),
+              ],
+              onChanged: (id) => setState(() => _trackedId = id),
+            ),
           ],
           const SizedBox(height: 10),
           ClipRRect(
@@ -915,7 +930,10 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
             'Đơn gần đây',
             action: TextButton.icon(
               onPressed: widget.onOrders,
-              icon: const GhstButtonIcon.glyph(GhstActionKind.forward, size: 15),
+              icon: const GhstButtonIcon.glyph(
+                GhstActionKind.forward,
+                size: 15,
+              ),
               label: const Text('Xem tất cả'),
             ),
           ),
@@ -970,7 +988,10 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
             'Khám phá cửa hàng',
             action: TextButton.icon(
               onPressed: widget.onCatalog,
-              icon: const GhstButtonIcon.glyph(GhstActionKind.forward, size: 15),
+              icon: const GhstButtonIcon.glyph(
+                GhstActionKind.forward,
+                size: 15,
+              ),
               label: const Text('Xem tất cả'),
             ),
           ),
@@ -980,55 +1001,71 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
             _readState(tokens, 'catalog', 'Chưa có sản phẩm đang mở bán.')
           else
             for (final product in products.take(4))
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: (product['image_url'] as String? ?? '').isEmpty
-                        ? GhstAiIcon(
-                            style: Icon3dStyle.merchantStore,
-                            size: 48,
-                            borderRadius: 10,
-                            borderColor: tokens.sapphire.border,
-                          )
-                        : Image.network(
-                            '${product['image_url']}',
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Center(
-                              child: GhstButtonIcon.glyph(
-                                GhstActionKind.image,
-                                size: 20,
-                                color: tokens.inkMuted,
+              Builder(
+                builder: (context) {
+                  final flashPrice =
+                      (product['flash_sale_price'] as num?) ??
+                      ((product['flash_sale'] as Map?)?['sale_price'] as num?);
+                  final prep = (product['preparation_minutes'] as num? ?? 0)
+                      .toInt();
+                  final displayPrice =
+                      (flashPrice ?? (product['price'] as num? ?? 0))
+                          .toDouble();
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: (product['image_url'] as String? ?? '').isEmpty
+                            ? GhstAiIcon(
+                                style: Icon3dStyle.merchantStore,
+                                size: 48,
+                                borderRadius: 10,
+                                borderColor: tokens.sapphire.border,
+                              )
+                            : Image.network(
+                                '${product['image_url']}',
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => Center(
+                                  child: GhstButtonIcon.glyph(
+                                    GhstActionKind.image,
+                                    size: 20,
+                                    color: tokens.inkMuted,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                  ),
-                ),
-                title: Text(
-                  '${product['name']}',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: tokens.ink,
-                  ),
-                ),
-                subtitle: Text(
-                  '${product['shop_name']}',
-                  style: TextStyle(color: tokens.inkSecondary),
-                ),
-                trailing: Text(
-                  CurrencyFormatter.formatVnd(
-                    (product['price'] as num? ?? 0).toDouble(),
-                  ),
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    fontSize: 12.5,
-                    color: tokens.sapphire.foreground,
-                  ),
-                ),
-                onTap: widget.onCatalog,
+                      ),
+                    ),
+                    title: Text(
+                      '${product['name']}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: tokens.ink,
+                      ),
+                    ),
+                    subtitle: Text(
+                      '${product['shop_name']}${prep > 0 ? ' · ~${prep}p chuẩn bị' : ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: tokens.inkSecondary),
+                    ),
+                    trailing: Text(
+                      '${CurrencyFormatter.formatVnd(displayPrice)}${flashPrice != null ? ' ⚡' : ''}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 12.5,
+                        color: flashPrice != null
+                            ? tokens.emerald.foreground
+                            : tokens.sapphire.foreground,
+                      ),
+                    ),
+                    onTap: widget.onCatalog,
+                  );
+                },
               ),
         ],
       ),
@@ -1074,10 +1111,12 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _services(tokens),
-                    const SizedBox(height: 12),
-                    _promoHub(tokens),
-                    const SizedBox(height: 12),
-                    _discovery(tokens),
+                    if (GhstFeatures.commerceEnabled) ...[
+                      const SizedBox(height: 12),
+                      _promoHub(tokens),
+                      const SizedBox(height: 12),
+                      _discovery(tokens),
+                    ],
                   ],
                 );
                 final tracking = Column(

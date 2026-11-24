@@ -4,11 +4,11 @@ import { createCommerceDatabase } from './commerce-db.mjs';
 
 export { publicBackendUrl };
 
-export const COMMERCE_MIGRATION = '20261114_merchant_cloud_suite';
+export const COMMERCE_MIGRATION = '20261117_vehicle_classes_and_driver_applications';
 const revisionKey = crypto.randomBytes(32);
 export const databaseRevision = env => crypto.createHmac('sha256', revisionKey)
   .update(JSON.stringify([configValue('DATABASE_URL', env), configValue('DATABASE_CA_CERT', env)])).digest('hex');
-const migrations = ['20261027_delivery_integrations.sql', '20261028_cloud_orders.sql', '20261029_payments_ghn.sql', '20261029_cloud_addresses.sql', '20261030_marketplace.sql', '20261031_market_operations.sql', '20261101_partner_memberships.sql', '20261102_local_address_import.sql', '20261103_catalog_stock_versions.sql', '20261104_market_media.sql', '20261105_market_browse.sql', '20261106_catalog_configuration.sql', '20261107_cloud_commercial_suite.sql', '20261108_cloud_logistics.sql', '20261109_admin_account_management.sql', '20261110_cloud_promo_events.sql', '20261111_profile_push_shipping_coins.sql', '20261112_shipping_cash_settlement.sql', '20261113_cloud_sync_and_journey.sql', '20261114_merchant_cloud_suite.sql'];
+const migrations = ['20261027_delivery_integrations.sql', '20261028_cloud_orders.sql', '20261029_payments_ghn.sql', '20261029_cloud_addresses.sql', '20261030_marketplace.sql', '20261031_market_operations.sql', '20261101_partner_memberships.sql', '20261102_local_address_import.sql', '20261103_catalog_stock_versions.sql', '20261104_market_media.sql', '20261105_market_browse.sql', '20261106_catalog_configuration.sql', '20261107_cloud_commercial_suite.sql', '20261108_cloud_logistics.sql', '20261109_admin_account_management.sql', '20261110_cloud_promo_events.sql', '20261111_profile_push_shipping_coins.sql', '20261112_shipping_cash_settlement.sql', '20261113_cloud_sync_and_journey.sql', '20261114_merchant_cloud_suite.sql', '20261115_driver_wallet_and_showcase_catalog.sql', '20261116_realtime_dispatch_pricing_and_pod_signature.sql', '20261117_vehicle_classes_and_driver_applications.sql'];
 
 // Catalog-only queries: never create users, orders, provider requests or payments.
 export const DEPLOYMENT_SCHEMA_SQL = `with commerce_tables as (
@@ -136,6 +136,73 @@ select
       to_regprocedure('public.delivery_merchant_suite(text,jsonb)'),'EXECUTE')
     and not has_function_privilege((select oid from pg_roles where rolname='anon'),
       to_regprocedure('public.delivery_is_order_shop_staff(uuid)'),'EXECUTE') as merchant_suite_schema,
+  to_regprocedure('public.delivery_driver_wallet(text,jsonb)') is not null
+    and to_regprocedure('public.delivery_showcase_catalog(text,jsonb)') is not null
+    and to_regprocedure('public.delivery_driver_wallet_sync_order(uuid,boolean)') is not null
+    and to_regprocedure('public.delivery_showcase_auto_dispatch_order(uuid,uuid)') is not null
+    and (select count(*)=4 from information_schema.columns where table_schema='public'
+      and table_name='delivery_market_shops' and column_name in ('is_showcase','showcase_slug','category_group','showcase_auto_dispatch'))
+    and (select count(*)=3 and bool_and(c.relrowsecurity) from pg_class c where c.oid in (
+      to_regclass('public.delivery_driver_wallets'),
+      to_regclass('public.delivery_driver_wallet_requests'),
+      to_regclass('public.delivery_driver_wallet_ledger')))
+    and not exists(select 1 from unnest(array[
+        'delivery_driver_wallets','delivery_driver_wallet_requests','delivery_driver_wallet_ledger']) n
+      cross join (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p(privilege)
+      where coalesce(has_table_privilege(r.oid,to_regclass('public.'||n),p.privilege),false))
+    and not exists(select 1 from (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      where has_function_privilege(r.oid,to_regprocedure('public.delivery_driver_wallet_sync_order(uuid,boolean)'),'EXECUTE')
+        or has_function_privilege(r.oid,to_regprocedure('public.delivery_showcase_auto_dispatch_order(uuid,uuid)'),'EXECUTE'))
+    and not has_function_privilege((select oid from pg_roles where rolname='anon'),
+      to_regprocedure('public.delivery_driver_wallet(text,jsonb)'),'EXECUTE')
+    and not has_function_privilege((select oid from pg_roles where rolname='anon'),
+      to_regprocedure('public.delivery_showcase_catalog(text,jsonb)'),'EXECUTE') as driver_wallet_showcase_schema,
+  to_regprocedure('public.delivery_driver_dispatch(text,jsonb)') is not null
+    and to_regprocedure('public.delivery_admin_pricing(text,jsonb)') is not null
+    and to_regprocedure('public.delivery_point_in_polygon(double precision,double precision,jsonb)') is not null
+    and to_regprocedure('public.delivery_mask_phone(text)') is not null
+    and to_regprocedure('public.delivery_match_driver_offer_for_order(uuid)') is not null
+    and (select count(*)=2 from information_schema.columns where table_schema='public'
+      and table_name='delivery_cloud_orders' and column_name in ('batch_group_id','batch_sequence'))
+    and (select count(*)=4 and bool_and(c.relrowsecurity) from pg_class c where c.oid in (
+      to_regclass('public.delivery_driver_presence'),
+      to_regclass('public.delivery_driver_offers'),
+      to_regclass('public.delivery_cloud_pricing_rules'),
+      to_regclass('public.delivery_cloud_geofences')))
+    and not exists(select 1 from unnest(array[
+        'delivery_driver_presence','delivery_driver_offers','delivery_cloud_pricing_rules','delivery_cloud_geofences']) n
+      cross join (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p(privilege)
+      where coalesce(has_table_privilege(r.oid,to_regclass('public.'||n),p.privilege),false))
+    and not exists(select 1 from (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      where has_function_privilege(r.oid,to_regprocedure('public.delivery_point_in_polygon(double precision,double precision,jsonb)'),'EXECUTE')
+        or has_function_privilege(r.oid,to_regprocedure('public.delivery_mask_phone(text)'),'EXECUTE')
+        or has_function_privilege(r.oid,to_regprocedure('public.delivery_match_driver_offer_for_order(uuid)'),'EXECUTE'))
+    and not has_function_privilege((select oid from pg_roles where rolname='anon'),
+      to_regprocedure('public.delivery_driver_dispatch(text,jsonb)'),'EXECUTE')
+    and not has_function_privilege((select oid from pg_roles where rolname='anon'),
+      to_regprocedure('public.delivery_admin_pricing(text,jsonb)'),'EXECUTE') as realtime_dispatch_pricing_pod_schema,
+  to_regprocedure('public.delivery_driver_application(text,jsonb)') is not null
+    and to_regprocedure('public.delivery_vehicle_can_serve(text,text)') is not null
+    and to_regprocedure('public.delivery_order_vehicle_type(jsonb)') is not null
+    and to_regprocedure('public.delivery_vehicle_max_kg(text)') is not null
+    and exists(select 1 from pg_class where oid=to_regclass('public.delivery_driver_applications') and relrowsecurity)
+    and not exists(select 1 from (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      cross join unnest(array['SELECT','INSERT','UPDATE','DELETE']) p(privilege)
+      where coalesce(has_table_privilege(r.oid,to_regclass('public.delivery_driver_applications'),p.privilege),false))
+    and not exists(select 1 from (select oid from pg_roles where rolname in ('anon','authenticated')) r
+      where has_function_privilege(r.oid,to_regprocedure('public.delivery_vehicle_can_serve(text,text)'),'EXECUTE')
+        or has_function_privilege(r.oid,to_regprocedure('public.delivery_order_vehicle_type(jsonb)'),'EXECUTE')
+        or has_function_privilege(r.oid,to_regprocedure('public.delivery_vehicle_max_kg(text)'),'EXECUTE'))
+    and not has_function_privilege((select oid from pg_roles where rolname='anon'),
+      to_regprocedure('public.delivery_driver_application(text,jsonb)'),'EXECUTE')
+    and exists(select 1 from pg_constraint where conrelid=to_regclass('public.delivery_driver_presence')
+      and conname='delivery_driver_presence_vehicle_type_check')
+    and exists(select 1 from pg_policies where schemaname='storage' and tablename='objects'
+      and policyname='delivery_driver_application_docs_insert' and cmd='INSERT')
+    and exists(select 1 from pg_policies where schemaname='storage' and tablename='objects'
+      and policyname='delivery_driver_application_docs_select' and cmd='SELECT') as vehicle_partner_schema,
   to_regprocedure('public.delivery_market_selection(uuid,jsonb)') is not null
     and to_regprocedure('public.delivery_market_configured_cart()') is not null
     and (select count(*)=4 from information_schema.columns where table_schema='public'
@@ -253,6 +320,12 @@ export function createDeploymentReadiness({ env = process.env, database = create
       schema?.cloud_sync_journey_schema ? 'Đã đồng bộ chủ đề sáng/tối, bản nháp đặt đơn, lịch sử hội thoại AI, tọa độ trực tiếp và điểm dừng chuyến giao.' : 'Cần migration 20261113_cloud_sync_and_journey.sql.');
     add('merchant_suite_schema','Vận hành cửa hàng, tồn kho, khuyến mãi & hậu mãi toàn diện',schema ? schema.merchant_suite_schema ? 'ok' : 'missing' : 'unchecked',
       schema?.merchant_suite_schema ? 'Đã đồng bộ tổng quan cửa hàng, sổ biến động kho, khuyến mãi, hàng đợi đơn, đối soát và hành trình giao cho nhân sự shop.' : 'Cần migration 20261114_merchant_cloud_suite.sql.');
+    add('driver_wallet_showcase_schema','Ví Tài xế (80/20, Nạp VietQR, Rút NH) & Hệ thống Quán ăn/Đồ uống Ảo',schema ? schema.driver_wallet_showcase_schema ? 'ok' : 'missing' : 'unchecked',
+      schema?.driver_wallet_showcase_schema ? 'Đã có ví tài xế chia sẻ 80/20 tự động, nạp ký quỹ VietQR, rút ngân hàng và gian hàng ăn uống/cửa hàng mẫu.' : 'Cần migration 20261115_driver_wallet_and_showcase_catalog.sql.');
+    add('realtime_dispatch_pricing_pod_schema','Điều phối tự động GPS 28s, Ghép đơn cùng tuyến, Bảng giá động Geofence & Chữ ký POD',schema ? schema.realtime_dispatch_pricing_pod_schema ? 'ok' : 'missing' : 'unchecked',
+      schema?.realtime_dispatch_pricing_pod_schema ? 'Đã có radar đẩy cuốc 28s theo bán kính 3–8km, ghép đơn cùng hành lang, vùng phụ phí đa giác và chữ ký điện tử người nhận.' : 'Cần migration 20261116_realtime_dispatch_pricing_and_pod_signature.sql.');
+    add('vehicle_partner_schema','Loại xe (máy, điện, ba gác, van, tải 1,5 tấn) & Hồ sơ đối tác tài xế',schema ? schema.vehicle_partner_schema ? 'ok' : 'missing' : 'unchecked',
+      schema?.vehicle_partner_schema ? 'Đã có báo giá theo tải trọng xe, ghép cuốc đúng phương tiện và hồ sơ tài xế với giấy tờ riêng tư chờ duyệt.' : 'Cần migration 20261117_vehicle_classes_and_driver_applications.sql.');
     const commerceSchema = schema?.commerce_schema && schema?.commerce_guard;
     add('address_schema','Sổ địa chỉ tài khoản',schema ? schema.address_schema ? 'ok' : 'missing' : 'unchecked',
       schema?.address_schema ? 'Đã có RPC và RLS sổ địa chỉ.' : 'Cần migration 20261029_cloud_addresses.sql.');

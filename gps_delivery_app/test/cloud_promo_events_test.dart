@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gps_delivery_app/core/config/feature_flags.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_account_session.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_session_lease.dart';
 import 'package:gps_delivery_app/core/theme/app_theme.dart';
@@ -187,6 +188,11 @@ class _PromoFixture extends UnifiedUserFixture {
 }
 
 void main() {
+  // Covers the legacy commerce modules, hidden by default while the app
+  // focuses on GPS delivery (see GhstFeatures).
+  setUpAll(() => GhstFeatures.commerceEnabled = true);
+  tearDownAll(() => GhstFeatures.commerceEnabled = false);
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   for (final width in [360.0, 1440.0]) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gps_delivery_app/core/auth/cloud_oauth_io.dart';
+import 'package:gps_delivery_app/core/config/feature_flags.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_account_session.dart';
 import 'package:gps_delivery_app/core/theme/app_theme.dart';
 import 'package:gps_delivery_app/main.dart';
@@ -131,6 +132,11 @@ class UnifiedUserFixture extends MarketFixture {
 }
 
 void main() {
+  // Covers the legacy commerce modules, hidden by default while the app
+  // focuses on GPS delivery (see GhstFeatures).
+  setUpAll(() => GhstFeatures.commerceEnabled = true);
+  tearDownAll(() => GhstFeatures.commerceEnabled = false);
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
   Future<(UnifiedUserFixture, CloudAccountSession)> setup(
     WidgetTester tester,

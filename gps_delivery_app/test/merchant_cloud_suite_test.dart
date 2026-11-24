@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gps_delivery_app/core/config/feature_flags.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_account_session.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_orders_service.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_session_lease.dart';
@@ -542,6 +543,11 @@ class MerchantSuiteFixture extends CloudOrdersService {
 }
 
 void main() {
+  // Covers the legacy commerce modules, hidden by default while the app
+  // focuses on GPS delivery (see GhstFeatures).
+  setUpAll(() => GhstFeatures.commerceEnabled = true);
+  tearDownAll(() => GhstFeatures.commerceEnabled = false);
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   Future<void> pumpShort(WidgetTester tester) async {

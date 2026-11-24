@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../auth/cloud_oauth.dart';
 import '../config/env_config.dart';
+import '../network/public_json_api.dart';
 
 import 'delivery_api_client.dart';
 import 'live_delivery_service.dart';
@@ -221,6 +222,83 @@ class CloudOrdersService {
     Map<String, dynamic> payload = const {},
   ]) => request('merchant/$action', body: payload);
 
+  Future<Map<String, dynamic>> driverWallet(
+    String action, [
+    Map<String, dynamic> payload = const {},
+  ]) => request('driver-wallet/$action', body: payload);
+
+  Future<Map<String, dynamic>> showcaseCatalog(
+    String action, [
+    Map<String, dynamic> payload = const {},
+  ]) => request('showcase-catalog/$action', body: payload);
+
+  Future<Map<String, dynamic>> driverDispatch(
+    String action, [
+    Map<String, dynamic> payload = const {},
+  ]) => request('driver-dispatch/$action', body: payload);
+
+  /// Driver partner application: `get`, `submit`, `admin_list`, `admin_get`.
+  Future<Map<String, dynamic>> driverApplication(
+    String action, [
+    Map<String, dynamic> payload = const {},
+  ]) => request('driver-application/$action', body: payload);
+
+  /// Uploads one KYC image (CCCD, GPLX, cà vẹt, chân dung) to private storage
+  /// and returns its storage path for [driverApplication] `submit`.
+  Future<String> uploadDriverDocument({
+    required String kind,
+    required Uint8List bytes,
+  }) async {
+    final contentType = imageContentType(bytes);
+    if (contentType == null) {
+      throw const PublicApiException('Chỉ nhận ảnh JPG, PNG hoặc WEBP.');
+    }
+    final res = await request(
+      'driver-application/upload_document',
+      body: {
+        'kind': kind,
+        'content_base64': base64Encode(bytes),
+        'content_type': contentType,
+      },
+    );
+    final path = res['path'];
+    if (path is! String || path.isEmpty) {
+      throw const FormatException('Invalid document storage path');
+    }
+    return path;
+  }
+
+  /// Detects JPEG / PNG / WEBP from magic bytes.
+  static String? imageContentType(Uint8List b) {
+    if (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) {
+      return 'image/jpeg';
+    }
+    if (b.length >= 8 &&
+        b[0] == 0x89 &&
+        b[1] == 0x50 &&
+        b[2] == 0x4E &&
+        b[3] == 0x47) {
+      return 'image/png';
+    }
+    if (b.length >= 12 &&
+        b[0] == 0x52 &&
+        b[1] == 0x49 &&
+        b[2] == 0x46 &&
+        b[3] == 0x46 &&
+        b[8] == 0x57 &&
+        b[9] == 0x45 &&
+        b[10] == 0x42 &&
+        b[11] == 0x50) {
+      return 'image/webp';
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>> adminPricing(
+    String action, [
+    Map<String, dynamic> payload = const {},
+  ]) => request('admin-pricing/$action', body: payload);
+
   Future<Map<String, dynamic>> fetchDriverReviews({String? driverId}) =>
       logistics('driver_reviews', {
         if (driverId != null && driverId.isNotEmpty) 'driver_id': driverId,
@@ -264,10 +342,18 @@ class CloudOrdersService {
   Future<String> uploadPod({
     required String trackingCode,
     required Uint8List bytes,
+    String evidenceType = 'photo',
+    String? signerName,
   }) async {
     final res = await request(
       'pod',
-      body: {'tracking_code': trackingCode, 'image': base64Encode(bytes)},
+      body: {
+        'tracking_code': trackingCode,
+        'image': base64Encode(bytes),
+        if (evidenceType != 'photo') 'evidence_type': evidenceType,
+        if (signerName != null && signerName.trim().isNotEmpty)
+          'signer_name': signerName.trim(),
+      },
     );
     final path = res['path'];
     if (path is! String || path.isEmpty) {

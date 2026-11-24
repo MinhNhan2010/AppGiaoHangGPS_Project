@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:gps_delivery_app/core/config/feature_flags.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_account_session.dart';
 import 'package:gps_delivery_app/core/integrations/cloud_orders_service.dart';
 import 'package:gps_delivery_app/core/network/public_json_api.dart';
@@ -261,6 +262,11 @@ class MarketFixture extends CloudOrdersService {
 }
 
 void main() {
+  // Covers the legacy commerce modules, hidden by default while the app
+  // focuses on GPS delivery (see GhstFeatures).
+  setUpAll(() => GhstFeatures.commerceEnabled = true);
+  tearDownAll(() => GhstFeatures.commerceEnabled = false);
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
   void size(WidgetTester tester, double width) {
     tester.view.physicalSize = Size(width, 1000);

@@ -21,7 +21,7 @@ class GhstAiChatController extends ChangeNotifier {
     'Đơn hàng gần nhất của tôi đang ở trạng thái nào?',
     'So sánh 5 gói giao hàng của GHST',
     'Cách tính phí quy đổi và bảo hiểm hàng hóa?',
-    'Hướng dẫn dùng Voucher, đổi Xu và trả hàng',
+    'Theo dõi vị trí tài xế và mã OTP nhận hàng',
   ];
 
   final CloudAccountSession session;

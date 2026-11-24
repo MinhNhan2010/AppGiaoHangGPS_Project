@@ -8,20 +8,27 @@ import '../../core/gps/stop_order_optimizer.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_orders_service.dart';
 import '../../core/integrations/cloud_session_lease.dart';
+import '../../core/integrations/delivery_api_client.dart';
+import '../../core/integrations/delivery_weather_service.dart';
 import '../../core/integrations/photon_address_service.dart';
 import '../../core/network/public_json_api.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/geo_math.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
+import '../../domain/entities/vehicle_class.dart';
 import '../screens/cloud_address_book_screen.dart';
 import 'animated_3d_ui_icons.dart';
 import 'cloud_commerce_dialog.dart';
 import 'cloud_logistics_panels.dart';
 import 'cloud_order_labels.dart';
 import 'cloud_session_boundary.dart';
+import 'delivery_utilities_widgets.dart';
+import 'delivery_weather_strip.dart';
 import 'motion_3d_effects.dart';
 import 'photon_address_lookup.dart';
+import 'shipping_label_scanner.dart';
 import 'system_state_screens.dart';
 import 'vietqr_bank_payment_panel.dart';
 import 'ghst_button_icon.dart';
@@ -44,6 +51,8 @@ class CloudOrderForm extends StatefulWidget {
     this.onCreated,
     this.onOrderCreated,
     this.addressService,
+    this.ocrApi,
+    this.weatherService,
   });
   final CloudOrdersService service;
   final List<Map<String, dynamic>> merchants;
@@ -54,6 +63,8 @@ class CloudOrderForm extends StatefulWidget {
   final VoidCallback? onCreated;
   final ValueChanged<Map<String, dynamic>>? onOrderCreated;
   final PhotonAddressService? addressService;
+  final DeliveryApiClient? ocrApi;
+  final DeliveryWeatherService? weatherService;
 
   @override
   State<CloudOrderForm> createState() => _CloudOrderFormState();
@@ -92,11 +103,13 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
   String _activeMapTarget = 'pickup';
   bool _reverseBusy = false;
   String _serviceType = 'standard', _payment = 'sender_cash', _merchant = '';
+  VehicleClass _vehicle = VehicleClass.motorbike;
   bool _isRoundTrip = false,
       _preferEv = false,
       _greenFund = false,
       _requirePod = false,
       _requireOtp = false,
+      _requireSignature = false,
       _useCoins = false;
   Map<String, dynamic>? _quote;
   Map<String, Map<String, dynamic>>? _serviceEta;
@@ -145,15 +158,21 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
     return GeoPoint(latitude: lat, longitude: lng);
   }
 
-  void _applyInitialSource(Map<String, dynamic> source, {bool isDraft = false}) {
+  void _applyInitialSource(
+    Map<String, dynamic> source, {
+    bool isDraft = false,
+  }) {
     _suppressDraftSync = true;
     try {
       for (final entry in _fields.entries) {
         final value = source[entry.key];
         if (value is String || value is num && value.isFinite) {
-          if (['length_cm', 'width_cm', 'height_cm', 'declared_value'].contains(
-                entry.key,
-              ) &&
+          if ([
+                'length_cm',
+                'width_cm',
+                'height_cm',
+                'declared_value',
+              ].contains(entry.key) &&
               value is num &&
               value <= 0) {
             continue;
@@ -186,9 +205,19 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
       }
       _isRoundTrip = source['is_round_trip'] == true;
       _preferEv = source['prefer_ev'] == true;
+      _vehicle = VehicleClass.resolve(
+        vehicleType: source['vehicle_type'],
+        serviceType: _serviceType,
+        preferEv: _preferEv,
+      );
+      if (!_vehicle.allowsService(_serviceType)) {
+        _serviceType = _vehicle.heavy ? 'truck' : 'standard';
+      }
+      if (_vehicle == VehicleClass.evScooter) _preferEv = true;
       _greenFund = source['green_fund'] == true;
       _requirePod = source['require_pod'] == true;
       _requireOtp = source['require_otp'] == true;
+      _requireSignature = source['require_signature'] == true;
       _useCoins = source['use_coins'] == true;
       if (source['extra_stops'] is List) {
         for (final raw in (source['extra_stops'] as List).take(5)) {
@@ -223,6 +252,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
   Map<String, dynamic> _buildDraftSnapshot() {
     final map = <String, dynamic>{
       'service_type': _serviceType,
+      'vehicle_type': _vehicle.id,
       'payment_method': _payment,
       if (_merchant.isNotEmpty) 'merchant_id': _merchant,
       if (_isRoundTrip) 'is_round_trip': true,
@@ -230,6 +260,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
       if (_greenFund) 'green_fund': true,
       if (_requirePod) 'require_pod': true,
       if (_requireOtp) 'require_otp': true,
+      if (_requireSignature) 'require_signature': true,
       if (_useCoins) 'use_coins': true,
     };
     for (final entry in _fields.entries) {
@@ -649,6 +680,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
             : _fields['cod_amount']!.text.trim(),
       ),
       'service_type': _serviceType,
+      'vehicle_type': _vehicle.id,
       'payment_method': _payment == 'sender_bank_qr' ? 'sender_cash' : _payment,
       if (_merchant.isNotEmpty) 'merchant_id': _merchant,
     };
@@ -668,6 +700,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
     if (_greenFund) result['green_fund'] = true;
     if (_requirePod) result['require_pod'] = true;
     if (_requireOtp) result['require_otp'] = true;
+    if (_requireSignature) result['require_signature'] = true;
     if (_useCoins) result['use_coins'] = true;
     if (_extraStops.isNotEmpty) {
       result['extra_stops'] = [
@@ -877,7 +910,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
     String label, {
     bool numeric = false,
     bool optional = false,
-    int max = 500, String? suffixText,
+    int max = 500,
+    String? suffixText,
   }) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
     child: TextFormField(
@@ -888,7 +922,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
           ? const TextInputType.numberWithOptions(decimal: true, signed: false)
           : TextInputType.text,
       decoration: InputDecoration(
-        labelText: label, suffixText: suffixText,
+        labelText: label,
+        suffixText: suffixText,
         border: const OutlineInputBorder(),
         counterText: '',
       ),
@@ -932,7 +967,15 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
         }
         if (numeric) {
           final number = double.tryParse(value);
-          final maxWeight = _serviceType == 'truck' ? 500 : 30;
+          if (key == 'weight_kg' &&
+              number != null &&
+              number.isFinite &&
+              number > _vehicle.maxKg) {
+            return 'Tối đa ${_vehicle.maxKg} kg với ${_vehicle.label} — hãy chọn loại xe lớn hơn';
+          }
+          final maxWeight = key == 'weight_kg'
+              ? _vehicle.maxKg
+              : (_serviceType == 'truck' ? 500 : 30);
           if (number == null ||
               !number.isFinite ||
               number.abs() > maxWeight ||
@@ -1022,9 +1065,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
             ),
             TextButton.icon(
               key: const ValueKey('clear-shipping-draft'),
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-              ),
+              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
               onPressed: _busy || !_sameAccount ? null : _clearCloudDraft,
               icon: const GhstButtonIcon(Icons.delete_sweep_outlined, size: 16),
               label: const Text('Xóa bản nháp'),
@@ -1035,17 +1076,270 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
     );
   }
 
+  void _selectVehicle(VehicleClass vehicle) {
+    if (_busy || !_sameAccount || vehicle == _vehicle) return;
+    setState(() {
+      _vehicle = vehicle;
+      if (!vehicle.allowsService(_serviceType)) {
+        _serviceType = vehicle.heavy ? 'truck' : 'standard';
+      }
+      if (vehicle == VehicleClass.evScooter) _preferEv = true;
+      _quote = null;
+      _error = null;
+    });
+    _scheduleDraftSync();
+  }
+
+  double _estimatedDistanceKm() {
+    if (_pickupPoint != null && _dropoffPoint != null) {
+      final km = GeoMath.distanceMeters(_pickupPoint!, _dropoffPoint!) / 1000.0;
+      if (km.isFinite && km >= 0.5) return km.clamp(0.5, 200.0);
+    }
+    return 5.0;
+  }
+
+  void _applyScannedShippingLabel(Map<String, String> parsed) {
+    final name = (parsed['recipientName'] ?? '').trim();
+    final phone = (parsed['recipientPhone'] ?? '').trim();
+    final dropoff = (parsed['dropoffAddress'] ?? '').trim();
+    setState(() {
+      if (name.isNotEmpty) _fields['recipient_name']!.text = name;
+      if (phone.isNotEmpty) _fields['recipient_phone']!.text = phone;
+      if (dropoff.isNotEmpty) _fields['dropoff_address']!.text = dropoff;
+      _quote = null;
+    });
+    _scheduleDraftSync();
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text('Đã điền thông tin người nhận từ ảnh nhãn gửi.'),
+      ),
+    );
+  }
+
+  Future<void> _openFareComparison() async {
+    final rawWeight = double.tryParse(
+      _fields['weight_kg']!.text.trim().replaceAll(',', '.'),
+    );
+    await showDeliveryFareComparisonSheet(
+      context,
+      initialDistanceKm: _estimatedDistanceKm(),
+      initialWeightKg: rawWeight != null && rawWeight.isFinite && rawWeight > 0
+          ? rawWeight
+          : 2.0,
+      selectedVehicle: _vehicle,
+      selectedServiceType: _serviceType,
+      onSelect: (vehicle, tier) {
+        if (!mounted || _busy || !_sameAccount) return;
+        setState(() {
+          _vehicle = vehicle;
+          _serviceType = vehicle.allowsService(tier)
+              ? tier
+              : (vehicle.heavy ? 'truck' : 'standard');
+          if (vehicle == VehicleClass.evScooter) _preferEv = true;
+          _quote = null;
+          _error = null;
+        });
+        _scheduleDraftSync();
+      },
+    );
+  }
+
+  Widget _buildVehicleSelector(BuildContext context) {
+    final tokens = GhstThemeTokens.of(context);
+    Icon3dStyle iconFor(VehicleClass v) => switch (v.id) {
+      'motorbike' || 'ev_scooter' => Icon3dStyle.scooterExpress,
+      'tricycle' => Icon3dStyle.parcelBox,
+      _ => Icon3dStyle.cargoTruck,
+    };
+    TonePair toneFor(VehicleClass v) => switch (v.id) {
+      'ev_scooter' => tokens.emerald,
+      'tricycle' => tokens.amber,
+      'van' => tokens.violet,
+      'truck' => tokens.rose,
+      _ => tokens.sapphire,
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(
+            children: [
+              GhstButtonIcon(
+                Icons.local_shipping_outlined,
+                size: 17,
+                color: tokens.sapphire.foreground,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Chọn loại xe theo yêu cầu',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13.5,
+                    color: tokens.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 640
+                ? 5
+                : constraints.maxWidth >= 420
+                ? 3
+                : 2;
+            final width = (constraints.maxWidth - 8 * (columns - 1)) / columns;
+            return Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final v in VehicleClass.all)
+                  SizedBox(
+                    width: width,
+                    child: Builder(
+                      builder: (context) {
+                        final selected = v == _vehicle;
+                        final tone = toneFor(v);
+                        return Semantics(
+                          button: true,
+                          selected: selected,
+                          label: '${v.label}, tối đa ${v.maxKg} kg',
+                          child: InkWell(
+                            key: ValueKey('vehicle-${v.id}'),
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _busy || !_sameAccount
+                                ? null
+                                : () => _selectVehicle(v),
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 160),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: selected
+                                    ? tone.fill
+                                    : tokens.cardSurface,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: selected
+                                      ? tone.foreground
+                                      : tokens.border,
+                                  width: selected ? 1.7 : 1.0,
+                                ),
+                              ),
+                              child: Column(
+                                children: [
+                                  GhstAiIcon(
+                                    style: iconFor(v),
+                                    size: 34,
+                                    borderRadius: 10,
+                                    selected: selected,
+                                    borderColor: selected
+                                        ? tone.foreground
+                                        : tokens.border,
+                                    glowColor: tone.icon,
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    v.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 12.5,
+                                      color: selected
+                                          ? tone.foreground
+                                          : tokens.ink,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Tối đa ${v.maxKg} kg',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: tokens.inkSecondary,
+                                    ),
+                                  ),
+                                  Text(
+                                    v.baseFee > 0
+                                        ? '+${CurrencyFormatter.formatVnd(v.baseFee.toDouble())}'
+                                        : v.heavy
+                                        ? 'Giá gói cồng kềnh'
+                                        : 'Giá theo gói',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: selected
+                                          ? tone.foreground
+                                          : tokens.inkSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _fields['weight_kg']!,
+          builder: (context, value, _) {
+            final kg = double.tryParse(value.text.trim());
+            if (kg == null || !kg.isFinite || kg <= _vehicle.maxKg) {
+              return Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  _vehicle.description,
+                  style: TextStyle(fontSize: 11.5, color: tokens.inkSecondary),
+                ),
+              );
+            }
+            final suggestion = VehicleClass.suggestFor(kg);
+            return Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 6,
+                children: [
+                  Text(
+                    'Hàng ${kg.toStringAsFixed(kg % 1 == 0 ? 0 : 1)} kg vượt tải ${_vehicle.label}.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: tokens.rose.foreground,
+                    ),
+                  ),
+                  if (kg <= VehicleClass.truck.maxKg)
+                    TextButton(
+                      key: const ValueKey('vehicle-suggest'),
+                      onPressed: () => _selectVehicle(suggestion),
+                      child: Text('Chọn ${suggestion.label}'),
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
   Widget _buildServiceTierSelector(BuildContext context) {
     final tokens = GhstThemeTokens.of(context);
     const tierMeta =
-        <
-          String,
-          ({
-            Icon3dStyle style,
-            String subtitle,
-            String badge,
-          })
-        >{
+        <String, ({Icon3dStyle style, String subtitle, String badge})>{
           'standard': (
             style: Icon3dStyle.parcelBox,
             subtitle: 'Xe máy nội thành · Cân bằng cước phí',
@@ -1068,8 +1362,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
           ),
           'truck': (
             style: Icon3dStyle.cargoTruck,
-            subtitle: 'Hàng lớn cồng kềnh đến 500 kg',
-            badge: '500 kg',
+            subtitle: 'Hàng cồng kềnh · Ba gác, Van, Xe tải 1,5 tấn',
+            badge: 'Cồng kềnh',
           ),
         };
     TonePair toneForTier(String key) => switch (key) {
@@ -1116,7 +1410,9 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
               spacing: 10,
               runSpacing: 10,
               children: [
-                for (final entry in cloudServiceTypes.entries)
+                for (final entry in cloudServiceTypes.entries.where(
+                  (e) => _vehicle.allowsService(e.key),
+                ))
                   SizedBox(
                     width: cardWidth,
                     child: Builder(
@@ -1279,31 +1575,55 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
           spacing: 8,
           runSpacing: 8,
           children: [
-            ChoiceChip(showCheckmark: false, avatar: GhstButtonIcon.forLabel('Ghim điểm lấy [A]', size: 15), label: const Text('Ghim điểm lấy [A]'), selected: _activeMapTarget == 'pickup', onSelected: _busy || !_sameAccount
+            ChoiceChip(
+              showCheckmark: false,
+              avatar: GhstButtonIcon.forLabel('Ghim điểm lấy [A]', size: 15),
+              label: const Text('Ghim điểm lấy [A]'),
+              selected: _activeMapTarget == 'pickup',
+              onSelected: _busy || !_sameAccount
                   ? null
                   : (_) => setState(() {
                       _activeMapTarget = 'pickup';
                       if (_pickupPoint != null) _focusedMapPoint = _pickupPoint;
-                    }),),
-            ChoiceChip(showCheckmark: false, avatar: GhstButtonIcon.forLabel('Ghim điểm giao [B]', size: 15), label: const Text('Ghim điểm giao [B]'), selected: _activeMapTarget == 'dropoff', onSelected: _busy || !_sameAccount
+                    }),
+            ),
+            ChoiceChip(
+              showCheckmark: false,
+              avatar: GhstButtonIcon.forLabel('Ghim điểm giao [B]', size: 15),
+              label: const Text('Ghim điểm giao [B]'),
+              selected: _activeMapTarget == 'dropoff',
+              onSelected: _busy || !_sameAccount
                   ? null
                   : (_) => setState(() {
                       _activeMapTarget = 'dropoff';
                       if (_dropoffPoint != null) {
                         _focusedMapPoint = _dropoffPoint;
                       }
-                    }),),
+                    }),
+            ),
             for (var i = 0; i < _extraStops.length; i++)
-              ChoiceChip(showCheckmark: false, avatar: GhstButtonIcon.forLabel('Ghim điểm dừng #${i + 1}', size: 15), label: Text('Ghim điểm dừng #${i + 1}'), selected: _activeMapTarget == 'stop:$i', onSelected: _busy || !_sameAccount
+              ChoiceChip(
+                showCheckmark: false,
+                avatar: GhstButtonIcon.forLabel(
+                  'Ghim điểm dừng #${i + 1}',
+                  size: 15,
+                ),
+                label: Text('Ghim điểm dừng #${i + 1}'),
+                selected: _activeMapTarget == 'stop:$i',
+                onSelected: _busy || !_sameAccount
                     ? null
                     : (_) => setState(() {
                         _activeMapTarget = 'stop:$i';
                         if (_extraStops[i].point != null) {
                           _focusedMapPoint = _extraStops[i].point;
                         }
-                      }),),
+                      }),
+              ),
             ActionChip(
-              avatar: const GhstButtonIcon(Icons.my_location_outlined, size: 16),
+              avatar: const GhstButtonIcon(
+                Icons.my_location_outlined,
+                size: 16,
+              ),
               label: const Text('Vị trí hiện tại'),
               onPressed: _busy || !_sameAccount
                   ? null
@@ -1471,7 +1791,10 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                 onPressed: _busy || !_sameAccount
                     ? null
                     : () => _chooseAddress(prefix),
-                icon: const GhstButtonIcon(Icons.contact_mail_outlined, size: 20),
+                icon: const GhstButtonIcon(
+                  Icons.contact_mail_outlined,
+                  size: 20,
+                ),
               ),
             ],
           ),
@@ -1531,7 +1854,20 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                     _googleMapPicker(),
                     _address('pickup', 'Địa chỉ lấy hàng'),
                     _address('dropoff', 'Địa chỉ giao hàng'),
+                    if (widget.weatherService != null ||
+                        EnvConfig.deliveryApiBaseUrl.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      DeliveryWeatherStrip(
+                        point: _dropoffPoint ?? _pickupPoint,
+                        service: widget.weatherService,
+                      ),
+                    ],
                     const Divider(height: 24),
+                    ShippingLabelScanner(
+                      api: widget.ocrApi,
+                      onApply: _applyScannedShippingLabel,
+                    ),
+                    const SizedBox(height: 12),
                     _text('recipient_name', 'Tên người nhận', max: 120),
                     _text(
                       'recipient_phone',
@@ -1558,12 +1894,36 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                       suffixText: 'đ',
                     ),
                     const SizedBox(height: 4),
-                    _buildServiceTierSelector(context),
+                    _buildVehicleSelector(context),
                     const SizedBox(height: 16),
-                    DropdownButtonFormField<String>(icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18), initialValue: _payment, isExpanded: true, decoration: const InputDecoration(
+                    _buildServiceTierSelector(context),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('open-fare-comparison'),
+                        onPressed: _busy || !_sameAccount
+                            ? null
+                            : _openFareComparison,
+                        icon: const GhstButtonIcon(
+                          Icons.compare_arrows_rounded,
+                        ),
+                        label: const Text('So sánh cước 5 loại xe & 5 gói'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      icon: const GhstButtonIcon.glyph(
+                        GhstActionKind.down,
+                        size: 18,
+                      ),
+                      initialValue: _payment,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
                         labelText: 'Trả phí vận chuyển',
                         border: OutlineInputBorder(),
-                      ), items: const [
+                      ),
+                      items: const [
                         DropdownMenuItem(
                           value: 'sender_cash',
                           child: Text('Người gửi trả tiền mặt'),
@@ -1576,7 +1936,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                           value: 'recipient_cash',
                           child: Text('Người nhận trả tiền mặt'),
                         ),
-                      ], onChanged: _busy || !_sameAccount
+                      ],
+                      onChanged: _busy || !_sameAccount
                           ? null
                           : (value) {
                               setState(() {
@@ -1584,13 +1945,22 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                 _quote = null;
                               });
                               _scheduleDraftSync();
-                            },),
+                            },
+                    ),
                     if (widget.merchants.isNotEmpty) ...[
                       const SizedBox(height: 16),
-                      DropdownButtonFormField<String>(icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18), initialValue: _merchant, isExpanded: true, decoration: const InputDecoration(
+                      DropdownButtonFormField<String>(
+                        icon: const GhstButtonIcon.glyph(
+                          GhstActionKind.down,
+                          size: 18,
+                        ),
+                        initialValue: _merchant,
+                        isExpanded: true,
+                        decoration: const InputDecoration(
                           labelText: 'Cửa hàng xử lý',
                           border: OutlineInputBorder(),
-                        ), items: [
+                        ),
+                        items: [
                           const DropdownMenuItem(
                             value: '',
                             child: Text('Gửi trực tiếp'),
@@ -1604,7 +1974,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                               ),
                             ),
                           ),
-                        ], onChanged: _busy || !_sameAccount
+                        ],
+                        onChanged: _busy || !_sameAccount
                             ? null
                             : (value) {
                                 setState(() {
@@ -1612,12 +1983,15 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                   _quote = null;
                                 });
                                 _scheduleDraftSync();
-                              },),
+                              },
+                      ),
                     ],
                     const SizedBox(height: 12),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      secondary: const GhstButtonIcon(Icons.monetization_on_outlined),
+                      secondary: const GhstButtonIcon(
+                        Icons.monetization_on_outlined,
+                      ),
                       title: const Text('Dùng Xu giảm cước phí đơn hàng'),
                       subtitle: Text(
                         _availableCoins > 0
@@ -1641,249 +2015,274 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                               _scheduleDraftSync();
                             },
                     ),
-                  ExpansionTile(
-                    tilePadding: EdgeInsets.zero,
-                    title: const Text(
-                      'Tùy chọn nâng cao: Kích thước, Bảo hiểm & Điểm dừng',
-                    ),
-                    children: [
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _text(
-                              'length_cm',
-                              'Dài', suffixText: 'cm',
-                              numeric: true,
-                              optional: true,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: _text(
-                              'width_cm',
-                              'Rộng', suffixText: 'cm',
-                              numeric: true,
-                              optional: true,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: _text(
-                              'height_cm',
-                              'Cao', suffixText: 'cm',
-                              numeric: true,
-                              optional: true,
-                            ),
-                          ),
-                        ],
+                    ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      title: const Text(
+                        'Tùy chọn nâng cao: Kích thước, Bảo hiểm & Điểm dừng',
                       ),
-                      _text(
-                        'declared_value',
-                        'Khai giá bảo hiểm', suffixText: 'đ',
-                        numeric: true,
-                        optional: true,
-                      ),
-                      _text(
-                        'buyer_note',
-                        'Ghi chú giao hàng',
-                        optional: true,
-                        max: 500,
-                      ),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _text(
-                              'scheduled_at',
-                              'Hẹn giờ lấy hàng',
-                              optional: true,
-                              max: 64,
+                      children: [
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _text(
+                                'length_cm',
+                                'Dài',
+                                suffixText: 'cm',
+                                numeric: true,
+                                optional: true,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            tooltip: 'Chọn lịch lấy hàng',
-                            onPressed: _busy || !_sameAccount
-                                ? null
-                                : _pickSchedule,
-                            icon: const GhstButtonIcon(Icons.schedule),
-                          ),
-                          if (_fields['scheduled_at']!.text.isNotEmpty)
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _text(
+                                'width_cm',
+                                'Rộng',
+                                suffixText: 'cm',
+                                numeric: true,
+                                optional: true,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: _text(
+                                'height_cm',
+                                'Cao',
+                                suffixText: 'cm',
+                                numeric: true,
+                                optional: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        _text(
+                          'declared_value',
+                          'Khai giá bảo hiểm',
+                          suffixText: 'đ',
+                          numeric: true,
+                          optional: true,
+                        ),
+                        _text(
+                          'buyer_note',
+                          'Ghi chú giao hàng',
+                          optional: true,
+                          max: 500,
+                        ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _text(
+                                'scheduled_at',
+                                'Hẹn giờ lấy hàng',
+                                optional: true,
+                                max: 64,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
                             IconButton(
-                              tooltip: 'Xóa lịch hẹn',
+                              tooltip: 'Chọn lịch lấy hàng',
                               onPressed: _busy || !_sameAccount
                                   ? null
-                                  : () {
-                                      _fields['scheduled_at']!.clear();
-                                      setState(() => _quote = null);
-                                    },
-                              icon: const GhstButtonIcon(Icons.clear),
+                                  : _pickSchedule,
+                              icon: const GhstButtonIcon(Icons.schedule),
                             ),
-                        ],
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Giao khứ hồi · Phụ thu 60% cước'),
-                        value: _isRoundTrip,
-                        onChanged: _busy || !_sameAccount
-                            ? null
-                            : (v) {
-                                setState(() {
-                                  _isRoundTrip = v;
-                                  _quote = null;
-                                });
-                                _scheduleDraftSync();
-                              },
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Ưu tiên tài xế xe điện'),
-                        value: _preferEv,
-                        onChanged: _busy || !_sameAccount
-                            ? null
-                            : (v) {
-                                setState(() {
-                                  _preferEv = v;
-                                  _quote = null;
-                                });
-                                _scheduleDraftSync();
-                              },
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Đóng góp Quỹ Xanh · 1.000 đ'),
-                        value: _greenFund,
-                        onChanged: _busy || !_sameAccount
-                            ? null
-                            : (v) {
-                                setState(() {
-                                  _greenFund = v;
-                                  _quote = null;
-                                });
-                                _scheduleDraftSync();
-                              },
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text(
-                          'Yêu cầu ảnh bằng chứng giao hàng',
+                            if (_fields['scheduled_at']!.text.isNotEmpty)
+                              IconButton(
+                                tooltip: 'Xóa lịch hẹn',
+                                onPressed: _busy || !_sameAccount
+                                    ? null
+                                    : () {
+                                        _fields['scheduled_at']!.clear();
+                                        setState(() => _quote = null);
+                                      },
+                                icon: const GhstButtonIcon(Icons.clear),
+                              ),
+                          ],
                         ),
-                        value: _requirePod,
-                        onChanged: _busy || !_sameAccount
-                            ? null
-                            : (v) {
-                                setState(() {
-                                  _requirePod = v;
-                                  _quote = null;
-                                });
-                                _scheduleDraftSync();
-                              },
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Yêu cầu mã OTP 6 số người nhận'),
-                        value: _requireOtp,
-                        onChanged: _busy || !_sameAccount
-                            ? null
-                            : (v) {
-                                setState(() {
-                                  _requireOtp = v;
-                                  _quote = null;
-                                });
-                                _scheduleDraftSync();
-                              },
-                      ),
-                      for (var i = 0; i < _extraStops.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Row(
-                                children: [
-                                  GhstButtonIcon(
-                                    _extraStops[i].point != null
-                                        ? Icons.where_to_vote_rounded
-                                        : Icons.pin_drop_outlined,
-                                    size: 16,
-                                    color: _extraStops[i].point != null
-                                        ? tokens.emerald.foreground
-                                        : null,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Expanded(
-                                    child: Text(
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Giao khứ hồi · Phụ thu 60% cước'),
+                          value: _isRoundTrip,
+                          onChanged: _busy || !_sameAccount
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _isRoundTrip = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Ưu tiên tài xế xe điện'),
+                          value:
+                              _preferEv || _vehicle == VehicleClass.evScooter,
+                          onChanged:
+                              _busy ||
+                                  !_sameAccount ||
+                                  _vehicle == VehicleClass.evScooter
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _preferEv = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Đóng góp Quỹ Xanh · 1.000 đ'),
+                          value: _greenFund,
+                          onChanged: _busy || !_sameAccount
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _greenFund = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Yêu cầu ảnh bằng chứng giao hàng'),
+                          value: _requirePod,
+                          onChanged: _busy || !_sameAccount
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _requirePod = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Yêu cầu mã OTP 6 số người nhận'),
+                          value: _requireOtp,
+                          onChanged: _busy || !_sameAccount
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _requireOtp = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        SwitchListTile(
+                          key: const ValueKey('order-form-require-signature'),
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text(
+                            'Yêu cầu chữ ký điện tử người nhận',
+                          ),
+                          value: _requireSignature,
+                          onChanged: _busy || !_sameAccount
+                              ? null
+                              : (v) {
+                                  setState(() {
+                                    _requireSignature = v;
+                                    _quote = null;
+                                  });
+                                  _scheduleDraftSync();
+                                },
+                        ),
+                        for (var i = 0; i < _extraStops.length; i++)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    GhstButtonIcon(
                                       _extraStops[i].point != null
-                                          ? 'Điểm dừng #${i + 1} · Đã ghim trên Google Map'
-                                          : 'Điểm dừng trung gian #${i + 1}',
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
+                                          ? Icons.where_to_vote_rounded
+                                          : Icons.pin_drop_outlined,
+                                      size: 16,
+                                      color: _extraStops[i].point != null
+                                          ? tokens.emerald.foreground
+                                          : null,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _extraStops[i].point != null
+                                            ? 'Điểm dừng #${i + 1} · Đã ghim trên Google Map'
+                                            : 'Điểm dừng trung gian #${i + 1}',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  TextButton.icon(
-                                    style: TextButton.styleFrom(
+                                    TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                        ),
+                                        minimumSize: Size.zero,
+                                        tapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                      ),
+                                      onPressed: _busy || !_sameAccount
+                                          ? null
+                                          : () => setState(() {
+                                              _activeMapTarget = 'stop:$i';
+                                              if (_extraStops[i].point !=
+                                                  null) {
+                                                _focusedMapPoint =
+                                                    _extraStops[i].point;
+                                              }
+                                            }),
+                                      icon: const GhstButtonIcon(
+                                        Icons.pin_drop_outlined,
+                                        size: 15,
+                                      ),
+                                      label: const Text('Ghim Map'),
+                                    ),
+                                    IconButton(
                                       visualDensity: VisualDensity.compact,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
+                                      tooltip: 'Xóa điểm dừng',
+                                      onPressed: _busy || !_sameAccount
+                                          ? null
+                                          : () => _removeStop(i),
+                                      icon: const GhstButtonIcon(
+                                        Icons.remove_circle_outline,
+                                        size: 20,
                                       ),
-                                      minimumSize: Size.zero,
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
                                     ),
-                                    onPressed: _busy || !_sameAccount
-                                        ? null
-                                        : () => setState(() {
-                                            _activeMapTarget = 'stop:$i';
-                                            if (_extraStops[i].point != null) {
-                                              _focusedMapPoint =
-                                                  _extraStops[i].point;
-                                            }
-                                          }),
-                                    icon: const GhstButtonIcon(
-                                      Icons.pin_drop_outlined,
-                                      size: 15,
-                                    ),
-                                    label: const Text('Ghim Map'),
-                                  ),
-                                  IconButton(
-                                    visualDensity: VisualDensity.compact,
-                                    tooltip: 'Xóa điểm dừng',
-                                    onPressed: _busy || !_sameAccount
-                                        ? null
-                                        : () => _removeStop(i),
-                                    icon: const GhstButtonIcon(
-                                      Icons.remove_circle_outline,
-                                      size: 20,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              TextFormField(
-                                controller: _extraStops[i].address,
-                                enabled: !_busy && _sameAccount,
-                                decoration: InputDecoration(
-                                  labelText: 'Địa chỉ điểm dừng #${i + 1}',
-                                  border: const OutlineInputBorder(),
+                                  ],
                                 ),
-                                validator: (v) => (v?.trim().length ?? 0) < 3
-                                    ? 'Nhập địa chỉ điểm dừng'
-                                    : null,
-                              ),
-                              if (!_busy && _sameAccount)
-                                PhotonAddressLookup(
+                                TextFormField(
                                   controller: _extraStops[i].address,
-                                  service: widget.addressService,
-                                  buttonLabel:
-                                      'Tìm điểm dừng #${i + 1} trên Google Map',
-                                  autoSearch: true,
-                                  biasPoint:
-                                      _focusedMapPoint ??
-                                      _pickupPoint ??
-                                      _dropoffPoint,
-                                  onSelected: (place) {
-                                    if (!_sameAccount) return;
-                                    _extraStops[i].address.text = place.address;
+                                  enabled: !_busy && _sameAccount,
+                                  decoration: InputDecoration(
+                                    labelText: 'Địa chỉ điểm dừng #${i + 1}',
+                                    border: const OutlineInputBorder(),
+                                  ),
+                                  validator: (v) => (v?.trim().length ?? 0) < 3
+                                      ? 'Nhập địa chỉ điểm dừng'
+                                      : null,
+                                ),
+                                if (!_busy && _sameAccount)
+                                  PhotonAddressLookup(
+                                    controller: _extraStops[i].address,
+                                    service: widget.addressService,
+                                    buttonLabel:
+                                        'Tìm điểm dừng #${i + 1} trên Google Map',
+                                    autoSearch: true,
+                                    biasPoint:
+                                        _focusedMapPoint ??
+                                        _pickupPoint ??
+                                        _dropoffPoint,
+                                    onSelected: (place) {
+                                      if (!_sameAccount) return;
+                                      _extraStops[i].address.text =
+                                          place.address;
                                       setState(() {
                                         _extraStops[i].point = place.point;
                                         _focusedMapPoint = place.point;
@@ -1903,7 +2302,9 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                               onPressed: _busy || !_sameAccount
                                   ? null
                                   : _optimizeStops,
-                              icon: const GhstButtonIcon(Icons.alt_route_outlined),
+                              icon: const GhstButtonIcon(
+                                Icons.alt_route_outlined,
+                              ),
                               label: const Text(
                                 'Tối ưu thứ tự điểm dừng theo đường bộ',
                               ),
@@ -1929,7 +2330,9 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                       });
                                       _scheduleDraftSync();
                                     },
-                              icon: const GhstButtonIcon(Icons.add_location_alt_outlined),
+                              icon: const GhstButtonIcon(
+                                Icons.add_location_alt_outlined,
+                              ),
                               label: const Text(
                                 'Thêm điểm dừng trung gian · 5.000 đ',
                               ),
@@ -2019,6 +2422,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                 'distance_fee': 'Phí quãng đường bổ sung',
                                 'weight_fee': 'Phụ phí vượt khối lượng',
                                 'express_fee': 'Điều chỉnh gói dịch vụ',
+                                'vehicle_fee': 'Phụ phí loại xe',
                               }.entries)
                                 if ((_quote!['breakdown'] as Map)[entry.key]
                                     is num)
@@ -2033,6 +2437,8 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                 'round_trip_fee': 'Phụ phí khứ hồi',
                                 'insurance_fee': 'Phí bảo hiểm khai giá',
                                 'green_fee': 'Đóng góp Quỹ Xanh',
+                                'surge_fee': 'Phụ phí cao điểm / thời tiết',
+                                'geofence_fee': 'Phụ phí vùng giao nhận',
                               }.entries)
                                 if (((_quote!['breakdown'] as Map)[entry.key]
                                             as num? ??
@@ -2044,6 +2450,20 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                       '${entry.value}: ${CurrencyFormatter.formatVnd(((_quote!['breakdown'] as Map)[entry.key] as num).toDouble())}',
                                     ),
                                   ),
+                              if ((_quote!['matched_geofences'] as List?)
+                                      ?.isNotEmpty ==
+                                  true)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    'Vùng phụ phí áp dụng: ${(_quote!['matched_geofences'] as List).join(', ')}',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: tokens.amber.foreground,
+                                    ),
+                                  ),
+                                ),
                             ],
                           ],
                         ),
@@ -2057,8 +2477,7 @@ class _CloudOrderFormState extends State<CloudOrderForm> {
                                   .toDouble(),
                           orderReference: 'CUOC VAN CHUYEN',
                           compact: true,
-                          reconciliationNote:
-                              'Sau khi bấm Xác nhận tạo đơn, hệ thống sẽ tạo mã vận đơn riêng để đối soát chuyển khoản.',
+                          reconciliationNote: 'Sau khi bấm Xác nhận tạo đơn, hệ thống sẽ tạo mã vận đơn riêng để đối soát chuyển khoản.',
                         ),
                         const SizedBox(height: 16),
                       ],

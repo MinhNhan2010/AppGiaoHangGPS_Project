@@ -14,6 +14,7 @@ import '../widgets/cloud_logistics_panels.dart';
 import '../widgets/cloud_notification_center.dart';
 import '../widgets/cloud_profile_form.dart';
 import '../widgets/cloud_session_boundary.dart';
+import '../widgets/driver_cloud_wallet_panel.dart';
 import '../widgets/market_catalog_fields.dart';
 import '../widgets/market_commercial_sheets.dart';
 import '../widgets/market_product_details.dart';
@@ -692,16 +693,19 @@ class _MarketplaceViewState extends State<MarketplaceView> {
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: const Center(child: GhstButtonIcon(Icons.inventory_2_outlined, size: 40)),
     );
-    return SizedBox(
-      height: height,
-      width: double.infinity,
-      child: url.isEmpty
-          ? placeholder
-          : Image.network(
-              url,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => placeholder,
-            ),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: SizedBox(
+        height: height,
+        width: double.infinity,
+        child: url.isEmpty
+            ? placeholder
+            : Image.network(
+                url,
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => placeholder,
+              ),
+      ),
     );
   }
 
@@ -837,7 +841,16 @@ class _MarketplaceViewState extends State<MarketplaceView> {
 
   Widget _catalog() {
     final products = _rows(_data['products']);
+    final featuredShops = _rows(_data['shops']);
     final shop = _data['shop'] as Map?;
+    final shopMeta = _data['shop_meta'] as Map? ?? const {};
+    final shopBanner =
+        (shopMeta['banner_url'] ?? shop?['banner_url']) as String? ?? '';
+    final shopRadius =
+        (shopMeta['service_radius_km'] ?? shop?['service_radius_km']) as num? ??
+        0;
+    final shopFollowing =
+        (shopMeta['following'] ?? shop?['following']) == true;
     final categories = <String>{
       '',
       _category,
@@ -847,15 +860,19 @@ class _MarketplaceViewState extends State<MarketplaceView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (shop != null) ...[
-          if ((shop['banner_url'] as String? ?? '').isNotEmpty)
+          if (shopBanner.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: SizedBox(
-                height: 140,
-                child: Image.network(
-                  '${shop['banner_url']}',
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  height: 156,
+                  width: double.infinity,
+                  child: Image.network(
+                    shopBanner,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
                 ),
               ),
             ),
@@ -865,8 +882,8 @@ class _MarketplaceViewState extends State<MarketplaceView> {
             contentPadding: EdgeInsets.zero,
             leading: const GhstButtonIcon(Icons.location_on_outlined),
             title: Text('${shop['address']}'),
-            subtitle: (shop['service_radius_km'] as num? ?? 0) > 0
-                ? Text('Phạm vi giao hàng: ${shop['service_radius_km']} km')
+            subtitle: shopRadius > 0
+                ? Text('Phạm vi giao hàng: $shopRadius km')
                 : null,
           ),
           if (shop['paused'] == true) const Text('Cửa hàng đang tạm nghỉ.'),
@@ -886,13 +903,13 @@ class _MarketplaceViewState extends State<MarketplaceView> {
                 children: [
                   ActionChip(
                     avatar: GhstButtonIcon(
-                      shop['following'] == true
+                      shopFollowing
                           ? Icons.bookmark_added
                           : Icons.bookmark_add_outlined,
                       size: 16,
                     ),
                     label: Text(
-                      shop['following'] == true
+                      shopFollowing
                           ? 'Đang theo dõi'
                           : 'Theo dõi cửa hàng',
                     ),
@@ -901,7 +918,7 @@ class _MarketplaceViewState extends State<MarketplaceView> {
                         : () => _run(() async {
                             await _session.service.market('shop_follow_set', {
                               'shop_id': shop['id'],
-                              'enabled': shop['following'] != true,
+                              'enabled': !shopFollowing,
                             });
                             if (_allowed) await _load(silent: true);
                           }),
@@ -917,6 +934,141 @@ class _MarketplaceViewState extends State<MarketplaceView> {
               ),
             ),
           const Divider(),
+        ],
+        if (widget.view == MarketView.catalog &&
+            shop == null &&
+            featuredShops.isNotEmpty) ...[
+          Row(
+            children: [
+              const GhstAiIcon(
+                style: Icon3dStyle.foodMarket,
+                size: 26,
+                borderRadius: 8,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Quán ngon & Cửa hàng nổi bật (${featuredShops.length})',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 176,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: featuredShops.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 12),
+              itemBuilder: (context, idx) {
+                final s = featuredShops[idx];
+                final banner = '${s['banner_url'] ?? ''}'.trim();
+                final group = '${s['category_group'] ?? ''}'.trim();
+                final rating = s['rating_avg'] ?? '4.9';
+                final count = s['product_count'] ?? 0;
+                return SizedBox(
+                  width: 244,
+                  child: Card(
+                    clipBehavior: Clip.antiAlias,
+                    margin: EdgeInsets.zero,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: InkWell(
+                      key: ValueKey('featured-shop-${s['id']}'),
+                      onTap: () => _openShop({
+                        'shop_id': s['id'],
+                        'shop_name': s['name'],
+                      }),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(
+                            height: 92,
+                            child: banner.isEmpty
+                                ? ColoredBox(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.surfaceContainerLow,
+                                    child: const Center(
+                                      child: GhstAiIcon(
+                                        style: Icon3dStyle.merchantStore,
+                                        size: 38,
+                                        borderRadius: 10,
+                                      ),
+                                    ),
+                                  )
+                                : Image.network(
+                                    banner,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => ColoredBox(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.surfaceContainerLow,
+                                      child: const Center(
+                                        child: GhstButtonIcon.glyph(
+                                          GhstActionKind.store,
+                                          size: 24,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    '${s['name'] ?? ''}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13.5,
+                                    ),
+                                  ),
+                                  Text(
+                                    group.isNotEmpty
+                                        ? '$group · ★ $rating'
+                                        : '★ $rating · Giao nhanh',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  Text(
+                                    '$count món đang mở bán · ${s['address'] ?? ''}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
         ],
         TextField(
           controller: _search,
@@ -1022,7 +1174,10 @@ class _MarketplaceViewState extends State<MarketplaceView> {
             ),
             itemBuilder: (context, index) {
               final p = products[index];
-              final flashPrice = p['flash_sale_price'] as num?;
+              final flashPrice =
+                  (p['flash_sale_price'] as num?) ??
+                  ((p['flash_sale'] as Map?)?['sale_price'] as num?);
+              final prepMins = (p['preparation_minutes'] as num? ?? 0).toInt();
               final hasVariants = (p['variants_count'] as num? ?? 0) > 0;
               return Card(
                 clipBehavior: Clip.antiAlias,
@@ -1082,7 +1237,7 @@ class _MarketplaceViewState extends State<MarketplaceView> {
                                     ? 'Chưa nhận đặt'
                                     : p['stock'] == 0
                                     ? 'Hết hàng'
-                                    : 'Còn ${p['stock']}',
+                                    : 'Còn ${p['stock']}${prepMins > 0 ? ' · ~${prepMins}p' : ''}',
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -2229,7 +2384,15 @@ class _MarketplaceViewState extends State<MarketplaceView> {
           onTap: _openOperationsCenter,
         ),
       ],
-      if (_session.hasRole('driver'))
+      if (_session.hasRole('driver')) ...[
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const GhstButtonIcon.glyph(GhstActionKind.wallet),
+          title: const Text('Ví Tài xế & Đối soát 80/20'),
+          subtitle: const Text('Nạp ký quỹ VietQR, rút ngân hàng & biến động cước'),
+          trailing: const GhstButtonIcon(Icons.chevron_right),
+          onTap: () => openDriverCloudWallet(context, _session),
+        ),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const GhstButtonIcon(Icons.delivery_dining),
@@ -2247,6 +2410,7 @@ class _MarketplaceViewState extends State<MarketplaceView> {
                 ),
               ),
         ),
+      ],
       const Divider(),
       TextButton.icon(
         onPressed: () => _run(_session.service.signOut),

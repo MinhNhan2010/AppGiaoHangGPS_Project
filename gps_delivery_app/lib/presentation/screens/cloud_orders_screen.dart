@@ -12,6 +12,8 @@ import '../../core/network/public_json_api.dart';
 import '../../core/theme/admin_studio_theme.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/delivery_order_utilities.dart';
+import '../../domain/entities/vehicle_class.dart';
 import '../../data/repositories/cloud_orders_repository.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/cloud_order_form.dart';
@@ -44,6 +46,8 @@ class CloudOrdersScreen extends StatefulWidget {
     this.embedded = false,
     this.showAccountsToggle = true,
     this.initialQueue = false,
+    this.topBanner,
+    this.onReorder,
   });
   final CloudOrdersService? service;
   final CloudAccountSession? session;
@@ -51,6 +55,8 @@ class CloudOrdersScreen extends StatefulWidget {
   final bool embedded;
   final bool showAccountsToggle;
   final bool initialQueue;
+  final Widget? topBanner;
+  final ValueChanged<Map<String, dynamic>>? onReorder;
   @override
   State<CloudOrdersScreen> createState() => _CloudOrdersScreenState();
 }
@@ -83,6 +89,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
   bool _foreground = true;
   int get _schemaVersion => _session.schemaVersion;
   String _statusFilter = '', _accountFilter = '';
+  String _vehicleFilter = '';
+  String _queueSort = 'newest';
+  bool _zeroCodOnly = false;
+  bool _exportingCsv = false;
 
   @override
   void initState() {
@@ -388,7 +398,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
             ),
             FilledButton.icon(
               onPressed: () => Navigator.pop(dialog, controller.text.trim()),
-              icon: const GhstButtonIcon.glyph(GhstActionKind.checkCircle, size: 16),
+              icon: const GhstButtonIcon.glyph(
+                GhstActionKind.checkCircle,
+                size: 16,
+              ),
 
               label: const Text('Xác nhận'),
             ),
@@ -448,9 +461,7 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                               );
                               if (file == null) return;
                               if (await file.length() > 5000000) {
-                                update(
-                                  () => dialogError = 'Ảnh tối đa 5 MB.',
-                                );
+                                update(() => dialogError = 'Ảnh tối đa 5 MB.');
                                 return;
                               }
                               update(() {
@@ -530,7 +541,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                         }
                         Navigator.pop(dialog, needOtp ? otp : '');
                       },
-                icon: const GhstButtonIcon.glyph(GhstActionKind.scooter, size: 16),
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.scooter,
+                  size: 16,
+                ),
 
                 label: const Text('Đã giao'),
               ),
@@ -609,7 +623,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
             ),
             FilledButton.icon(
               onPressed: () => Navigator.pop(dialog, true),
-              icon: GhstButtonIcon.forLabel(action == 'deliver' ? 'Đã giao' : 'Đã hoàn hàng', size: 16),
+              icon: GhstButtonIcon.forLabel(
+                action == 'deliver' ? 'Đã giao' : 'Đã hoàn hàng',
+                size: 16,
+              ),
 
               label: Text(action == 'deliver' ? 'Đã giao' : 'Đã hoàn hàng'),
             ),
@@ -644,6 +661,7 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
             lease: lease,
             order: order,
             merchants: _merchants,
+            onReorder: widget.onReorder,
           ),
         ),
       ),
@@ -757,7 +775,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
         _field(_password, 'Mật khẩu', password: true),
         FilledButton.icon(
           onPressed: _busy ? null : _authenticate,
-          icon: GhstButtonIcon.forLabel(_register ? 'Tạo tài khoản' : 'Đăng nhập', size: 16),
+          icon: GhstButtonIcon.forLabel(
+            _register ? 'Tạo tài khoản' : 'Đăng nhập',
+            size: 16,
+          ),
 
           label: Text(_register ? 'Tạo tài khoản' : 'Đăng nhập'),
         ),
@@ -769,7 +790,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                     _register = !_register;
                     _error = null;
                   }),
-            icon: GhstButtonIcon.forLabel(_register ? 'Đã có tài khoản' : 'Đăng ký tài khoản', size: 16),
+            icon: GhstButtonIcon.forLabel(
+              _register ? 'Đã có tài khoản' : 'Đăng ký tài khoản',
+              size: 16,
+            ),
 
             label: Text(_register ? 'Đã có tài khoản' : 'Đăng ký tài khoản'),
           ),
@@ -866,6 +890,29 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
         ? Map<String, dynamic>.from(order['driver_profile'] as Map)
         : null;
 
+    final vehicle = VehicleClass.resolve(
+      vehicleType: details['vehicle_type'],
+      serviceType: details['service_type'],
+      preferEv: details['prefer_ev'] == true,
+    );
+    Widget routeLine(Color dotColor, String label) => Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(fontSize: 13.5, color: tokens.ink),
+          ),
+        ),
+      ],
+    );
+
     return GhstLuminousCard(
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(14),
@@ -888,49 +935,78 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                   color: tokens.ink,
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: statusTone.fill,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: statusTone.border),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (isLiveStatus) ...[
-                      GhstPulseBeacon(color: statusTone.icon, size: 7),
-                      const SizedBox(width: 6),
-                    ],
-                    Text(
-                      statusLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        color: statusTone.foreground,
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  if (details['pickup_address'] != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: tokens.cardSubtle,
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: tokens.border),
+                      ),
+                      child: Text(
+                        vehicle.shortLabel,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w700,
+                          color: tokens.inkSecondary,
+                        ),
                       ),
                     ),
-                  ],
-                ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: statusTone.fill,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: statusTone.border),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isLiveStatus) ...[
+                          GhstPulseBeacon(color: statusTone.icon, size: 7),
+                          const SizedBox(width: 6),
+                        ],
+                        Text(
+                          statusLabel,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: statusTone.foreground,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
           const SizedBox(height: 8),
           if (details['pickup_address'] != null) ...[
-            Text('Lấy: ${details['pickup_address']}'),
-            Text('Giao: ${details['dropoff_address']}'),
+            routeLine(tokens.emerald.icon, 'Lấy: ${details['pickup_address']}'),
+            routeLine(tokens.rose.icon, 'Giao: ${details['dropoff_address']}'),
             Text(
               '${details['recipient_name']} · ${details['recipient_phone']}',
+              style: TextStyle(fontSize: 13, color: tokens.inkSecondary),
             ),
             Text(
               '${details['package_description']} · ${details['weight_kg']} kg',
+              style: TextStyle(fontSize: 13, color: tokens.inkSecondary),
             ),
           ] else ...[
             Text(
-              '${details['weight_kg']} kg · ${cloudServiceTypes[details['service_type']] ?? 'Tiêu chuẩn'}',
+              '${details['weight_kg']} kg · ${VehicleClass.resolve(vehicleType: details['vehicle_type'], serviceType: details['service_type'], preferEv: details['prefer_ev'] == true).label} · ${cloudServiceTypes[details['service_type']] ?? 'Tiêu chuẩn'}',
               style: TextStyle(fontWeight: FontWeight.w700, color: tokens.ink),
             ),
             if (details['pickup_area'] != null ||
@@ -984,8 +1060,30 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
           const SizedBox(height: 4),
           Text(
             'Phí: ${CurrencyFormatter.formatVnd((order['shipping_fee'] as num).toDouble())} · COD: ${CurrencyFormatter.formatVnd((order['cod_amount'] as num).toDouble())}',
-            style: TextStyle(fontWeight: FontWeight.w700, color: tokens.ink),
+            style: TextStyle(
+              fontWeight: FontWeight.w700,
+              color: tokens.ink,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
+          if (_queue && (order['estimated_earning'] as num? ?? 0) > 0)
+            Text(
+              'Thực nhận tài xế (80%): ${CurrencyFormatter.formatVnd((order['estimated_earning'] as num).toDouble())}',
+              style: TextStyle(
+                color: tokens.emerald.foreground,
+                fontWeight: FontWeight.w800,
+                fontSize: 12.5,
+              ),
+            ),
+          if (order['batch_group_id'] != null)
+            Text(
+              'Chuyến ghép cùng tuyến · Thứ tự #${order['batch_sequence'] ?? 1}',
+              style: TextStyle(
+                color: tokens.sapphire.foreground,
+                fontWeight: FontWeight.w700,
+                fontSize: 12.5,
+              ),
+            ),
           if (!_queue && ((order['coin_discount'] as num? ?? 0) > 0))
             Text(
               'Đổi Xu giảm cước: -${CurrencyFormatter.formatVnd((order['coin_discount'] as num).toDouble())} · Cần thanh toán: ${CurrencyFormatter.formatVnd(((order['payable_fee'] ?? order['shipping_fee']) as num).toDouble())}',
@@ -1051,7 +1149,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                         onPressed: _busy || _schemaVersion < 2
                             ? null
                             : () => _transition(order, action.key),
-                        icon: const GhstButtonIcon(Icons.bolt_rounded, size: 18),
+                        icon: const GhstButtonIcon(
+                          Icons.bolt_rounded,
+                          size: 18,
+                        ),
                         label: Text(action.value),
                       )
                     : OutlinedButton.icon(
@@ -1067,6 +1168,20 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                   onPressed: _busy ? null : () => _history(order),
                   icon: const GhstButtonIcon(Icons.receipt_long_outlined),
                   label: const Text('Chi tiết'),
+                ),
+              if (!_queue &&
+                  !carrier &&
+                  order['owner_id'] == _api.userId &&
+                  widget.onReorder != null)
+                OutlinedButton.icon(
+                  key: ValueKey('order-reorder-${order['id']}'),
+                  onPressed: _busy
+                      ? null
+                      : () => widget.onReorder!(
+                          buildReorderInitialDetails(order),
+                        ),
+                  icon: const GhstButtonIcon(Icons.replay),
+                  label: const Text('Gửi lại đơn'),
                 ),
               if (!_queue &&
                   !carrier &&
@@ -1149,7 +1264,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
           ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(dialog, true),
-            icon: const GhstButtonIcon.glyph(GhstActionKind.checkCircle, size: 16),
+            icon: const GhstButtonIcon.glyph(
+              GhstActionKind.checkCircle,
+              size: 16,
+            ),
 
             label: const Text('Xác nhận'),
           ),
@@ -1388,20 +1506,257 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
     return filtered && _matches(a, ['full_name', 'phone', 'user_id']);
   }).toList();
 
-  List<Map<String, dynamic>> get _visibleOrders => _orders.where((o) {
-    if (_statusFilter.isNotEmpty && o['status'] != _statusFilter) return false;
-    final details = Map<String, dynamic>.from(o['details'] as Map? ?? {});
-    return _matches(
-      {...details, 'tracking_code': o['tracking_code']},
-      [
-        'tracking_code',
-        'recipient_name',
-        'recipient_phone',
-        'pickup_address',
-        'dropoff_address',
-      ],
+  List<Map<String, dynamic>> get _visibleOrders {
+    final filtered = _orders.where((o) {
+      if (_statusFilter.isNotEmpty && o['status'] != _statusFilter) {
+        return false;
+      }
+      final details = Map<String, dynamic>.from(o['details'] as Map? ?? {});
+      if (_vehicleFilter.isNotEmpty) {
+        final resolved = VehicleClass.resolve(
+          vehicleType: details['vehicle_type'],
+          serviceType: details['service_type'],
+          preferEv: details['prefer_ev'] == true,
+        );
+        if (resolved.id != _vehicleFilter) return false;
+      }
+      if (_queue && _zeroCodOnly && (o['cod_amount'] as num? ?? 0) > 0) {
+        return false;
+      }
+      return _matches(
+        {...details, 'tracking_code': o['tracking_code']},
+        [
+          'tracking_code',
+          'recipient_name',
+          'recipient_phone',
+          'pickup_address',
+          'dropoff_address',
+        ],
+      );
+    }).toList();
+
+    if (_queue) {
+      if (_queueSort == 'earning_desc') {
+        filtered.sort(
+          (a, b) => ((b['estimated_earning'] as num? ?? 0)).compareTo(
+            (a['estimated_earning'] as num? ?? 0),
+          ),
+        );
+      } else if (_queueSort == 'cod_asc') {
+        filtered.sort(
+          (a, b) => ((a['cod_amount'] as num? ?? 0)).compareTo(
+            (b['cod_amount'] as num? ?? 0),
+          ),
+        );
+      }
+    }
+    return filtered;
+  }
+
+  Future<void> _exportOrdersCsv(List<Map<String, dynamic>> list) async {
+    if (_exportingCsv || list.isEmpty) return;
+    setState(() => _exportingCsv = true);
+    try {
+      final saved = await exportOrdersCsvFile(list);
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Đã xuất CSV ${list.length} đơn: $saved'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Không xuất được CSV: $e'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exportingCsv = false);
+    }
+  }
+
+  Widget _buildDriverQueueFilters(BuildContext context) {
+    final tokens = GhstThemeTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final opt in const [
+              ('newest', 'Mới nhất'),
+              ('earning_desc', 'Thu nhập cao'),
+              ('cod_asc', 'COD thấp'),
+            ]) ...[
+              ChoiceChip(
+                key: ValueKey('driver-sort-${opt.$1}'),
+                visualDensity: VisualDensity.compact,
+                label: Text(opt.$2),
+                selected: _queueSort == opt.$1,
+                onSelected: (_) => setState(() => _queueSort = opt.$1),
+              ),
+              const SizedBox(width: 6),
+            ],
+            FilterChip(
+              key: const ValueKey('driver-queue-zero-cod'),
+              visualDensity: VisualDensity.compact,
+              avatar: GhstButtonIcon(
+                Icons.payments_outlined,
+                size: 16,
+                color: _zeroCodOnly ? tokens.emerald.foreground : null,
+              ),
+              label: const Text('Không ứng COD'),
+              selected: _zeroCodOnly,
+              onSelected: (sel) => setState(() => _zeroCodOnly = sel),
+            ),
+          ],
+        ),
+      ),
     );
-  }).toList();
+  }
+
+  Widget _buildDriverShiftSummary(
+    BuildContext context, {
+    bool singleLine = false,
+  }) {
+    final tokens = GhstThemeTokens.of(context);
+    final summary = summarizeDriverOrders(_orders, _api.userId);
+    Widget pill(String text, {Color? fg, Color? bg, Color? border}) =>
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: bg ?? tokens.cardSubtle,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: border ?? tokens.border),
+          ),
+          child: Text(
+            text,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w700,
+              color: fg ?? tokens.ink,
+            ),
+          ),
+        );
+    final items = [
+      pill('Đang chạy: ${summary.activeCount}'),
+      pill('Hoàn tất: ${summary.deliveredCount}'),
+      pill(
+        'Thực nhận 80%: ${CurrencyFormatter.formatVnd(summary.estimatedEarningsVnd)}',
+        fg: tokens.emerald.foreground,
+        bg: tokens.emerald.fill,
+        border: tokens.emerald.border,
+      ),
+      pill(
+        'COD đang giữ: ${CurrencyFormatter.formatVnd(summary.codHoldingVnd)}',
+        fg: tokens.amber.foreground,
+        bg: tokens.amber.fill,
+        border: tokens.amber.border,
+      ),
+    ];
+    if (singleLine) {
+      return SingleChildScrollView(
+        key: const ValueKey('driver-shift-summary'),
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (var i = 0; i < items.length; i++) ...[
+              if (i > 0) const SizedBox(width: 6),
+              items[i],
+            ],
+          ],
+        ),
+      );
+    }
+    return Wrap(
+      key: const ValueKey('driver-shift-summary'),
+      spacing: 6,
+      runSpacing: 4,
+      children: items,
+    );
+  }
+
+  Widget _buildAdminOrdersKpiStrip(
+    BuildContext context,
+    List<Map<String, dynamic>> visibleOrders,
+  ) {
+    final tokens = GhstThemeTokens.of(context);
+    final summary = summarizeAdminOrders(visibleOrders);
+    return Container(
+      key: const ValueKey('admin-orders-kpi-strip'),
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: tokens.cardSubtle,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: tokens.border),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text('Đơn lọc: ${summary.total}'),
+            ),
+            const SizedBox(width: 6),
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text('Chờ nhận: ${summary.searching}'),
+            ),
+            if (summary.staleSearching > 0) ...[
+              const SizedBox(width: 6),
+              Chip(
+                visualDensity: VisualDensity.compact,
+                backgroundColor: tokens.amber.fill,
+                side: BorderSide(color: tokens.amber.border),
+                avatar: GhstButtonIcon(
+                  Icons.schedule_outlined,
+                  size: 15,
+                  color: tokens.amber.foreground,
+                ),
+                label: Text(
+                  'Chờ >15p: ${summary.staleSearching}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: tokens.amber.foreground,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(width: 6),
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text('Đang giao: ${summary.active}'),
+            ),
+            const SizedBox(width: 6),
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text('Hoàn tất: ${summary.delivered}'),
+            ),
+            const SizedBox(width: 6),
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text(
+                'Tổng cước: ${CurrencyFormatter.formatVnd(summary.totalShippingFee)}',
+              ),
+            ),
+            const SizedBox(width: 6),
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text(
+                'Tổng COD: ${CurrencyFormatter.formatVnd(summary.totalCod)}',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _filters({required bool accounts}) => LayoutBuilder(
     builder: (context, constraints) => Wrap(
@@ -1410,7 +1765,7 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         SizedBox(
-          width: constraints.maxWidth < 600 ? constraints.maxWidth : 360,
+          width: constraints.maxWidth < 600 ? constraints.maxWidth : 260,
           child: TextField(
             controller: _search,
             onChanged: (_) => setState(() {}),
@@ -1431,11 +1786,21 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
           ),
         ),
         SizedBox(
-          width: constraints.maxWidth < 600 ? constraints.maxWidth : 240,
-          child: DropdownButtonFormField<String>(icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18), key: ValueKey(accounts), initialValue: accounts ? _accountFilter : _statusFilter, isExpanded: true, decoration: InputDecoration(
+          width: constraints.maxWidth < 600
+              ? (accounts
+                    ? constraints.maxWidth
+                    : (constraints.maxWidth - 12) / 2)
+              : 190,
+          child: DropdownButtonFormField<String>(
+            icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18),
+            key: ValueKey(accounts),
+            initialValue: accounts ? _accountFilter : _statusFilter,
+            isExpanded: true,
+            decoration: InputDecoration(
               labelText: accounts ? 'Vai trò / duyệt' : 'Trạng thái',
               border: const OutlineInputBorder(),
-            ), items:
+            ),
+            items:
                 (accounts
                         ? {
                             '': 'Tất cả',
@@ -1449,14 +1814,39 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                       (e) =>
                           DropdownMenuItem(value: e.key, child: Text(e.value)),
                     )
-                    .toList(), onChanged: (value) => setState(() {
+                    .toList(),
+            onChanged: (value) => setState(() {
               if (accounts) {
                 _accountFilter = value!;
               } else {
                 _statusFilter = value!;
               }
-            }),),
+            }),
+          ),
         ),
+        if (!accounts)
+          SizedBox(
+            width: constraints.maxWidth < 600
+                ? (constraints.maxWidth - 12) / 2
+                : 180,
+            child: DropdownButtonFormField<String>(
+              key: const ValueKey('orders-vehicle-filter'),
+              icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 18),
+              initialValue: _vehicleFilter,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Loại xe',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('Tất cả xe')),
+                for (final vc in VehicleClass.all)
+                  DropdownMenuItem(value: vc.id, child: Text(vc.label)),
+              ],
+              onChanged: (value) =>
+                  setState(() => _vehicleFilter = value ?? ''),
+            ),
+          ),
       ],
     ),
   );
@@ -1500,7 +1890,9 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                                 _session,
                                 operator: true,
                               ),
-                        icon: const GhstButtonIcon(Icons.account_balance_outlined),
+                        icon: const GhstButtonIcon(
+                          Icons.account_balance_outlined,
+                        ),
                       ),
                       IconButton(
                         tooltip: 'Duyệt cửa hàng',
@@ -1629,6 +2021,7 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
               else if (_loaded && _account == null && !_operator)
                 Align(alignment: Alignment.centerLeft, child: _profileForm())
               else if (_loaded) ...[
+                if (widget.topBanner != null) widget.topBanner!,
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
@@ -1657,7 +2050,19 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                                 _session,
                                 operator: _operator,
                               ),
-                        icon: const GhstButtonIcon(Icons.local_shipping_outlined),
+                        icon: const GhstButtonIcon(
+                          Icons.local_shipping_outlined,
+                        ),
+                      ),
+                    if (_operator && !_accountsView && _orders.isNotEmpty)
+                      OutlinedButton.icon(
+                        key: const ValueKey('orders-export-csv'),
+                        onPressed:
+                            _busy || _exportingCsv || visibleOrders.isEmpty
+                            ? null
+                            : () => _exportOrdersCsv(visibleOrders),
+                        icon: const GhstButtonIcon(Icons.download_outlined),
+                        label: const Text('Xuất CSV'),
                       ),
                     if (!widget.admin && _session.hasRole('driver'))
                       IconButton(
@@ -1732,6 +2137,7 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                                   _search.clear();
                                   _statusFilter = '';
                                   _accountFilter = '';
+                                  _vehicleFilter = '';
                                 });
                                 _load();
                               },
@@ -1754,12 +2160,32 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                     const Divider(),
                   ],
                 ] else ...[
+                  if (widget.admin && !_accountsView && _orders.isNotEmpty)
+                    _buildAdminOrdersKpiStrip(context, visibleOrders),
                   if (_orders.isNotEmpty) ...[
                     _filters(accounts: false),
+                    if (_queue) _buildDriverQueueFilters(context),
                     const SizedBox(height: 12),
-                    Text(
-                      'Hiển thị ${visibleOrders.length} / ${_orders.length} đơn đã tải',
-                    ),
+                    if (widget.embedded &&
+                        !_queue &&
+                        !widget.admin &&
+                        _session.hasRole('driver') &&
+                        _orders.isNotEmpty)
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Text(
+                            'Hiển thị ${visibleOrders.length} / ${_orders.length} đơn đã tải',
+                          ),
+                          _buildDriverShiftSummary(context),
+                        ],
+                      )
+                    else
+                      Text(
+                        'Hiển thị ${visibleOrders.length} / ${_orders.length} đơn đã tải',
+                      ),
                     if (visibleOrders.isEmpty)
                       const Text('Không có đơn hàng phù hợp.'),
                   ],
@@ -1772,7 +2198,10 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                   if (_hasMore)
                     TextButton.icon(
                       onPressed: _busy ? null : () => _load(more: true),
-                      icon: const GhstButtonIcon.glyph(GhstActionKind.down, size: 16),
+                      icon: const GhstButtonIcon.glyph(
+                        GhstActionKind.down,
+                        size: 16,
+                      ),
 
                       label: const Text('Tải thêm'),
                     ),
@@ -1784,16 +2213,28 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
       ),
     );
     if (widget.embedded) return content;
+    final showDriverSummary =
+        !_queue &&
+        !widget.admin &&
+        _session.hasRole('driver') &&
+        _orders.isNotEmpty;
     final screen = Scaffold(
       appBar: AppBar(
-        title: Text(widget.admin ? 'Điều hành vận đơn' : 'Đơn hàng'),
+        title: showDriverSummary
+            ? Row(
+                children: [
+                  Text(widget.admin ? 'Điều hành vận đơn' : 'Đơn hàng'),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _buildDriverShiftSummary(context, singleLine: true),
+                  ),
+                ],
+              )
+            : Text(widget.admin ? 'Điều hành vận đơn' : 'Đơn hàng'),
       ),
       body: SafeArea(child: content),
     );
     if (!widget.admin) return screen;
-    return Theme(
-      data: AdminStudioTheme.of(context),
-      child: screen,
-    );
+    return Theme(data: AdminStudioTheme.of(context), child: screen);
   }
 }

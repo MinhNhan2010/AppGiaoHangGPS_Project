@@ -298,12 +298,20 @@ test('Cloud preferences, AI history, live order journey and driver_reviews enfor
   assert.equal((await post('/preferences/drop_db',{})).status,400);
   assert.equal((await post('/ai-history/hack',{})).status,400);
   assert.equal((await post('/order-live/override_status',{})).status,400);
+  assert.equal((await post('/driver-wallet/mint_free_money',{})).status,400);
+  assert.equal((await post('/showcase-catalog/drop_all',{})).status,400);
+  assert.equal((await post('/driver-dispatch/force_assign',{})).status,400);
+  assert.equal((await post('/admin-pricing/free_all',{})).status,400);
   assert.equal(calls.length,0);
   assert.equal((await post('/preferences/save_ui',{theme_mode:'dark'})).status,200);
   assert.equal((await post('/ai-history/list',{})).status,200);
   assert.equal((await post('/order-live/snapshot',{order_id:'10000000-0000-0000-0000-000000000001'})).status,200);
   assert.equal((await post('/logistics/driver_reviews',{})).status,200);
+  assert.equal((await post('/driver-wallet/summary',{})).status,200);
+  assert.equal((await post('/showcase-catalog/status',{})).status,200);
+  assert.equal((await post('/driver-dispatch/poll_offer',{})).status,200);
+  assert.equal((await post('/admin-pricing/get',{})).status,200);
   assert.deepEqual(calls.map(c=>c.url.split('/').at(-1)),[
-    'delivery_cloud_preferences','delivery_cloud_ai_history','delivery_cloud_order_live','delivery_cloud_logistics',
+    'delivery_cloud_preferences','delivery_cloud_ai_history','delivery_cloud_order_live','delivery_cloud_logistics','delivery_driver_wallet','delivery_showcase_catalog','delivery_driver_dispatch','delivery_admin_pricing',
   ]);
 });

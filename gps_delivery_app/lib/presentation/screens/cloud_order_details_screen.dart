@@ -6,10 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/config/env_config.dart';
 import '../../core/integrations/cloud_session_lease.dart';
+import '../../core/integrations/delivery_weather_service.dart';
 import '../../core/network/public_json_api.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/delivery_order_utilities.dart';
+import '../../domain/entities/vehicle_class.dart';
 import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/geo_point.dart';
 import '../widgets/cloud_commerce_dialog.dart';
@@ -17,7 +21,10 @@ import '../widgets/cloud_logistics_panels.dart';
 import '../widgets/cloud_order_form.dart';
 import '../widgets/cloud_order_labels.dart';
 import '../widgets/cloud_session_boundary.dart';
+import '../widgets/delivery_utilities_widgets.dart';
+import '../widgets/delivery_weather_strip.dart';
 import '../widgets/market_commercial_sheets.dart';
+import '../widgets/recipient_signature_pad.dart';
 import '../widgets/system_state_screens.dart';
 import '../widgets/ghst_button_icon.dart';
 
@@ -27,11 +34,15 @@ class CloudOrderDetailsScreen extends StatefulWidget {
     required this.lease,
     required this.order,
     this.merchants = const [],
+    this.onReorder,
+    this.weatherService,
   });
 
   final CloudSessionLease lease;
   final Map<String, dynamic> order;
   final List<Map<String, dynamic>> merchants;
+  final ValueChanged<Map<String, dynamic>>? onReorder;
+  final DeliveryWeatherService? weatherService;
 
   @override
   State<CloudOrderDetailsScreen> createState() =>
@@ -51,6 +62,9 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
   Set<String> _completedCheckpoints = <String>{};
   bool _hasPodFromLive = false;
   String? _podPhotoPath;
+  bool _hasSignatureFromLive = false;
+  String? _signaturePath;
+  String? _recipientSignerName;
   bool _busy = false;
   bool _chatBusy = false;
   bool _localRevoked = false;
@@ -143,6 +157,17 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
       _hasPodFromLive = true;
     } else if (_order['has_pod'] == true) {
       _hasPodFromLive = true;
+    }
+    final initialSigPath = '${_order['signature_path'] ?? ''}'.trim();
+    if (initialSigPath.isNotEmpty) {
+      _signaturePath = initialSigPath;
+      _hasSignatureFromLive = true;
+    } else if (_order['has_signature'] == true) {
+      _hasSignatureFromLive = true;
+    }
+    final initialSigner = '${_order['recipient_signer_name'] ?? ''}'.trim();
+    if (initialSigner.isNotEmpty) {
+      _recipientSignerName = initialSigner;
     }
     final rawCheckpoints =
         _order['completed_checkpoints'] ?? _details['completed_checkpoints'];
@@ -317,6 +342,17 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
         } else if (enriched['has_pod'] == true) {
           _hasPodFromLive = true;
         }
+        final liveSigPath = '${enriched['signature_path'] ?? ''}'.trim();
+        if (liveSigPath.isNotEmpty) {
+          _signaturePath = liveSigPath;
+          _hasSignatureFromLive = true;
+        } else if (enriched['has_signature'] == true) {
+          _hasSignatureFromLive = true;
+        }
+        final liveSigner = '${enriched['recipient_signer_name'] ?? ''}'.trim();
+        if (liveSigner.isNotEmpty) {
+          _recipientSignerName = liveSigner;
+        }
         if (rawMessages is List) {
           _chatMessages = rawMessages
               .whereType<Map>()
@@ -408,13 +444,32 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  Future<void> _openGoogleMapsDirections() async {
+  Future<void> _openExternalNavigation() async {
+    final status = _effectiveStatus;
+    final goingToPickup = status == 'accepted' || status == 'arrivingPickup';
     final pickup = _parsePoint(_details['pickup_lat'], _details['pickup_lng']);
     final dropoff = _parsePoint(
       _details['dropoff_lat'],
       _details['dropoff_lng'],
     );
-    if (dropoff == null) return;
+    final destination = goingToPickup
+        ? (pickup != null
+              ? '${pickup.latitude},${pickup.longitude}'
+              : '${_details['pickup_address'] ?? ''}'.trim())
+        : (dropoff != null
+              ? '${dropoff.latitude},${dropoff.longitude}'
+              : '${_details['dropoff_address'] ?? ''}'.trim());
+    if (destination.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Chưa có tọa độ hoặc địa chỉ điểm đến.'),
+          ),
+        );
+      }
+      return;
+    }
     final extraStops = (_details['extra_stops'] as List? ?? const [])
         .whereType<Map>()
         .map((s) => _parsePoint(s['lat'], s['lng']))
@@ -422,16 +477,61 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
         .toList();
     final query = <String, String>{
       'api': '1',
-      if (pickup != null) 'origin': '${pickup.latitude},${pickup.longitude}',
-      'destination': '${dropoff.latitude},${dropoff.longitude}',
-      if (extraStops.isNotEmpty)
+      if (!goingToPickup && pickup != null)
+        'origin': '${pickup.latitude},${pickup.longitude}',
+      'destination': destination,
+      if (!goingToPickup && extraStops.isNotEmpty)
         'waypoints': extraStops
             .map((p) => '${p.latitude},${p.longitude}')
             .join('|'),
       'travelmode': 'driving',
     };
     final uri = Uri.https('www.google.com', '/maps/dir/', query);
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    var launched = false;
+    try {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      launched = false;
+    }
+    if (!launched && mounted) {
+      await Clipboard.setData(ClipboardData(text: uri.toString()));
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Đã sao chép liên kết chỉ đường Google Maps.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _callRecipient() async {
+    final phone = '${_details['recipient_phone'] ?? ''}'.trim();
+    if (phone.isEmpty) return;
+    var launched = false;
+    try {
+      launched = await launchUrl(Uri(scheme: 'tel', path: phone));
+    } catch (_) {
+      launched = false;
+    }
+    if (!launched && mounted) {
+      await Clipboard.setData(ClipboardData(text: phone));
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Đã sao chép SĐT người nhận: $phone'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _reportDriverIncident() async {
+    final message = await showDriverIncidentDialog(context);
+    if (message == null || message.trim().isEmpty || !mounted || !_allowed) {
+      return;
+    }
+    await _sendOrderChat(message);
   }
 
   Future<void> _broadcastRealDriverGps() async {
@@ -500,7 +600,8 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
           ? Map<String, dynamic>.from(res['order'] as Map)
           : null;
       final rawCps =
-          updatedOrder?['completed_checkpoints'] ?? res['completed_checkpoints'];
+          updatedOrder?['completed_checkpoints'] ??
+          res['completed_checkpoints'];
       setState(() {
         if (updatedOrder != null) {
           _currentOrder = updatedOrder;
@@ -580,10 +681,9 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
   Future<void> _executeTransition(String action) async {
     if (_busy || !_allowed) return;
     final service = widget.lease.session.service;
-    final currentVersion =
-        (_history != null && _history!.isNotEmpty
-                ? (_history!.last['version'] as int)
-                : (_order['version'] as int? ?? 1));
+    final currentVersion = (_history != null && _history!.isNotEmpty
+        ? (_history!.last['version'] as int)
+        : (_order['version'] as int? ?? 1));
     String reason = '';
     var collectCashBeforeDeliver = false;
 
@@ -609,7 +709,10 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             ),
             FilledButton.icon(
               onPressed: () => Navigator.pop(dialog, ctrl.text.trim()),
-              icon: const GhstButtonIcon.glyph(GhstActionKind.checkCircle, size: 16),
+              icon: const GhstButtonIcon.glyph(
+                GhstActionKind.checkCircle,
+                size: 16,
+              ),
 
               label: const Text('Xác nhận'),
             ),
@@ -672,205 +775,285 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
     } else if (action == 'deliver') {
       final needPod = _details['require_pod'] == true;
       final needOtp = _details['require_otp'] == true;
+      final needSignature = _details['require_signature'] == true;
       final needCash = cloudOrderCanCollectCash(_order);
       final feeDue = cloudOrderPendingCashFee(_order);
       final codDue = cloudOrderPendingCashCod(_order);
       var podReady =
           _hasPodFromLive ||
           (_order['pod_photo_path'] as String? ?? '').isNotEmpty;
+      var signatureReady =
+          _hasSignatureFromLive ||
+          (_order['signature_path'] as String? ?? '').isNotEmpty;
       var cashConfirmed = !needCash;
       var uploading = false;
       String? dialogErr;
       final otpCtrl = TextEditingController();
       final noteCtrl = TextEditingController();
-      final deliverPayload =
-          await _privateDialog<({String reason, bool collectCash})>(
-            (dialog) => StatefulBuilder(
-              builder: (context, update) => AlertDialog(
-                title: const Text('Hoàn tất giao hàng'),
-                content: SizedBox(
-                  width: 440,
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (uploading) const LinearProgressIndicator(),
-                        if (dialogErr != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Text(
-                              dialogErr!,
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.error,
-                              ),
-                            ),
+      final signerNameCtrl = TextEditingController(
+        text: '${_details['recipient_name'] ?? ''}'.trim(),
+      );
+      final sigCtrl = RecipientSignatureController();
+      final deliverPayload = await _privateDialog<({String reason, bool collectCash})>(
+        (dialog) => StatefulBuilder(
+          builder: (context, update) => AlertDialog(
+            title: const Text('Hoàn tất giao hàng'),
+            content: SizedBox(
+              width: 440,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (uploading) const LinearProgressIndicator(),
+                    if (dialogErr != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          dialogErr!,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
                           ),
-                        if (needCash) ...[
-                          CheckboxListTile(
-                            contentPadding: EdgeInsets.zero,
-                            value: cashConfirmed,
-                            onChanged: (v) =>
-                                update(() => cashConfirmed = v ?? false),
-                            title: Text(
-                              'Đã thu đủ tiền mặt · ${CurrencyFormatter.formatVnd((feeDue + codDue).toDouble())}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            subtitle: Text(
-                              [
-                                if (feeDue > 0)
-                                  'Cước: ${CurrencyFormatter.formatVnd(feeDue.toDouble())}',
-                                if (codDue > 0)
-                                  'COD: ${CurrencyFormatter.formatVnd(codDue.toDouble())}',
-                              ].join(' · '),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                        ],
-                        if (needPod) ...[
-                          OutlinedButton.icon(
-                            onPressed: uploading
-                                ? null
-                                : () async {
-                                    final file = await openFile(
-                                      acceptedTypeGroups: const [
-                                        XTypeGroup(
-                                          label: 'Ảnh POD',
-                                          extensions: [
-                                            'jpg',
-                                            'jpeg',
-                                            'png',
-                                            'webp',
-                                          ],
-                                        ),
+                        ),
+                      ),
+                    if (needCash) ...[
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: cashConfirmed,
+                        onChanged: (v) =>
+                            update(() => cashConfirmed = v ?? false),
+                        title: Text(
+                          'Đã thu đủ tiền mặt · ${CurrencyFormatter.formatVnd((feeDue + codDue).toDouble())}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        subtitle: Text(
+                          [
+                            if (feeDue > 0)
+                              'Cước: ${CurrencyFormatter.formatVnd(feeDue.toDouble())}',
+                            if (codDue > 0)
+                              'COD: ${CurrencyFormatter.formatVnd(codDue.toDouble())}',
+                          ].join(' · '),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (needPod) ...[
+                      OutlinedButton.icon(
+                        onPressed: uploading
+                            ? null
+                            : () async {
+                                final file = await openFile(
+                                  acceptedTypeGroups: const [
+                                    XTypeGroup(
+                                      label: 'Ảnh POD',
+                                      extensions: [
+                                        'jpg',
+                                        'jpeg',
+                                        'png',
+                                        'webp',
                                       ],
-                                    );
-                                    if (file == null) return;
-                                    if (await file.length() > 5000000) {
-                                      update(
-                                        () => dialogErr = 'Ảnh tối đa 5 MB.',
-                                      );
-                                      return;
-                                    }
+                                    ),
+                                  ],
+                                );
+                                if (file == null) return;
+                                if (await file.length() > 5000000) {
+                                  update(() => dialogErr = 'Ảnh tối đa 5 MB.');
+                                  return;
+                                }
+                                update(() {
+                                  uploading = true;
+                                  dialogErr = null;
+                                });
+                                try {
+                                  final uploadedPath = await service.uploadPod(
+                                    trackingCode: '${_order['tracking_code']}',
+                                    bytes: await file.readAsBytes(),
+                                  );
+                                  if (dialog.mounted) {
                                     update(() {
-                                      uploading = true;
-                                      dialogErr = null;
+                                      uploading = false;
+                                      podReady = true;
+                                      _hasPodFromLive = true;
+                                      _podPhotoPath = uploadedPath;
                                     });
-                                    try {
-                                      final uploadedPath =
-                                          await service.uploadPod(
-                                            trackingCode:
-                                                '${_order['tracking_code']}',
-                                            bytes: await file.readAsBytes(),
-                                          );
-                                      if (dialog.mounted) {
-                                        update(() {
-                                          uploading = false;
-                                          podReady = true;
-                                          _hasPodFromLive = true;
-                                          _podPhotoPath = uploadedPath;
-                                        });
-                                      }
-                                    } catch (e) {
-                                      if (dialog.mounted) {
-                                        update(() {
-                                          uploading = false;
-                                          dialogErr = e is PublicApiException
-                                              ? e.message
-                                              : 'Chưa tải được ảnh POD.';
-                                        });
-                                      }
-                                    }
-                                  },
-                            icon: GhstButtonIcon(
-                              podReady
-                                  ? Icons.check_circle_outline
-                                  : Icons.camera_alt_outlined,
-                            ),
-                            label: Text(
-                              podReady
-                                  ? 'Đã tải lên ảnh POD'
-                                  : 'Tải ảnh bằng chứng giao hàng',
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                        ],
-                        if (needOtp)
-                          TextField(
-                            controller: otpCtrl,
-                            maxLength: 6,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              labelText: 'Mã OTP 6 số người nhận',
-                              border: OutlineInputBorder(),
-                            ),
-                          )
-                        else
-                          TextField(
-                            controller: noteCtrl,
-                            maxLength: 200,
-                            decoration: const InputDecoration(
-                              labelText: 'Ghi chú người nhận · tùy chọn',
-                              hintText: 'Ví dụ: Chính chủ nhận / Lễ tân nhận',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                      ],
+                                  }
+                                } catch (e) {
+                                  if (dialog.mounted) {
+                                    update(() {
+                                      uploading = false;
+                                      dialogErr = e is PublicApiException
+                                          ? e.message
+                                          : 'Chưa tải được ảnh POD.';
+                                    });
+                                  }
+                                }
+                              },
+                        icon: GhstButtonIcon(
+                          podReady
+                              ? Icons.check_circle_outline
+                              : Icons.camera_alt_outlined,
+                        ),
+                        label: Text(
+                          podReady
+                              ? 'Đã tải lên ảnh POD'
+                              : 'Tải ảnh bằng chứng giao hàng',
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    TextField(
+                      key: const ValueKey('deliver-signer-name'),
+                      controller: signerNameCtrl,
+                      maxLength: 120,
+                      decoration: InputDecoration(
+                        labelText: needSignature
+                            ? 'Họ tên người ký nhận (bắt buộc)'
+                            : 'Họ tên người ký nhận (tùy chọn)',
+                        border: const OutlineInputBorder(),
+                        counterText: '',
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 10),
+                    RecipientSignaturePad(
+                      controller: sigCtrl,
+                      enabled: !uploading,
+                      requiredSignature: needSignature,
+                    ),
+                    if (signatureReady)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 6),
+                        child: Text(
+                          'Đã lưu chữ ký điện tử người nhận lên hệ thống.',
+                          style: TextStyle(
+                            color: Color(0xFF047857),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12.5,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    if (needOtp)
+                      TextField(
+                        controller: otpCtrl,
+                        maxLength: 6,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Mã OTP 6 số người nhận',
+                          border: OutlineInputBorder(),
+                        ),
+                      )
+                    else
+                      TextField(
+                        controller: noteCtrl,
+                        maxLength: 200,
+                        decoration: const InputDecoration(
+                          labelText: 'Ghi chú người nhận · tùy chọn',
+                          hintText: 'Ví dụ: Chính chủ nhận / Lễ tân nhận',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                  ],
                 ),
-                actions: [
-                  TextButton.icon(
-                    onPressed: () => Navigator.pop(dialog),
-                    icon: const GhstButtonIcon.glyph(GhstActionKind.back, size: 16),
-
-                    label: const Text('Quay lại'),
-                  ),
-                  FilledButton.icon(
-                    onPressed: uploading
-                        ? null
-                        : () {
-                            if (needCash && !cashConfirmed) {
-                              update(
-                                () => dialogErr =
-                                    'Xác nhận đã thu đủ tiền mặt trước khi hoàn tất.',
-                              );
-                              return;
-                            }
-                            if (needPod && !podReady) {
-                              update(
-                                () => dialogErr =
-                                    'Cần tải ảnh POD trước khi hoàn tất giao.',
-                              );
-                              return;
-                            }
-                            final otp = otpCtrl.text.trim();
-                            if (needOtp &&
-                                !RegExp(r'^[0-9]{6}$').hasMatch(otp)) {
-                              update(
-                                () => dialogErr =
-                                    'Nhập đúng 6 chữ số mã OTP người nhận.',
-                              );
-                              return;
-                            }
-                            Navigator.pop(dialog, (
-                              reason: needOtp ? otp : noteCtrl.text.trim(),
-                              collectCash: needCash,
-                            ));
-                          },
-                    icon: const GhstButtonIcon.glyph(GhstActionKind.scooter, size: 16),
-
-                    label: const Text('Xác nhận đã giao'),
-                  ),
-                ],
               ),
             ),
-          );
-      Future<void>.delayed(const Duration(seconds: 1), () {
+            actions: [
+              TextButton.icon(
+                onPressed: () => Navigator.pop(dialog),
+                icon: const GhstButtonIcon.glyph(GhstActionKind.back, size: 16),
+
+                label: const Text('Quay lại'),
+              ),
+              FilledButton.icon(
+                key: const ValueKey('deliver-dialog-confirm'),
+                onPressed: uploading
+                    ? null
+                    : () async {
+                        if (needCash && !cashConfirmed) {
+                          update(
+                            () => dialogErr = 'Xác nhận đã thu đủ tiền mặt trước khi hoàn tất.',
+                          );
+                          return;
+                        }
+                        if (needPod && !podReady) {
+                          update(
+                            () => dialogErr =
+                                'Cần tải ảnh POD trước khi hoàn tất giao.',
+                          );
+                          return;
+                        }
+                        if (!signatureReady && sigCtrl.hasSignature) {
+                          update(() {
+                            uploading = true;
+                            dialogErr = null;
+                          });
+                          try {
+                            final pngBytes = await sigCtrl.toPngBytes(
+                              trackingCode: '${_order['tracking_code']}',
+                              signerName: signerNameCtrl.text.trim(),
+                            );
+                            if (pngBytes != null) {
+                              final uploadedSig = await service.uploadPod(
+                                trackingCode: '${_order['tracking_code']}',
+                                bytes: pngBytes,
+                                evidenceType: 'signature',
+                                signerName: signerNameCtrl.text.trim(),
+                              );
+                              signatureReady = true;
+                              _hasSignatureFromLive = true;
+                              _signaturePath = uploadedSig;
+                              _recipientSignerName = signerNameCtrl.text.trim();
+                            }
+                            if (dialog.mounted) {
+                              update(() => uploading = false);
+                            }
+                          } catch (e) {
+                            if (dialog.mounted) {
+                              update(() {
+                                uploading = false;
+                                dialogErr = e is PublicApiException
+                                    ? e.message
+                                    : 'Chưa lưu được chữ ký điện tử người nhận.';
+                              });
+                            }
+                            return;
+                          }
+                        }
+                        if (needSignature && !signatureReady) {
+                          update(
+                            () => dialogErr = 'Đơn hàng yêu cầu chữ ký tay điện tử của người nhận.',
+                          );
+                          return;
+                        }
+                        final otp = otpCtrl.text.trim();
+                        if (needOtp && !RegExp(r'^[0-9]{6}$').hasMatch(otp)) {
+                          update(
+                            () => dialogErr =
+                                'Nhập đúng 6 chữ số mã OTP người nhận.',
+                          );
+                          return;
+                        }
+                        if (!dialog.mounted) return;
+                        Navigator.pop(dialog, (
+                          reason: needOtp ? otp : noteCtrl.text.trim(),
+                          collectCash: needCash,
+                        ));
+                      },
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.scooter,
+                  size: 16,
+                ),
+
+                label: const Text('Xác nhận đã giao'),
+              ),
+            ],
+          ),
+        ),
+      );
+      Future<void>.delayed(const Duration(milliseconds: 150), () {
         otpCtrl.dispose();
         noteCtrl.dispose();
+        signerNameCtrl.dispose();
+        sigCtrl.dispose();
       });
       if (deliverPayload == null || !mounted || !_allowed) return;
       reason = deliverPayload.reason;
@@ -886,11 +1069,7 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
       if (collectCashBeforeDeliver) {
         final cashRes = await service.command(
           'orders/${_order['id']}/transition',
-          {
-            'action': 'collect_cash',
-            'version': nextVersion,
-            'reason': '',
-          },
+          {'action': 'collect_cash', 'version': nextVersion, 'reason': ''},
         );
         if (cashRes['order'] is Map) {
           _currentOrder = Map<String, dynamic>.from(cashRes['order'] as Map);
@@ -960,7 +1139,10 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 ),
               TextButton.icon(
                 onPressed: () => Navigator.pop(dialog),
-                icon: const GhstButtonIcon.glyph(GhstActionKind.close, size: 16),
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.close,
+                  size: 16,
+                ),
 
                 label: const Text('Đóng'),
               ),
@@ -982,7 +1164,8 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
   }
 
   Future<void> _viewPod() async {
-    final podPath = (_podPhotoPath ?? '${_order['pod_photo_path'] ?? ''}').trim();
+    final podPath = (_podPhotoPath ?? '${_order['pod_photo_path'] ?? ''}')
+        .trim();
     if (_busy || !_allowed || podPath.isEmpty) return;
     setState(() => _busy = true);
     try {
@@ -1010,7 +1193,10 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             actions: [
               TextButton.icon(
                 onPressed: () => Navigator.pop(dialog),
-                icon: const GhstButtonIcon.glyph(GhstActionKind.close, size: 16),
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.close,
+                  size: 16,
+                ),
 
                 label: const Text('Đóng'),
               ),
@@ -1024,6 +1210,67 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
           () => _error = e is PublicApiException
               ? e.message
               : 'Chưa mở được ảnh POD.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _viewSignature() async {
+    final sigPath = (_signaturePath ?? '${_order['signature_path'] ?? ''}')
+        .trim();
+    if (_busy || !_allowed || sigPath.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final url = await widget.lease.session.service.signPod(sigPath);
+      if (!mounted || !_allowed) return;
+      final signer =
+          (_recipientSignerName ?? '${_order['recipient_signer_name'] ?? ''}')
+              .trim();
+      await showDialog<void>(
+        context: context,
+        builder: (_) => CloudSessionBoundary(
+          session: widget.lease.session,
+          dialog: true,
+          builder: (dialog, _) => AlertDialog(
+            title: Text(
+              signer.isNotEmpty
+                  ? 'Chữ ký người nhận · $signer'
+                  : 'Chữ ký điện tử người nhận',
+            ),
+            content: SizedBox(
+              width: 480,
+              height: 280,
+              child: InteractiveViewer(
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, _, _) => const Center(
+                    child: Text('Không hiển thị được biên nhận chữ ký.'),
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton.icon(
+                onPressed: () => Navigator.pop(dialog),
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.close,
+                  size: 16,
+                ),
+                label: const Text('Đóng'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (e) {
+      if (mounted && !_leaseHandled(e)) {
+        setState(
+          () => _error = e is PublicApiException
+              ? e.message
+              : 'Chưa mở được chữ ký người nhận.',
         );
       }
     } finally {
@@ -1145,7 +1392,10 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             actions: [
               TextButton.icon(
                 onPressed: () => Navigator.pop(dialog),
-                icon: const GhstButtonIcon.glyph(GhstActionKind.close, size: 16),
+                icon: const GhstButtonIcon.glyph(
+                  GhstActionKind.close,
+                  size: 16,
+                ),
 
                 label: const Text('Đóng'),
               ),
@@ -1166,6 +1416,14 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
 
   Future<void> _repeat() async {
     if (!_canRepeat) return;
+    final reorderDetails = buildReorderInitialDetails(_order);
+    if (widget.onReorder != null) {
+      widget.onReorder!(reorderDetails);
+      if (mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(false);
+      }
+      return;
+    }
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => CloudSessionBoundary(
@@ -1175,11 +1433,7 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             service: widget.lease.session.service,
             lease: lease,
             merchants: widget.merchants,
-            initialDetails: {
-              ..._details,
-              'cod_amount': _order['cod_amount'],
-              'merchant_id': _order['merchant_id'],
-            },
+            initialDetails: reorderDetails,
           ),
         ),
       ),
@@ -1377,9 +1631,9 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 style: OutlinedButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                 ),
-                onPressed: _openGoogleMapsDirections,
+                onPressed: _openExternalNavigation,
                 icon: const GhstButtonIcon(Icons.directions_outlined, size: 16),
-                label: const Text('Chỉ đường Google Maps'),
+                label: const Text('Mở trên Google Maps'),
               ),
             ],
           ),
@@ -1392,6 +1646,14 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 color: tokens.emerald.foreground,
                 fontWeight: FontWeight.w700,
               ),
+            ),
+          ],
+          if (widget.weatherService != null ||
+              EnvConfig.deliveryApiBaseUrl.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            DeliveryWeatherStrip(
+              point: driverPt ?? dropoff,
+              service: widget.weatherService,
             ),
           ],
           const SizedBox(height: 8),
@@ -1426,8 +1688,13 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
     if (_driverProfile != null && !_isAssignedDriver) {
       final name = _text(_driverProfile!['full_name']);
       final phone = '${_driverProfile!['phone'] ?? ''}'.trim();
+      final masked =
+          '${_driverProfile!['masked_phone'] ?? ''}'.trim().isNotEmpty
+          ? '${_driverProfile!['masked_phone']}'.trim()
+          : maskPhoneNumber(phone);
       final ratingAvg = (_driverProfile!['rating_avg'] as num? ?? 0).toDouble();
-      final ratingCount = (_driverProfile!['rating_count'] as num? ?? 0).toInt();
+      final ratingCount = (_driverProfile!['rating_count'] as num? ?? 0)
+          .toInt();
       cards.add(
         GhstLuminousCard(
           accentGlow: tokens.emerald.glow,
@@ -1462,9 +1729,9 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                         ),
                         Text(
                           ratingCount > 0
-                              ? '★ ${ratingAvg.toStringAsFixed(1)} · $ratingCount đánh giá${phone.isNotEmpty ? ' · $phone' : ''}'
-                              : (phone.isNotEmpty
-                                    ? 'Điện thoại: $phone'
+                              ? '★ ${ratingAvg.toStringAsFixed(1)} · $ratingCount đánh giá${masked.isNotEmpty ? ' · $masked' : ''}'
+                              : (masked.isNotEmpty
+                                    ? 'Số ẩn bảo mật: $masked'
                                     : 'Đối tác tài xế đã xác minh'),
                           style: TextStyle(
                             fontSize: 12.5,
@@ -1477,10 +1744,38 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 ],
               ),
               if (phone.isNotEmpty)
-                FilledButton.tonalIcon(
-                  onPressed: () => _launchPhoneCall(phone),
-                  icon: const GhstButtonIcon(Icons.call_outlined, size: 17),
-                  label: const Text('Gọi tài xế'),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const ValueKey('details-safe-contact-driver'),
+                      onPressed: () => showMaskedContactSheet(
+                        context: context,
+                        roleLabel: 'Tài xế phụ trách',
+                        contactName: name,
+                        rawPhone: phone,
+                        maskedPhone: masked,
+                        onCall: _launchPhoneCall,
+                        onSendQuickMessage: _sendOrderChat,
+                        quickPresets: const [
+                          'Vui lòng gọi trước 5 phút',
+                          'Tôi đang chờ tại sảnh',
+                          'Gửi tại lễ tân giúp tôi',
+                        ],
+                      ),
+                      icon: const GhstButtonIcon(
+                        Icons.shield_outlined,
+                        size: 16,
+                      ),
+                      label: const Text('Liên hệ an toàn'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () => _launchPhoneCall(phone),
+                      icon: const GhstButtonIcon(Icons.call_outlined, size: 17),
+                      label: const Text('Gọi tài xế'),
+                    ),
+                  ],
                 ),
             ],
           ),
@@ -1488,12 +1783,22 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
       );
     }
 
-    if (_isAssignedDriver || (_isDriverRole && _effectiveStatus == 'searching')) {
+    if (_isAssignedDriver ||
+        (_isDriverRole && _effectiveStatus == 'searching')) {
       final senderName = _senderProfile != null
           ? _text(_senderProfile!['full_name'])
           : 'Người gửi đơn';
       final senderPhone = '${_senderProfile?['phone'] ?? ''}'.trim();
+      final senderMasked =
+          '${_senderProfile?['masked_phone'] ?? ''}'.trim().isNotEmpty
+          ? '${_senderProfile?['masked_phone']}'.trim()
+          : maskPhoneNumber(senderPhone);
+      final recipientName = _text(_details['recipient_name']);
       final recipientPhone = '${_details['recipient_phone'] ?? ''}'.trim();
+      final recipientMasked =
+          '${_order['recipient_masked_phone'] ?? ''}'.trim().isNotEmpty
+          ? '${_order['recipient_masked_phone']}'.trim()
+          : maskPhoneNumber(recipientPhone);
       if (senderPhone.isNotEmpty || recipientPhone.isNotEmpty) {
         cards.add(
           GhstLuminousCard(
@@ -1507,27 +1812,68 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
               alignment: WrapAlignment.spaceBetween,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Text(
-                  'Liên hệ chuyến giao · Người gửi: $senderName',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: tokens.ink,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Liên hệ chuyến giao · Người gửi: $senderName',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: tokens.ink,
+                      ),
+                    ),
+                    Text(
+                      'Che số bảo mật: Người gửi $senderMasked · Người nhận $recipientMasked',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: tokens.inkSecondary,
+                      ),
+                    ),
+                  ],
                 ),
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
+                    if (recipientPhone.isNotEmpty)
+                      OutlinedButton.icon(
+                        key: const ValueKey('details-safe-contact-recipient'),
+                        onPressed: () => showMaskedContactSheet(
+                          context: context,
+                          roleLabel: 'Người nhận hàng',
+                          contactName: recipientName,
+                          rawPhone: recipientPhone,
+                          maskedPhone: recipientMasked,
+                          onCall: _launchPhoneCall,
+                          onSendQuickMessage: _sendOrderChat,
+                          quickPresets: const [
+                            'Tài xế đang trên đường giao đến',
+                            'Tài xế đã tới điểm giao hàng',
+                            'Vui lòng để ý điện thoại nhận hàng',
+                          ],
+                        ),
+                        icon: const GhstButtonIcon(
+                          Icons.shield_outlined,
+                          size: 16,
+                        ),
+                        label: const Text('Liên hệ an toàn'),
+                      ),
                     if (senderPhone.isNotEmpty)
                       OutlinedButton.icon(
                         onPressed: () => _launchPhoneCall(senderPhone),
-                        icon: const GhstButtonIcon(Icons.call_outlined, size: 16),
+                        icon: const GhstButtonIcon(
+                          Icons.call_outlined,
+                          size: 16,
+                        ),
                         label: const Text('Gọi người gửi'),
                       ),
                     if (recipientPhone.isNotEmpty)
                       FilledButton.tonalIcon(
                         onPressed: () => _launchPhoneCall(recipientPhone),
-                        icon: const GhstButtonIcon(Icons.phone_forwarded_outlined, size: 16),
+                        icon: const GhstButtonIcon(
+                          Icons.phone_forwarded_outlined,
+                          size: 16,
+                        ),
                         label: const Text('Gọi người nhận'),
                       ),
                   ],
@@ -1555,7 +1901,11 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             children: [
               Row(
                 children: [
-                  GhstButtonIcon(Icons.stars_rounded, color: tokens.amber.icon, size: 19),
+                  GhstButtonIcon(
+                    Icons.stars_rounded,
+                    color: tokens.amber.icon,
+                    size: 19,
+                  ),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
@@ -1684,6 +2034,8 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                   final senderHeader = senderName.isNotEmpty
                       ? '$senderRole · $senderName · ${cloudDate(msg['created_at'])}'
                       : '$senderRole · ${cloudDate(msg['created_at'])}';
+                  final msgText = '${msg['text'] ?? msg['body'] ?? ''}';
+                  final isIncident = isDriverIncidentMessage(msgText);
                   return Align(
                     alignment: mine
                         ? Alignment.centerRight
@@ -1695,34 +2047,42 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                         vertical: 8,
                       ),
                       decoration: BoxDecoration(
-                        color: mine ? tokens.sapphire.fill : tokens.cardSubtle,
+                        color: isIncident
+                            ? tokens.amber.fill
+                            : mine
+                            ? tokens.sapphire.fill
+                            : tokens.cardSubtle,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
-                          color: mine
+                          color: isIncident
+                              ? tokens.amber.border
+                              : mine
                               ? tokens.sapphire.border
                               : tokens.border,
+                          width: isIncident ? 1.4 : 1.0,
                         ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            senderHeader,
+                            isIncident
+                                ? 'CẢNH BÁO SỰ CỐ · $senderHeader'
+                                : senderHeader,
                             style: TextStyle(
                               fontSize: 10.5,
                               fontWeight: FontWeight.w700,
-                              color: mine
+                              color: isIncident
+                                  ? tokens.amber.foreground
+                                  : mine
                                   ? tokens.sapphire.foreground
                                   : tokens.inkMuted,
                             ),
                           ),
                           const SizedBox(height: 2),
                           SelectableText(
-                            '${msg['text'] ?? msg['body'] ?? ''}',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: tokens.ink,
-                            ),
+                            msgText,
+                            style: TextStyle(fontSize: 13, color: tokens.ink),
                           ),
                         ],
                       ),
@@ -1740,7 +2100,10 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 for (final chip in quickReplies)
                   ActionChip(
                     visualDensity: VisualDensity.compact,
-                    avatar: const GhstButtonIcon.glyph(GhstActionKind.chat, size: 14),
+                    avatar: const GhstButtonIcon.glyph(
+                      GhstActionKind.chat,
+                      size: 14,
+                    ),
                     label: Text(chip, style: const TextStyle(fontSize: 11.5)),
                     onPressed: _chatBusy ? null : () => _sendOrderChat(chip),
                   ),
@@ -1827,8 +2190,12 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             icon: const GhstButtonIcon(Icons.inventory_2_outlined),
             label: const Text('Xác nhận đã lấy hàng'),
           ),
-        if (const {'accepted', 'arrivingPickup', 'inTransit', 'returning'}
-            .contains(status))
+        if (const {
+          'accepted',
+          'arrivingPickup',
+          'inTransit',
+          'returning',
+        }.contains(status))
           OutlinedButton.icon(
             key: const ValueKey('details-action-push-gps'),
             onPressed: _busy ? null : _broadcastRealDriverGps,
@@ -1913,6 +2280,32 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             icon: const GhstButtonIcon(Icons.assignment_returned_outlined),
             label: const Text('Đã trả hàng cho người gửi'),
           ),
+        if (const {
+          'accepted',
+          'arrivingPickup',
+          'inTransit',
+          'returning',
+        }.contains(status)) ...[
+          OutlinedButton.icon(
+            key: const ValueKey('details-action-navigate'),
+            onPressed: _busy ? null : _openExternalNavigation,
+            icon: const GhstButtonIcon(Icons.directions_outlined),
+            label: const Text('Chỉ đường Google Maps'),
+          ),
+          if ('${_details['recipient_phone'] ?? ''}'.trim().isNotEmpty)
+            OutlinedButton.icon(
+              key: const ValueKey('details-action-call-recipient'),
+              onPressed: _busy ? null : _callRecipient,
+              icon: const GhstButtonIcon(Icons.call_outlined),
+              label: const Text('Gọi người nhận'),
+            ),
+          OutlinedButton.icon(
+            key: const ValueKey('details-action-report-incident'),
+            onPressed: _busy || _chatBusy ? null : _reportDriverIncident,
+            icon: const GhstButtonIcon(Icons.warning_amber_outlined),
+            label: const Text('Báo sự cố chuyến giao'),
+          ),
+        ],
       ],
       if (!carrier &&
           (_isOwner || _isMerchantOrOperator) &&
@@ -1940,33 +2333,702 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
     );
   }
 
-  Widget _section(String title, Map<String, String> values) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(title, style: Theme.of(context).textTheme.titleMedium),
-      const SizedBox(height: 12),
-      for (final entry in values.entries)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(entry.key, style: Theme.of(context).textTheme.bodySmall),
-              const SizedBox(height: 3),
-              SelectableText(entry.value),
-            ],
+  Widget _buildStatusPill(
+    BuildContext context, {
+    required String label,
+    required TonePair tone,
+    bool pulse = false,
+  }) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+    decoration: BoxDecoration(
+      color: tone.fill,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: tone.border),
+    ),
+    child: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (pulse) ...[
+          GhstPulseBeacon(color: tone.icon, size: 8),
+          const SizedBox(width: 6),
+        ],
+        Flexible(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: tone.foreground,
+            ),
           ),
         ),
-    ],
+      ],
+    ),
   );
+
+  Widget _buildDetailCard({
+    required BuildContext context,
+    required String title,
+    required IconData icon,
+    required TonePair tone,
+    String? badgeText,
+    required Widget child,
+  }) {
+    final tokens = GhstThemeTokens.of(context);
+    return GhstLuminousCard(
+      borderRadius: 16,
+      padding: const EdgeInsets.all(16),
+      accentGlow: tone.glow,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: tone.fill,
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: tone.border),
+                ),
+                child: Center(
+                  child: GhstButtonIcon(icon, size: 17, color: tone.icon),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: tokens.ink,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+              if (badgeText != null && badgeText.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: tone.fill,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: tone.border),
+                  ),
+                  child: Text(
+                    badgeText,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: tone.foreground,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          Divider(height: 22, color: tokens.border),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildKeyValueRow(
+    BuildContext context, {
+    required String label,
+    required String value,
+    Widget? trailing,
+    bool tabular = false,
+  }) {
+    final tokens = GhstThemeTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: tokens.inkMuted,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: SelectableText(
+                  value,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.ink,
+                    fontFeatures: tabular
+                        ? const [FontFeature.tabularFigures()]
+                        : null,
+                  ),
+                ),
+              ),
+              ?trailing,
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpecTile(
+    BuildContext context, {
+    required String label,
+    required String value,
+  }) {
+    final tokens = GhstThemeTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: tokens.cardSubtle,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tokens.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: tokens.inkMuted,
+            ),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            value,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: tokens.ink,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLedgerRow(
+    BuildContext context, {
+    required String label,
+    String? value,
+    Color? valueColor,
+    bool emphasize = false,
+    Widget? pillValue,
+  }) {
+    final tokens = GhstThemeTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: SizedBox(
+        width: double.infinity,
+        child: Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 6,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: emphasize ? FontWeight.w700 : FontWeight.w500,
+                color: tokens.inkMuted,
+              ),
+            ),
+            if (pillValue != null)
+              pillValue
+            else if (value != null)
+              SelectableText(
+                value,
+                style: TextStyle(
+                  fontSize: emphasize ? 14.5 : 13.5,
+                  fontWeight: FontWeight.w700,
+                  color: valueColor ?? tokens.ink,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPackageSpecsCard(
+    BuildContext context,
+    Map<String, String> summary,
+    VehicleClass vehicle,
+    String serviceLabel,
+  ) {
+    final tokens = GhstThemeTokens.of(context);
+    final specs = <(String, String)>[
+      ('Hàng hóa', summary['Hàng hóa']!),
+      ('Khối lượng', summary['Khối lượng']!),
+      ('Dịch vụ', serviceLabel),
+      ('Loại xe', vehicle.label),
+      if ((_details['length_cm'] as num? ?? 0) > 0 &&
+          (_details['width_cm'] as num? ?? 0) > 0 &&
+          (_details['height_cm'] as num? ?? 0) > 0)
+        (
+          'Kích thước',
+          '${_details['length_cm']} × ${_details['width_cm']} × ${_details['height_cm']} cm',
+        ),
+      if ((_details['declared_value'] as num? ?? 0) > 0)
+        ('Khai giá bảo hiểm', _money(_details['declared_value'])),
+    ];
+    final buyerNote = '${_details['buyer_note'] ?? ''}'.trim();
+    final deliveryInstruction = '${_order['delivery_instruction'] ?? ''}'
+        .trim();
+
+    return _buildDetailCard(
+      context: context,
+      title: 'Kiện hàng',
+      icon: Icons.inventory_2_outlined,
+      tone: tokens.sapphire,
+      badgeText: vehicle.shortLabel,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          LayoutBuilder(
+            builder: (context, box) {
+              final twoCols = box.maxWidth >= 300;
+              final tileWidth = twoCols
+                  ? (box.maxWidth - 10) / 2
+                  : box.maxWidth;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final spec in specs)
+                    SizedBox(
+                      width: tileWidth,
+                      child: _buildSpecTile(
+                        context,
+                        label: spec.$1,
+                        value: spec.$2,
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          if (buyerNote.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: tokens.cardSubtle,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: tokens.border),
+              ),
+              child: SelectableText(
+                'Ghi chú: $buyerNote',
+                style: TextStyle(fontSize: 12.5, color: tokens.inkSecondary),
+              ),
+            ),
+          ],
+          if (deliveryInstruction.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: tokens.amber.fill,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: tokens.amber.border),
+              ),
+              child: SelectableText(
+                'Chỉ dẫn giao hàng: $deliveryInstruction',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w700,
+                  color: tokens.amber.foreground,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPricingSummaryCard(
+    BuildContext context,
+    Map<String, String> summary,
+  ) {
+    final tokens = GhstThemeTokens.of(context);
+    final codValue = (_order['cod_amount'] as num? ?? 0).toInt();
+    final paymentStatus = '${_order['payment_status'] ?? 'UNPAID'}';
+    final paymentTone = paymentStatus == 'PAID' ? tokens.emerald : tokens.amber;
+
+    return _buildDetailCard(
+      context: context,
+      title: 'Cước và thu hộ',
+      icon: Icons.receipt_long_outlined,
+      tone: tokens.emerald,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildLedgerRow(
+            context,
+            label: 'Cước vận chuyển',
+            value: summary['Cước vận chuyển']!,
+            valueColor: summary.containsKey('Cước cần thanh toán')
+                ? null
+                : tokens.sapphire.foreground,
+            emphasize: !summary.containsKey('Cước cần thanh toán'),
+          ),
+          if (summary.containsKey('Đổi Xu giảm cước'))
+            _buildLedgerRow(
+              context,
+              label: 'Đổi Xu giảm cước',
+              value: summary['Đổi Xu giảm cước']!,
+              valueColor: tokens.emerald.foreground,
+            ),
+          if (summary.containsKey('Cước cần thanh toán'))
+            _buildLedgerRow(
+              context,
+              label: 'Cước cần thanh toán',
+              value: summary['Cước cần thanh toán']!,
+              valueColor: tokens.sapphire.foreground,
+              emphasize: true,
+            ),
+          _buildLedgerRow(
+            context,
+            label: 'Tiền thu hộ COD',
+            value: summary['Tiền thu hộ COD']!,
+            valueColor: codValue > 0 ? tokens.amber.foreground : null,
+            emphasize: codValue > 0,
+          ),
+          Divider(height: 16, color: tokens.border),
+          _buildLedgerRow(context, label: 'Trả phí', value: _payer),
+          _buildLedgerRow(
+            context,
+            label: 'Thanh toán cước',
+            pillValue: _buildStatusPill(
+              context,
+              label: _payment,
+              tone: paymentTone,
+            ),
+          ),
+          if (summary.containsKey('Tiền mặt cước đã thu'))
+            _buildLedgerRow(
+              context,
+              label: 'Tiền mặt cước đã thu',
+              value: summary['Tiền mặt cước đã thu']!,
+            ),
+          if (summary.containsKey('Tiền mặt COD đã thu'))
+            _buildLedgerRow(
+              context,
+              label: 'Tiền mặt COD đã thu',
+              value: summary['Tiền mặt COD đã thu']!,
+            ),
+          if (summary.containsKey('Thời điểm thu tiền mặt'))
+            _buildLedgerRow(
+              context,
+              label: 'Thời điểm thu tiền mặt',
+              value: summary['Thời điểm thu tiền mặt']!,
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryTimelineCard(BuildContext context) {
+    final tokens = GhstThemeTokens.of(context);
+    final events = _history!;
+    return _buildDetailCard(
+      context: context,
+      title: 'Lịch sử đơn hàng',
+      icon: Icons.timeline_rounded,
+      tone: tokens.sapphire,
+      badgeText: '${events.length} mốc',
+      child: events.isEmpty
+          ? Text(
+              'Chưa có lịch sử cập nhật.',
+              style: TextStyle(color: tokens.inkMuted),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < events.length; i++)
+                  Builder(
+                    builder: (context) {
+                      final event = events[i];
+                      final isLast = i == events.length - 1;
+                      final eventStatus = '${event['status'] ?? ''}';
+                      final dotTone = switch (eventStatus) {
+                        'delivered' => tokens.emerald,
+                        'cancelled' || 'failed' => tokens.rose,
+                        'searching' => tokens.amber,
+                        'returning' || 'returned' => tokens.violet,
+                        _ => tokens.sapphire,
+                      };
+                      final reason = (event['reason'] as String? ?? '').trim();
+                      return IntrinsicHeight(
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SizedBox(
+                              width: 24,
+                              child: Column(
+                                children: [
+                                  Container(
+                                    margin: const EdgeInsets.only(top: 3),
+                                    width: 12,
+                                    height: 12,
+                                    decoration: BoxDecoration(
+                                      color: dotTone.fill,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: dotTone.icon,
+                                        width: 2.2,
+                                      ),
+                                    ),
+                                  ),
+                                  if (!isLast)
+                                    Expanded(
+                                      child: Container(
+                                        width: 2,
+                                        margin: const EdgeInsets.symmetric(
+                                          vertical: 4,
+                                        ),
+                                        color: tokens.borderStrong,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: isLast ? 0 : 16,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 4,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      children: [
+                                        Text(
+                                          cloudActions[event['action']] ??
+                                              '${event['action'] ?? 'Cập nhật'}',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 13.5,
+                                            color: tokens.ink,
+                                          ),
+                                        ),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 2,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: dotTone.fill,
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
+                                            border: Border.all(
+                                              color: dotTone.border,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            cloudStatuses[eventStatus] ??
+                                                eventStatus,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: FontWeight.w700,
+                                              color: dotTone.foreground,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      cloudDate(event['created_at']),
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        color: tokens.inkMuted,
+                                      ),
+                                    ),
+                                    if (reason.isNotEmpty) ...[
+                                      const SizedBox(height: 6),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: tokens.amber.fill,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                          border: Border.all(
+                                            color: tokens.amber.border,
+                                          ),
+                                        ),
+                                        child: SelectableText(
+                                          'Lý do: $reason',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: tokens.amber.foreground,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final visible = _allowed && _history != null;
     final summary = visible ? _summary : const <String, String>{};
     final tokens = GhstThemeTokens.of(context);
-    final hasPod =
-        (_podPhotoPath ?? '${_order['pod_photo_path'] ?? ''}').trim().isNotEmpty;
+    final hasPod = (_podPhotoPath ?? '${_order['pod_photo_path'] ?? ''}')
+        .trim()
+        .isNotEmpty;
+    final hasSignature = (_signaturePath ?? '${_order['signature_path'] ?? ''}')
+        .trim()
+        .isNotEmpty;
+    final statusTone = switch (_effectiveStatus) {
+      'delivered' => tokens.emerald,
+      'cancelled' || 'failed' => tokens.rose,
+      'searching' => tokens.amber,
+      'returning' || 'returned' => tokens.violet,
+      _ => tokens.sapphire,
+    };
+    final vehicle = VehicleClass.resolve(
+      vehicleType: _details['vehicle_type'],
+      serviceType: _details['service_type'],
+      preferEv: _details['prefer_ev'] == true,
+    );
+    final serviceLabel =
+        cloudServiceTypes[_details['service_type']] ?? 'Tiêu chuẩn';
+    final topActionButtons = <Widget>[
+      if (_canRepeat)
+        FilledButton.icon(
+          onPressed: _repeat,
+          icon: const GhstButtonIcon(Icons.replay),
+          label: const Text('Gửi lại đơn'),
+        ),
+      if ((_isOwner || widget.lease.session.isOperator) &&
+          _details['payment_method'] == 'sender_cash' &&
+          _order['payment_status'] != 'PAID')
+        OutlinedButton.icon(
+          onPressed: _busy
+              ? null
+              : () async {
+                  await showDialog<void>(
+                    context: context,
+                    builder: (_) => CloudSessionBoundary(
+                      session: widget.lease.session,
+                      operator: widget.lease.session.isOperator,
+                      dialog: true,
+                      builder: (_, lease) => CloudCommerceDialog(
+                        service: widget.lease.session.service,
+                        order: _order,
+                        operator: widget.lease.session.isOperator,
+                        lease: lease,
+                      ),
+                    ),
+                  );
+                  if (mounted && _allowed) await _load();
+                },
+          icon: const GhstButtonIcon(Icons.qr_code_2_rounded),
+          label: const Text('Thanh toán Ngân hàng · Mã QR'),
+        ),
+      if ((_isOwner || _isMerchantOrOperator) &&
+          _details['require_otp'] == true)
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _showOtp,
+          icon: const GhstButtonIcon(Icons.pin_outlined),
+          label: const Text('Mã OTP người nhận'),
+        ),
+      if (_isOwner || _isMerchantOrOperator)
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _manageShares,
+          icon: const GhstButtonIcon(Icons.share_outlined),
+          label: const Text('Chia sẻ hành trình'),
+        ),
+      if (_isOwner || _isMerchantOrOperator || _isAssignedDriver)
+        OutlinedButton.icon(
+          key: const ValueKey('details-print-waybill'),
+          onPressed: _busy
+              ? null
+              : () => showCloudWaybillA6Dialog(context, order: _order),
+          icon: const GhstButtonIcon(Icons.print_outlined),
+          label: const Text('In phiếu gửi A6'),
+        ),
+      if (hasPod)
+        OutlinedButton.icon(
+          onPressed: _busy ? null : _viewPod,
+          icon: const GhstButtonIcon(Icons.photo_camera_outlined),
+          label: const Text('Xem ảnh POD'),
+        ),
+      if (hasSignature)
+        OutlinedButton.icon(
+          key: const ValueKey('details-view-signature'),
+          onPressed: _busy ? null : _viewSignature,
+          icon: const GhstButtonIcon(Icons.draw_outlined),
+          label: const Text('Xem chữ ký người nhận'),
+        ),
+      if (_order['batch_group_id'] != null)
+        Chip(
+          avatar: const GhstButtonIcon.glyph(GhstActionKind.hub, size: 15),
+          label: Text('Chuyến ghép #${_order['batch_sequence'] ?? 1}'),
+        ),
+      if (_isOwner &&
+          _effectiveStatus == 'delivered' &&
+          _order['driver_id'] != null &&
+          _driverReview == null)
+        OutlinedButton.icon(
+          onPressed: _busy
+              ? null
+              : () async {
+                  await showPartnerReviewDialog(
+                    context,
+                    session: widget.lease.session,
+                    targetKind: 'driver',
+                    cloudOrderId: '${_order['id']}',
+                  );
+                  if (mounted && _allowed) {
+                    await _refreshLiveSnapshot();
+                  }
+                },
+          icon: const GhstButtonIcon(Icons.star_outline),
+          label: const Text('Đánh giá tài xế'),
+        ),
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chi tiết đơn hàng'),
@@ -2016,275 +3078,298 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                   ],
                   if (visible) ...[
                     GhstLuminousCard(
-                      accentGlow: _isActiveJourney
-                          ? tokens.sapphire.glow
-                          : tokens.emerald.glow,
-                      padding: const EdgeInsets.all(16),
+                      accentGlow: statusTone.glow,
+                      borderColor: _isActiveJourney
+                          ? statusTone.border
+                          : tokens.border,
+                      padding: const EdgeInsets.all(18),
                       borderRadius: 18,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Wrap(
-                            spacing: 8,
-                            runSpacing: 6,
+                            spacing: 10,
+                            runSpacing: 8,
+                            alignment: WrapAlignment.spaceBetween,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              if (_isActiveJourney)
-                                GhstPulseBeacon(
-                                  color: tokens.emerald.icon,
-                                  size: 10,
-                                ),
-                              SelectableText(
-                                _text(_order['tracking_code']),
-                                style: Theme.of(context).textTheme.titleLarge,
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Flexible(
+                                    child: SelectableText(
+                                      _text(_order['tracking_code']),
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .titleLarge
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: -0.3,
+                                          ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 2),
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    tooltip: 'Sao chép mã vận đơn',
+                                    onPressed: _copy,
+                                    icon: const GhstButtonIcon(
+                                      Icons.copy_outlined,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ],
                               ),
-                              IconButton(
-                                tooltip: 'Sao chép mã vận đơn',
-                                onPressed: _copy,
-                                icon: const GhstButtonIcon(Icons.copy_outlined, size: 20),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  _buildStatusPill(
+                                    context,
+                                    label: _status,
+                                    tone: statusTone,
+                                    pulse: _isActiveJourney,
+                                  ),
+                                  _buildStatusPill(
+                                    context,
+                                    label: vehicle.label,
+                                    tone: tokens.violet,
+                                  ),
+                                  _buildStatusPill(
+                                    context,
+                                    label: serviceLabel,
+                                    tone: tokens.sapphire,
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                          Text(
-                            _status,
-                            style: Theme.of(context).textTheme.titleMedium,
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              GhstButtonIcon(
+                                Icons.schedule_outlined,
+                                size: 14,
+                                color: tokens.inkMuted,
+                              ),
+                              const SizedBox(width: 5),
+                              Expanded(
+                                child: Text(
+                                  cloudDate(_order['created_at']),
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    color: tokens.inkMuted,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          Text(cloudDate(_order['created_at'])),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 14),
                           _buildJourneyStepper(context),
                         ],
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 14),
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (_canRepeat)
-                            FilledButton.icon(
-                              onPressed: _repeat,
-                              icon: const GhstButtonIcon(Icons.replay),
-                              label: const Text('Gửi lại đơn'),
-                            ),
-                          if ((_isOwner || widget.lease.session.isOperator) &&
-                              _details['payment_method'] == 'sender_cash' &&
-                              _order['payment_status'] != 'PAID')
-                            OutlinedButton.icon(
-                              onPressed: _busy
-                                  ? null
-                                  : () async {
-                                      await showDialog<void>(
-                                        context: context,
-                                        builder: (_) => CloudSessionBoundary(
-                                          session: widget.lease.session,
-                                          operator:
-                                              widget.lease.session.isOperator,
-                                          dialog: true,
-                                          builder: (_, lease) =>
-                                              CloudCommerceDialog(
-                                                service: widget
-                                                    .lease
-                                                    .session
-                                                    .service,
-                                                order: _order,
-                                                operator: widget
-                                                    .lease
-                                                    .session
-                                                    .isOperator,
-                                                lease: lease,
-                                              ),
-                                        ),
-                                      );
-                                      if (mounted && _allowed) await _load();
-                                    },
-                              icon: const GhstButtonIcon(Icons.qr_code_2_rounded),
-                              label: const Text('Thanh toán Ngân hàng · Mã QR'),
-                            ),
-                          if ((_isOwner || _isMerchantOrOperator) &&
-                              _details['require_otp'] == true)
-                            OutlinedButton.icon(
-                              onPressed: _busy ? null : _showOtp,
-                              icon: const GhstButtonIcon(Icons.pin_outlined),
-                              label: const Text('Mã OTP người nhận'),
-                            ),
-                          if (_isOwner || _isMerchantOrOperator)
-                            OutlinedButton.icon(
-                              onPressed: _busy ? null : _manageShares,
-                              icon: const GhstButtonIcon(Icons.share_outlined),
-                              label: const Text('Chia sẻ hành trình'),
-                            ),
-                          if (hasPod)
-                            OutlinedButton.icon(
-                              onPressed: _busy ? null : _viewPod,
-                              icon: const GhstButtonIcon(Icons.photo_camera_outlined),
-                              label: const Text('Xem ảnh POD'),
-                            ),
-                          if (_isOwner &&
-                              _effectiveStatus == 'delivered' &&
-                              _order['driver_id'] != null &&
-                              _driverReview == null)
-                            OutlinedButton.icon(
-                              onPressed: _busy
-                                  ? null
-                                  : () async {
-                                      await showPartnerReviewDialog(
-                                        context,
-                                        session: widget.lease.session,
-                                        targetKind: 'driver',
-                                        cloudOrderId: '${_order['id']}',
-                                      );
-                                      if (mounted && _allowed) {
-                                        await _refreshLiveSnapshot();
-                                      }
-                                    },
-                              icon: const GhstButtonIcon(Icons.star_outline),
-                              label: const Text('Đánh giá tài xế'),
-                            ),
-                        ],
-                      ),
+                    Builder(
+                      builder: (context) {
+                        final opsBar = _buildDriverAndCustomerOperationsBar(
+                          context,
+                        );
+                        final hasOps = opsBar is! SizedBox;
+                        if (topActionButtons.isEmpty && !hasOps) {
+                          return const SizedBox.shrink();
+                        }
+                        return GhstLuminousCard(
+                          margin: const EdgeInsets.only(top: 14),
+                          padding: const EdgeInsets.all(14),
+                          borderRadius: 16,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (topActionButtons.isNotEmpty)
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: topActionButtons,
+                                ),
+                              if (hasOps) opsBar,
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                    _buildDriverAndCustomerOperationsBar(context),
                     _buildLiveJourneyMap(context),
                     _buildPartnerAndReviewSection(context),
                     _buildOrderLiveChatCard(context),
-                    const Divider(height: 32),
+                    const SizedBox(height: 16),
                     LayoutBuilder(
                       builder: (context, constraints) {
-                        final pickup = _section('Lấy hàng', {
-                          'Địa chỉ': summary['Điểm lấy']!,
-                          if ((_details['scheduled_at'] as String? ?? '')
-                              .isNotEmpty)
-                            'Hẹn lấy hàng': cloudDate(_details['scheduled_at']),
-                        });
-                        final dropoff = _section('Giao hàng', {
-                          'Địa chỉ': summary['Điểm giao']!,
-                          'Người nhận': summary['Người nhận']!,
-                          'Điện thoại': summary['Điện thoại']!,
-                          if (_details['extra_stops'] is List &&
-                              (_details['extra_stops'] as List).isNotEmpty)
-                            'Điểm dừng trung gian': (_details['extra_stops']
-                                    as List)
-                                .map((s) => '${(s as Map)['address'] ?? ''}')
-                                .join(' -> '),
-                        });
+                        final recipientPhone = summary['Điện thoại']!;
+                        final pickupCard = _buildDetailCard(
+                          context: context,
+                          title: 'Lấy hàng',
+                          icon: Icons.trip_origin_rounded,
+                          tone: tokens.emerald,
+                          badgeText: 'Điểm A',
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildKeyValueRow(
+                                context,
+                                label: 'Địa chỉ',
+                                value: summary['Điểm lấy']!,
+                              ),
+                              if ((_details['scheduled_at'] as String? ?? '')
+                                  .isNotEmpty)
+                                _buildKeyValueRow(
+                                  context,
+                                  label: 'Hẹn lấy hàng',
+                                  value: cloudDate(_details['scheduled_at']),
+                                ),
+                            ],
+                          ),
+                        );
+                        final dropoffCard = _buildDetailCard(
+                          context: context,
+                          title: 'Giao hàng',
+                          icon: Icons.location_on_outlined,
+                          tone: tokens.rose,
+                          badgeText: 'Điểm B',
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildKeyValueRow(
+                                context,
+                                label: 'Địa chỉ',
+                                value: summary['Điểm giao']!,
+                              ),
+                              _buildKeyValueRow(
+                                context,
+                                label: 'Người nhận',
+                                value: summary['Người nhận']!,
+                              ),
+                              _buildKeyValueRow(
+                                context,
+                                label: 'Điện thoại',
+                                value: recipientPhone,
+                                tabular: true,
+                                trailing:
+                                    recipientPhone != 'Chưa có thông tin' &&
+                                        recipientPhone.trim().isNotEmpty
+                                    ? IconButton(
+                                        visualDensity: VisualDensity.compact,
+                                        tooltip: 'Sao chép SĐT người nhận',
+                                        onPressed: () async {
+                                          final messenger =
+                                              ScaffoldMessenger.maybeOf(
+                                                context,
+                                              );
+                                          await Clipboard.setData(
+                                            ClipboardData(text: recipientPhone),
+                                          );
+                                          if (!mounted) return;
+                                          messenger?.showSnackBar(
+                                            const SnackBar(
+                                              behavior:
+                                                  SnackBarBehavior.floating,
+                                              content: Text(
+                                                'Đã sao chép số điện thoại.',
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        icon: const GhstButtonIcon(
+                                          Icons.content_copy_outlined,
+                                          size: 16,
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                              if (_details['extra_stops'] is List &&
+                                  (_details['extra_stops'] as List).isNotEmpty)
+                                _buildKeyValueRow(
+                                  context,
+                                  label: 'Điểm dừng trung gian',
+                                  value: (_details['extra_stops'] as List)
+                                      .map(
+                                        (s) => '${(s as Map)['address'] ?? ''}',
+                                      )
+                                      .join(' -> '),
+                                ),
+                            ],
+                          ),
+                        );
                         return constraints.maxWidth < 680
                             ? Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
-                                  pickup,
-                                  const SizedBox(height: 12),
-                                  dropoff,
+                                  pickupCard,
+                                  const SizedBox(height: 14),
+                                  dropoffCard,
+                                ],
+                              )
+                            : IntrinsicHeight(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Expanded(child: pickupCard),
+                                    const SizedBox(width: 16),
+                                    Expanded(child: dropoffCard),
+                                  ],
+                                ),
+                              );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final packageCard = _buildPackageSpecsCard(
+                          context,
+                          summary,
+                          vehicle,
+                          serviceLabel,
+                        );
+                        final pricingCard = _buildPricingSummaryCard(
+                          context,
+                          summary,
+                        );
+                        return constraints.maxWidth < 720
+                            ? Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  packageCard,
+                                  const SizedBox(height: 14),
+                                  pricingCard,
                                 ],
                               )
                             : Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Expanded(child: pickup),
-                                  const SizedBox(width: 32),
-                                  Expanded(child: dropoff),
+                                  Expanded(child: packageCard),
+                                  const SizedBox(width: 16),
+                                  Expanded(child: pricingCard),
                                 ],
                               );
                       },
                     ),
-                    const Divider(height: 32),
-                    _section('Kiện hàng', {
-                      'Hàng hóa': summary['Hàng hóa']!,
-                      'Khối lượng': summary['Khối lượng']!,
-                      'Dịch vụ':
-                          cloudServiceTypes[_details['service_type']] ??
-                          'Chưa có thông tin',
-                      if ((_details['length_cm'] as num? ?? 0) > 0 &&
-                          (_details['width_cm'] as num? ?? 0) > 0 &&
-                          (_details['height_cm'] as num? ?? 0) > 0)
-                        'Kích thước':
-                            '${_details['length_cm']} × ${_details['width_cm']} × ${_details['height_cm']} cm',
-                      if ((_details['declared_value'] as num? ?? 0) > 0)
-                        'Khai giá bảo hiểm': _money(_details['declared_value']),
-                      if ((_details['buyer_note'] as String? ?? '').isNotEmpty)
-                        'Ghi chú': '${_details['buyer_note']}',
-                      if ((_order['delivery_instruction'] as String? ?? '')
-                          .isNotEmpty)
-                        'Chỉ dẫn giao hàng':
-                            '${_order['delivery_instruction']}',
-                    }),
-                    const Divider(height: 32),
-                    _section('Cước và thu hộ', {
-                      'Cước vận chuyển': summary['Cước vận chuyển']!,
-                      if (summary.containsKey('Đổi Xu giảm cước'))
-                        'Đổi Xu giảm cước': summary['Đổi Xu giảm cước']!,
-                      if (summary.containsKey('Cước cần thanh toán'))
-                        'Cước cần thanh toán': summary['Cước cần thanh toán']!,
-                      'Tiền thu hộ COD': summary['Tiền thu hộ COD']!,
-                      'Trả phí': _payer,
-                      'Thanh toán cước': _payment,
-                      if (summary.containsKey('Tiền mặt cước đã thu'))
-                        'Tiền mặt cước đã thu':
-                            summary['Tiền mặt cước đã thu']!,
-                      if (summary.containsKey('Tiền mặt COD đã thu'))
-                        'Tiền mặt COD đã thu': summary['Tiền mặt COD đã thu']!,
-                      if (summary.containsKey('Thời điểm thu tiền mặt'))
-                        'Thời điểm thu tiền mặt':
-                            summary['Thời điểm thu tiền mặt']!,
-                    }),
-                    if (_order['fulfillment_provider'] == 'ghn')
-                      _section('Vận chuyển GHN', {
-                        'Mã vận đơn hãng': _text(_order['carrier_code']),
-                      }),
-                    const Divider(height: 32),
-                    Text(
-                      'Lịch sử đơn hàng',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 12),
-                    if (_history!.isEmpty)
-                      const Text('Chưa có lịch sử cập nhật.'),
-                    for (final event in _history!)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 20),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.only(top: 3),
-                              child: GhstButtonIcon(
-                                Icons.check_circle_outline,
-                                size: 18,
-                                color: tokens.emerald.icon,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    cloudActions[event['action']] ??
-                                        '${event['action'] ?? 'Cập nhật'}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  Text(
-                                    cloudStatuses[event['status']] ??
-                                        '${event['status'] ?? ''}',
-                                  ),
-                                  Text(
-                                    cloudDate(event['created_at']),
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                  if ((event['reason'] as String? ?? '')
-                                      .trim()
-                                      .isNotEmpty)
-                                    SelectableText('Lý do: ${event['reason']}'),
-                                ],
-                              ),
-                            ),
-                          ],
+                    if (_order['fulfillment_provider'] == 'ghn') ...[
+                      const SizedBox(height: 16),
+                      _buildDetailCard(
+                        context: context,
+                        title: 'Vận chuyển GHN',
+                        icon: Icons.local_shipping_outlined,
+                        tone: tokens.violet,
+                        child: _buildKeyValueRow(
+                          context,
+                          label: 'Mã vận đơn hãng',
+                          value: _text(_order['carrier_code']),
                         ),
                       ),
+                    ],
+                    const SizedBox(height: 16),
+                    _buildHistoryTimelineCard(context),
                   ],
                 ],
               ),

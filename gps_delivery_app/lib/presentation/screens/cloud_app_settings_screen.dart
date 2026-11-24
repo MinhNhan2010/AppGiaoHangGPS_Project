@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/integrations/push_notification_service.dart';
@@ -126,7 +127,8 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
     }
     return [
       if (_session.isOperator) GhstRoleMode.operator,
-      if (_session.hasMerchantAccess) GhstRoleMode.merchant,
+      if (GhstFeatures.commerceEnabled && _session.hasMerchantAccess)
+        GhstRoleMode.merchant,
       if (_session.hasRole('driver')) GhstRoleMode.driver,
       GhstRoleMode.customer,
     ];
@@ -216,10 +218,9 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
       _notice = null;
     });
     try {
-      await PushNotificationService.instance.updatePreferences(
-        {key: value},
-        session: _session,
-      );
+      await PushNotificationService.instance.updatePreferences({
+        key: value,
+      }, session: _session);
     } catch (e) {
       if (mounted && widget.lease?.handleAccessFailure(e) != true) {
         setState(() => _error = _describeError(e));
@@ -246,13 +247,10 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
 
   Future<void> _selectDefaultRole(GhstRoleMode mode) async {
     final key = _cloudRoleKeyFor(mode);
-    await _runAction(
-      () async {
-        await _session.saveUiPreferences(preferredRole: key);
-        widget.onSelectRoleMode?.call(mode);
-      },
-      successNotice: 'Đã đặt "${mode.label}" làm không gian mở mặc định.',
-    );
+    await _runAction(() async {
+      await _session.saveUiPreferences(preferredRole: key);
+      widget.onSelectRoleMode?.call(mode);
+    }, successNotice: 'Đã đặt "${mode.label}" làm không gian mở mặc định.');
   }
 
   Future<void> _openEditProfile() async {
@@ -305,10 +303,7 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
           child: SingleChildScrollView(
-            child: CloudMembershipPanel(
-              session: _session,
-              lease: widget.lease,
-            ),
+            child: CloudMembershipPanel(session: _session, lease: widget.lease),
           ),
         ),
         actions: [
@@ -332,10 +327,8 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
       MaterialPageRoute<void>(
         builder: (_) => CloudSessionBoundary(
           session: _session,
-          builder: (_, lease) => CloudAddressBookScreen(
-            service: _session.service,
-            lease: lease,
-          ),
+          builder: (_, lease) =>
+              CloudAddressBookScreen(service: _session.service, lease: lease),
         ),
       ),
     );
@@ -347,10 +340,8 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
       MaterialPageRoute<void>(
         builder: (_) => CloudSessionBoundary(
           session: _session,
-          builder: (_, lease) => CloudLocalImportScreen(
-            session: _session,
-            lease: lease,
-          ),
+          builder: (_, lease) =>
+              CloudLocalImportScreen(session: _session, lease: lease),
         ),
       ),
     );
@@ -408,23 +399,17 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
       ),
     );
     if (confirmed != true) return;
-    await _runAction(
-      () async {
-        widget.aiController?.reset();
-        await _session.service.aiHistory('clear');
-      },
-      successNotice: 'Đã xóa lịch sử trò chuyện Trợ lý AI.',
-    );
+    await _runAction(() async {
+      widget.aiController?.reset();
+      await _session.service.aiHistory('clear');
+    }, successNotice: 'Đã xóa lịch sử trò chuyện Trợ lý AI.');
   }
 
   Future<void> _clearShippingDraft() async {
-    await _runAction(
-      () async {
-        await _session.service.accountPreferences('clear_draft');
-        _session.updateCachedShippingDraft(null);
-      },
-      successNotice: 'Đã xóa bản nháp tạo vận đơn.',
-    );
+    await _runAction(() async {
+      await _session.service.accountPreferences('clear_draft');
+      _session.updateCachedShippingDraft(null);
+    }, successNotice: 'Đã xóa bản nháp tạo vận đơn.');
   }
 
   Widget _sectionHeading({
@@ -457,10 +442,7 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
             const SizedBox(height: 2),
             Text(
               subtitle,
-              style: TextStyle(
-                fontSize: 12,
-                color: tokens.inkSecondary,
-              ),
+              style: TextStyle(fontSize: 12, color: tokens.inkSecondary),
             ),
           ],
         ),
@@ -605,7 +587,8 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
                           await _session.refresh();
                           await PushNotificationService.instance.pollNow();
                         },
-                        successNotice: 'Đã đồng bộ trạng thái tài khoản mới nhất.',
+                        successNotice:
+                            'Đã đồng bộ trạng thái tài khoản mới nhất.',
                       ),
                 icon: const GhstButtonIcon.glyph(
                   GhstActionKind.refresh,
@@ -620,36 +603,34 @@ class _CloudAppSettingsScreenState extends State<CloudAppSettingsScreen> {
     );
   }
 
-  Widget _bannerPill({
-    required GhstActionKind icon,
-    required String text,
-  }) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-    decoration: BoxDecoration(
-      color: Colors.white.withValues(alpha: 0.12),
-      borderRadius: BorderRadius.circular(999),
-      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        GhstButtonIcon.glyph(icon, size: 14, color: Colors.white),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+  Widget _bannerPill({required GhstActionKind icon, required String text}) =>
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
         ),
-      ],
-    ),
-  );
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GhstButtonIcon.glyph(icon, size: 14, color: Colors.white),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
 
   Widget _buildFallbackThemeCard(GhstThemeTokens tokens) {
     final currentRaw =

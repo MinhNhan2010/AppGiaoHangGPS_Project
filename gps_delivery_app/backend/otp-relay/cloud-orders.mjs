@@ -9,6 +9,7 @@ import {
   createPodUpload,
   createPodSign,
 } from './market-media.mjs';
+import { createDriverApplicationHandler } from './driver-application.mjs';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function uuid(value) {
@@ -65,7 +66,7 @@ export function createCloudOrders({ env = process.env, authenticate, fetcher = f
     catch { throw new IntegrationError(502, 'Phản hồi cloud không hợp lệ.'); }
     if (!response.ok) {
       if (['PGRST202', '42P01', '42883'].includes(data.code)) throw new IntegrationError(503,
-        ['delivery_marketplace','delivery_market_operations','delivery_market_browse','delivery_market_media_reserve','delivery_market_attachment_reserve','delivery_cloud_order_otp','delivery_cloud_share_manage','delivery_cloud_logistics','delivery_cloud_admin_accounts','delivery_cloud_promo_events','delivery_cloud_notifications','delivery_cloud_preferences','delivery_cloud_ai_history','delivery_cloud_order_live','delivery_merchant_suite'].includes(name)
+        ['delivery_marketplace','delivery_market_operations','delivery_market_browse','delivery_market_media_reserve','delivery_market_attachment_reserve','delivery_cloud_order_otp','delivery_cloud_share_manage','delivery_cloud_logistics','delivery_cloud_admin_accounts','delivery_cloud_promo_events','delivery_cloud_notifications','delivery_cloud_preferences','delivery_cloud_ai_history','delivery_cloud_order_live','delivery_merchant_suite','delivery_driver_wallet','delivery_showcase_catalog','delivery_driver_dispatch','delivery_admin_pricing','delivery_driver_application'].includes(name)
           ? 'Dữ liệu mua hàng cần được cập nhật trong trang quản trị.'
           : name === 'delivery_cloud_addresses_manage'
           ? 'Chưa cài sổ địa chỉ cloud. Chạy migration 20261029_cloud_addresses.sql trên Supabase.'
@@ -125,6 +126,51 @@ export function createCloudOrders({ env = process.env, authenticate, fetcher = f
       throw new IntegrationError(400, 'Yêu cầu vận hành cửa hàng không hợp lệ.');
     }
     res.json(await rpc(req, 'delivery_merchant_suite', { p_action: req.params.action, p_payload: req.body }));
+  }));
+  const driverWalletActions = new Set([
+    'summary','save_bank','request_topup','request_withdraw','cancel_request','admin_list','admin_resolve',
+  ]);
+  router.post('/driver-wallet/:action', route(async (req, res) => {
+    if (!driverWalletActions.has(req.params.action) || !req.body || Array.isArray(req.body) ||
+        typeof req.body !== 'object' || Buffer.byteLength(JSON.stringify(req.body)) > 8000) {
+      throw new IntegrationError(400, 'Yêu cầu ví tài xế không hợp lệ.');
+    }
+    res.json(await rpc(req, 'delivery_driver_wallet', { p_action: req.params.action, p_payload: req.body }));
+  }));
+  const driverApplication = createDriverApplicationHandler({ env, fetcher, rpc });
+  // Only upload_document carries base64 images (<= 5 MB decoded); every other action stays small.
+  router.post('/driver-application/:action',
+    (req, res, next) => req.params.action === 'upload_document' ? express.json({ limit: '7mb' })(req, res, next) : next(),
+    route(async (req, res) => res.json(await driverApplication(req))));
+  const showcaseCatalogActions = new Set([
+    'status','seed','set_paused','set_auto_dispatch','purge',
+  ]);
+  router.post('/showcase-catalog/:action', route(async (req, res) => {
+    if (!showcaseCatalogActions.has(req.params.action) || !req.body || Array.isArray(req.body) ||
+        typeof req.body !== 'object' || Buffer.byteLength(JSON.stringify(req.body)) > 4000) {
+      throw new IntegrationError(400, 'Yêu cầu quản lý gian hàng ảo không hợp lệ.');
+    }
+    res.json(await rpc(req, 'delivery_showcase_catalog', { p_action: req.params.action, p_payload: req.body }));
+  }));
+  const driverDispatchActions = new Set([
+    'get_presence','set_presence','poll_offer','respond_offer','batch_suggestions','claim_batch',
+  ]);
+  router.post('/driver-dispatch/:action', route(async (req, res) => {
+    if (!driverDispatchActions.has(req.params.action) || !req.body || Array.isArray(req.body) ||
+        typeof req.body !== 'object' || Buffer.byteLength(JSON.stringify(req.body)) > 8000) {
+      throw new IntegrationError(400, 'Yêu cầu điều phối tài xế không hợp lệ.');
+    }
+    res.json(await rpc(req, 'delivery_driver_dispatch', { p_action: req.params.action, p_payload: req.body }));
+  }));
+  const adminPricingActions = new Set([
+    'get','public_zones','save_rule','toggle_surge','reset_rules','save_geofence','toggle_geofence','delete_geofence',
+  ]);
+  router.post('/admin-pricing/:action', route(async (req, res) => {
+    if (!adminPricingActions.has(req.params.action) || !req.body || Array.isArray(req.body) ||
+        typeof req.body !== 'object' || Buffer.byteLength(JSON.stringify(req.body)) > 16000) {
+      throw new IntegrationError(400, 'Yêu cầu bảng giá điều hành không hợp lệ.');
+    }
+    res.json(await rpc(req, 'delivery_admin_pricing', { p_action: req.params.action, p_payload: req.body }));
   }));
   const logisticsActions = new Set([
     'pickup_list','pickup_create','pickup_assign','recipient_trust','recipient_flag','instruction_set','stats','service_eta','driver_reviews',

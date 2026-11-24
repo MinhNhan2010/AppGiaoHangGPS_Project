@@ -87,6 +87,9 @@ test('Cloud orders gateway routes private attachments, POD upload, OTP read and 
       if (path.startsWith('/storage/v1/object/sign/delivery-private-evidence/')) {
         return new Response(JSON.stringify({ signedURL: '/object/sign/delivery-private-evidence/signed?token=xyz' }), { status: 200 });
       }
+      if (path.startsWith('/storage/v1/object/sign/delivery-evidence/')) {
+        return new Response(JSON.stringify({ signedURL: '/object/sign/delivery-evidence/signed?token=sig' }), { status: 200 });
+      }
       if (path.startsWith('/storage/v1/object/delivery-evidence/')) {
         return new Response('{}', { status: 200 });
       }
@@ -129,6 +132,21 @@ test('Cloud orders gateway routes private attachments, POD upload, OTP read and 
   });
   assert.equal(upPod.status, 200);
   assert.match((await upPod.json()).path, new RegExp(`^${trackingCode}/pod-`));
+
+  const upSig = await fetch(`${base}/pod`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tracking_code: trackingCode, image: base64Img, evidence_type: 'signature', signer_name: 'Nguyen Van Nhan' }),
+  });
+  assert.equal(upSig.status, 200);
+  const sigJson = await upSig.json();
+  assert.equal(sigJson.evidence_type, 'signature');
+  assert.match(sigJson.path, new RegExp(`^${trackingCode}/signature-`));
+
+  const signSig = await fetch(`${base}/pod/sign`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: sigJson.path }),
+  });
+  assert.equal(signSig.status, 200);
 
   const otpRes = await fetch(`${base}/orders/${orderId}/otp`);
   assert.equal((await otpRes.json()).otp_code, '654321');

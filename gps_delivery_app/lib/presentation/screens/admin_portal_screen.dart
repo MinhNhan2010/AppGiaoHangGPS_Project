@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_orders_service.dart';
 import '../../core/integrations/cloud_session_lease.dart';
@@ -12,6 +13,8 @@ import '../../core/network/public_json_api.dart';
 import '../../core/theme/admin_studio_theme.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../widgets/admin_accounts_panel.dart';
+import '../widgets/admin_fleet_radar_panel.dart';
+import '../widgets/admin_pricing_geofence_panel.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/backend_integration_settings.dart';
 import '../widgets/cloud_logistics_panels.dart';
@@ -19,6 +22,7 @@ import '../widgets/cloud_notification_center.dart';
 import '../widgets/cloud_order_labels.dart';
 import '../widgets/cloud_pricing_dialog.dart';
 import '../widgets/cloud_session_boundary.dart';
+import '../widgets/driver_cloud_wallet_panel.dart';
 import '../widgets/ghst_button_icon.dart';
 import '../widgets/market_commercial_sheets.dart';
 import '../widgets/motion_3d_effects.dart';
@@ -60,10 +64,40 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
   bool _busy = false;
   String? _error;
   int _tab = 0;
+  int _ordersSubtab = 0;
   String _accountsFilter = 'all';
   Object? _pushWatcher;
 
-  static const _destinations = [
+  /// Real tab indices shown in navigation. Tab 3 (storefront moderation) is
+  /// commerce-only and hidden while the app focuses on GPS delivery.
+  List<int> get _visibleTabs => [
+    for (var i = 0; i < _allDestinations.length; i++)
+      if (i != 3 || GhstFeatures.commerceEnabled) i,
+  ];
+
+  List<(Icon3dStyle, String, String, String)> get _destinations => [
+    for (final (i, d) in _allDestinations.indexed)
+      if (GhstFeatures.commerceEnabled)
+        d
+      else if (i == 0)
+        (
+          d.$1,
+          d.$2,
+          'Giám sát vận đơn, tài xế và đối soát thời gian thực',
+          d.$4,
+        )
+      else if (i == 4)
+        (
+          Icon3dStyle.walletVault,
+          'Ví Tài xế & Đối soát',
+          'Duyệt nạp ký quỹ, rút tiền ví tài xế và đối soát thu hộ',
+          'Ví TX',
+        )
+      else
+        d,
+  ];
+
+  static const _allDestinations = [
     (
       Icon3dStyle.analyticsChart,
       'Tổng quan',
@@ -297,9 +331,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
       enable3dHorizon: true,
       child: Container(
         decoration: const BoxDecoration(
-          border: Border(
-            right: BorderSide(color: AdminStudioColors.line),
-          ),
+          border: Border(right: BorderSide(color: AdminStudioColors.line)),
         ),
         child: LayoutBuilder(
           builder: (context, box) => SingleChildScrollView(
@@ -739,9 +771,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             if (_session.error == null) ...[
-                              CircularProgressIndicator(
-                                color: p.violet,
-                              ),
+                              CircularProgressIndicator(color: p.violet),
                               const SizedBox(height: 18),
                               Text(
                                 'Đang xác minh quyền quản trị...',
@@ -759,9 +789,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                                   color: p.dangerSoft,
                                   borderRadius: BorderRadius.circular(14),
                                   border: Border.all(
-                                    color: p.danger.withValues(
-                                      alpha: 0.35,
-                                    ),
+                                    color: p.danger.withValues(alpha: 0.35),
                                   ),
                                 ),
                                 child: Center(
@@ -847,9 +875,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                                 color: p.dangerSoft,
                                 borderRadius: BorderRadius.circular(16),
                                 border: Border.all(
-                                  color: p.danger.withValues(
-                                    alpha: 0.35,
-                                  ),
+                                  color: p.danger.withValues(alpha: 0.35),
                                 ),
                               ),
                               child: Center(
@@ -965,7 +991,10 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                           ),
                           child: SelectableText(
                             '${adminAuditActionLabel(e['action'])} · ${e['action']} · ${e['target_id'] ?? ''}\n${cloudDate(e['created_at'])} · ${e['actor_id']}',
-                            style: const TextStyle(fontSize: 12.5, height: 1.45),
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              height: 1.45,
+                            ),
                           ),
                         ),
                     ],
@@ -994,9 +1023,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
     child: AdminStudioGridBackdrop(
       child: Container(
         decoration: const BoxDecoration(
-          border: Border(
-            right: BorderSide(color: AdminStudioColors.line),
-          ),
+          border: Border(right: BorderSide(color: AdminStudioColors.line)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1058,8 +1085,9 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                   horizontal: 10,
                   vertical: 4,
                 ),
-                itemCount: _destinations.length,
-                itemBuilder: (context, index) {
+                itemCount: _visibleTabs.length,
+                itemBuilder: (context, slot) {
+                  final index = _visibleTabs[slot];
                   final d = _destinations[index];
                   final selected = _tab == index;
                   return Padding(
@@ -1080,53 +1108,53 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                             _tab = index;
                             if (index == 1) _accountsFilter = 'all';
                           }),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 11,
-                          ),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: selected
-                                  ? AdminStudioColors.acid.withValues(
-                                      alpha: 0.45,
-                                    )
-                                  : Colors.transparent,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 11,
                             ),
-                          ),
-                          child: Row(
-                            children: [
-                              GhstAiIcon(
-                                style: d.$1,
-                                size: 26,
-                                borderRadius: 8,
-                                selected: selected,
-                                borderColor: selected
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: selected
                                     ? AdminStudioColors.acid.withValues(
-                                        alpha: 0.72,
+                                        alpha: 0.45,
                                       )
-                                    : AdminStudioColors.shellLine,
-                                glowColor: AdminStudioColors.acid,
+                                    : Colors.transparent,
                               ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Text(
-                                  d.$2,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 13.5,
-                                    fontWeight: selected
-                                        ? FontWeight.w800
-                                        : FontWeight.w600,
+                            ),
+                            child: Row(
+                              children: [
+                                GhstAiIcon(
+                                  style: d.$1,
+                                  size: 26,
+                                  borderRadius: 8,
+                                  selected: selected,
+                                  borderColor: selected
+                                      ? AdminStudioColors.acid.withValues(
+                                          alpha: 0.72,
+                                        )
+                                      : AdminStudioColors.shellLine,
+                                  glowColor: AdminStudioColors.acid,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    d.$2,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 13.5,
+                                      fontWeight: selected
+                                          ? FontWeight.w800
+                                          : FontWeight.w600,
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
                         ),
                       ),
                     ),
@@ -1240,9 +1268,7 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
             height: 66,
             padding: const EdgeInsets.symmetric(horizontal: 24),
             decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: p.line),
-              ),
+              border: Border(bottom: BorderSide(color: p.line)),
             ),
             child: LayoutBuilder(
               builder: (context, bar) {
@@ -1388,9 +1414,10 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
       0 => _AdminAnalyticsPanel(
         session: _session,
         lease: lease,
-        onNavigateTab: (index, {accountsFilter}) => setState(() {
+        onNavigateTab: (index, {accountsFilter, ordersSubtab}) => setState(() {
           _tab = index;
           if (accountsFilter != null) _accountsFilter = accountsFilter;
+          if (ordersSubtab != null) _ordersSubtab = ordersSubtab;
         }),
       ),
       1 => AdminAccountsPanel(
@@ -1398,13 +1425,82 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
         lease: lease,
         initialFilter: _accountsFilter,
       ),
-      2 => CloudOrdersScreen(
-        session: _session,
-        admin: true,
-        embedded: true,
-        showAccountsToggle: false,
+      2 => Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 0,
+                      icon: GhstAiIcon(
+                        style: Icon3dStyle.cargoTruck,
+                        size: 17,
+                        circular: true,
+                      ),
+                      label: Text('Vận đơn & Điều phối'),
+                    ),
+                    ButtonSegment(
+                      value: 1,
+                      icon: GhstAiIcon(
+                        style: Icon3dStyle.scooterExpress,
+                        size: 17,
+                        circular: true,
+                      ),
+                      label: Text('Bản đồ đội xe'),
+                    ),
+                    ButtonSegment(
+                      value: 2,
+                      icon: GhstAiIcon(
+                        style: Icon3dStyle.gpsPinRadar,
+                        size: 17,
+                        circular: true,
+                      ),
+                      label: Text('Bảng giá động & Geofence'),
+                    ),
+                  ],
+                  selected: {_ordersSubtab},
+                  onSelectionChanged: (val) =>
+                      setState(() => _ordersSubtab = val.first),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: switch (_ordersSubtab) {
+              0 => CloudOrdersScreen(
+                session: _session,
+                admin: true,
+                embedded: true,
+                showAccountsToggle: false,
+              ),
+              1 => AdminFleetRadarPanel(session: _session, lease: lease),
+              _ => AdminPricingGeofencePanel(
+                session: _session,
+                lease: lease,
+                onOpenBasePricing: _openPricing,
+              ),
+            },
+          ),
+        ],
       ),
-      3 => _AdminModerationPanel(session: _session, lease: lease),
+      3 when GhstFeatures.commerceEnabled => _AdminModerationPanel(
+        session: _session,
+        lease: lease,
+      ),
+      3 => _AdminAnalyticsPanel(
+        session: _session,
+        lease: lease,
+        onNavigateTab: (index, {accountsFilter, ordersSubtab}) => setState(() {
+          _tab = index;
+          if (accountsFilter != null) _accountsFilter = accountsFilter;
+          if (ordersSubtab != null) _ordersSubtab = ordersSubtab;
+        }),
+      ),
       4 => _AdminFinancePromoPanel(session: _session, lease: lease),
       _ => SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -1618,13 +1714,11 @@ class _AdminPortalScreenState extends State<AdminPortalScreen>
                   child: Container(
                     height: 64,
                     decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: p.line),
-                      ),
+                      border: Border(top: BorderSide(color: p.line)),
                     ),
                     child: Row(
                       children: [
-                        for (var i = 0; i < _destinations.length; i++)
+                        for (final i in _visibleTabs)
                           Expanded(
                             child: Semantics(
                               button: true,
@@ -1698,7 +1792,8 @@ class _AdminAnalyticsPanel extends StatefulWidget {
 
   final CloudAccountSession session;
   final CloudSessionLease lease;
-  final void Function(int index, {String? accountsFilter}) onNavigateTab;
+  final void Function(int index, {String? accountsFilter, int? ordersSubtab})
+  onNavigateTab;
 
   @override
   State<_AdminAnalyticsPanel> createState() => _AdminAnalyticsPanelState();
@@ -1810,10 +1905,7 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
             detail,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: compact ? 11 : 12,
-              color: p.muted,
-            ),
+            style: TextStyle(fontSize: compact ? 11 : 12, color: p.muted),
           ),
         ],
       ),
@@ -1909,10 +2001,7 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                 Expanded(
                   child: Text(
                     rows[i].$1,
-                    style: TextStyle(
-                      fontSize: 13.5,
-                      color: p.muted,
-                    ),
+                    style: TextStyle(fontSize: 13.5, color: p.muted),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1951,7 +2040,9 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
     final finPending = _intVal(fin['pending_requests']);
     final reportedReviews = _intVal(_data?['reported_reviews']);
     final pendingTotal =
-        shopsPending + membershipsPending + finPending + reportedReviews;
+        (GhstFeatures.commerceEnabled ? shopsPending + reportedReviews : 0) +
+        membershipsPending +
+        finPending;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -2114,8 +2205,9 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                             tint: p.gold,
                             label: 'Tổng thu hộ & Trả trước',
                             value: _vnd(fin['collections_completed']),
-                            detail:
-                                'Quyết toán shop: ${_vnd(fin['settlements_completed'])}',
+                            detail: GhstFeatures.commerceEnabled
+                                ? 'Quyết toán shop: ${_vnd(fin['settlements_completed'])}'
+                                : 'Đã hoàn tiền: ${_vnd(fin['refunds_completed'])}',
                           ),
                           _kpiSummaryTile(
                             compact: compact,
@@ -2126,8 +2218,9 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                             tint: pendingTotal > 0 ? p.pinkSoft : p.acidSoft,
                             label: 'Tác vụ chờ phê duyệt',
                             value: '$pendingTotal',
-                            detail:
-                                '$shopsPending gian hàng · $membershipsPending đối tác · $finPending đối soát',
+                            detail: GhstFeatures.commerceEnabled
+                                ? '$shopsPending gian hàng · $membershipsPending đối tác · $finPending đối soát'
+                                : '$membershipsPending tài xế · $finPending đối soát',
                           ),
                         ];
                         return Wrap(
@@ -2139,6 +2232,61 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                           ],
                         );
                       },
+                    ),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        ActionChip(
+                          key: const ValueKey('admin-shortcut-fleet-radar'),
+                          avatar: GhstButtonIcon(
+                            Icons.gps_fixed,
+                            size: 16,
+                            color: p.violetInk,
+                          ),
+                          label: const Text('Bản đồ đội xe'),
+                          onPressed: () =>
+                              widget.onNavigateTab(2, ordersSubtab: 1),
+                        ),
+                        ActionChip(
+                          key: const ValueKey('admin-shortcut-driver-kyc'),
+                          avatar: GhstButtonIcon(
+                            Icons.badge_outlined,
+                            size: 16,
+                            color: p.violetInk,
+                          ),
+                          label: Text(
+                            'Duyệt hồ sơ tài xế${membershipsPending > 0 ? ' · $membershipsPending' : ''}',
+                          ),
+                          onPressed: () => widget.onNavigateTab(
+                            1,
+                            accountsFilter: 'pending',
+                          ),
+                        ),
+                        ActionChip(
+                          key: const ValueKey('admin-shortcut-orders'),
+                          avatar: GhstButtonIcon(
+                            Icons.local_shipping_outlined,
+                            size: 16,
+                            color: p.violetInk,
+                          ),
+                          label: const Text('Vận đơn & Điều phối'),
+                          onPressed: () =>
+                              widget.onNavigateTab(2, ordersSubtab: 0),
+                        ),
+                        ActionChip(
+                          key: const ValueKey('admin-shortcut-pricing'),
+                          avatar: GhstButtonIcon(
+                            Icons.tune_rounded,
+                            size: 16,
+                            color: p.violetInk,
+                          ),
+                          label: const Text('Bảng giá & Geofence'),
+                          onPressed: () =>
+                              widget.onNavigateTab(2, ordersSubtab: 2),
+                        ),
+                      ],
                     ),
                     if (pendingTotal > 0) ...[
                       const SizedBox(height: 14),
@@ -2166,7 +2314,8 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                                 accountsFilter: 'pending',
                               ),
                             ),
-                          if (shopsPending > 0 || reportedReviews > 0)
+                          if (GhstFeatures.commerceEnabled &&
+                              (shopsPending > 0 || reportedReviews > 0))
                             ActionChip(
                               backgroundColor: p.gold,
                               labelStyle: TextStyle(
@@ -2226,28 +2375,29 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                               ),
                             ],
                           ),
-                          _statCard(
-                            icon: Icons.shopping_bag_outlined,
-                            accent: p.violet,
-                            tint: p.violetSoft,
-                            title: 'Đơn mua Thương mại điện tử',
-                            completionRatio: marketTotal > 0
-                                ? marketDelivered / marketTotal
-                                : null,
-                            rows: [
-                              ('Tổng đơn cửa hàng', '$marketTotal'),
-                              (
-                                'Chờ cửa hàng xác nhận',
-                                '${mo['pending'] ?? 0}',
-                              ),
-                              (
-                                'Đang chuẩn bị / giao',
-                                '${mo['accepted_ready'] ?? 0}',
-                              ),
-                              ('Đã giao hoàn tất', '$marketDelivered'),
-                              ('Đã hủy', '${mo['cancelled'] ?? 0}'),
-                            ],
-                          ),
+                          if (GhstFeatures.commerceEnabled)
+                            _statCard(
+                              icon: Icons.shopping_bag_outlined,
+                              accent: p.violet,
+                              tint: p.violetSoft,
+                              title: 'Đơn mua Thương mại điện tử',
+                              completionRatio: marketTotal > 0
+                                  ? marketDelivered / marketTotal
+                                  : null,
+                              rows: [
+                                ('Tổng đơn cửa hàng', '$marketTotal'),
+                                (
+                                  'Chờ cửa hàng xác nhận',
+                                  '${mo['pending'] ?? 0}',
+                                ),
+                                (
+                                  'Đang chuẩn bị / giao',
+                                  '${mo['accepted_ready'] ?? 0}',
+                                ),
+                                ('Đã giao hoàn tất', '$marketDelivered'),
+                                ('Đã hủy', '${mo['cancelled'] ?? 0}'),
+                              ],
+                            ),
                           _statCard(
                             icon: Icons.menu_book_outlined,
                             accent: p.onAccentInk,
@@ -2258,10 +2408,11 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                                 'Đã thu COD / trả trước',
                                 _vnd(fin['collections_completed']),
                               ),
-                              (
-                                'Đã thanh toán cho shop',
-                                _vnd(fin['settlements_completed']),
-                              ),
+                              if (GhstFeatures.commerceEnabled)
+                                (
+                                  'Đã thanh toán cho shop',
+                                  _vnd(fin['settlements_completed']),
+                                ),
                               (
                                 'Đã hoàn tiền khách',
                                 _vnd(fin['refunds_completed']),
@@ -2274,29 +2425,30 @@ class _AdminAnalyticsPanelState extends State<_AdminAnalyticsPanel> {
                                 ('Sổ cái ${entry.key}', _vnd(entry.value)),
                             ],
                           ),
-                          _statCard(
-                            icon: Icons.verified_outlined,
-                            accent: p.pinkInk,
-                            tint: p.pinkSoft,
-                            title: 'Đối tác, Khuyến mãi & Kiểm duyệt',
-                            rows: [
-                              ('Cửa hàng đang mở', '${shops['active'] ?? 0}'),
-                              ('Cửa hàng chờ duyệt', '$shopsPending'),
-                              (
-                                'Hồ sơ đối tác chờ duyệt',
-                                '$membershipsPending',
-                              ),
-                              (
-                                'Voucher đang chạy',
-                                '${promo['active_vouchers'] ?? 0} · ${_vnd(promo['voucher_budget_used'])}',
-                              ),
-                              (
-                                'Flash Sale / Xu lưu hành',
-                                '${promo['active_flash_sales'] ?? 0} / ${promo['coins_circulating'] ?? 0} Xu',
-                              ),
-                              ('Đánh giá bị báo cáo', '$reportedReviews'),
-                            ],
-                          ),
+                          if (GhstFeatures.commerceEnabled)
+                            _statCard(
+                              icon: Icons.verified_outlined,
+                              accent: p.pinkInk,
+                              tint: p.pinkSoft,
+                              title: 'Đối tác, Khuyến mãi & Kiểm duyệt',
+                              rows: [
+                                ('Cửa hàng đang mở', '${shops['active'] ?? 0}'),
+                                ('Cửa hàng chờ duyệt', '$shopsPending'),
+                                (
+                                  'Hồ sơ đối tác chờ duyệt',
+                                  '$membershipsPending',
+                                ),
+                                (
+                                  'Voucher đang chạy',
+                                  '${promo['active_vouchers'] ?? 0} · ${_vnd(promo['voucher_budget_used'])}',
+                                ),
+                                (
+                                  'Flash Sale / Xu lưu hành',
+                                  '${promo['active_flash_sales'] ?? 0} / ${promo['coins_circulating'] ?? 0} Xu',
+                                ),
+                                ('Đánh giá bị báo cáo', '$reportedReviews'),
+                              ],
+                            ),
                         ];
                         return Wrap(
                           spacing: 16,
@@ -2336,8 +2488,62 @@ class _AdminModerationPanel extends StatefulWidget {
 class _AdminModerationPanelState extends State<_AdminModerationPanel> {
   bool _reviewsTab = false;
   List<Map<String, dynamic>> _reported = [];
+  Map<String, dynamic>? _showcase;
+  bool _showcaseBusy = false;
+  int _catalogEpoch = 0;
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadShowcaseStatus());
+  }
+
+  Future<void> _loadShowcaseStatus() async {
+    if (!widget.lease.valid) return;
+    try {
+      final res = await widget.session.service.showcaseCatalog('status');
+      if (mounted && widget.lease.valid) {
+        setState(() => _showcase = res);
+      }
+    } catch (e) {
+      widget.lease.handleAccessFailure(e);
+    }
+  }
+
+  Future<void> _runShowcaseAction(
+    String action, [
+    Map<String, dynamic>? payload,
+  ]) async {
+    if (_showcaseBusy || !widget.lease.valid) return;
+    setState(() {
+      _showcaseBusy = true;
+      _error = null;
+    });
+    try {
+      final res = await widget.session.service.showcaseCatalog(
+        action,
+        payload ?? const {},
+      );
+      if (mounted && widget.lease.valid) {
+        setState(() {
+          _showcase = res;
+          _catalogEpoch++;
+        });
+      }
+    } catch (e) {
+      if (mounted && !widget.lease.handleAccessFailure(e)) {
+        setState(
+          () => _error = e is PublicApiException
+              ? e.message
+              : 'Chưa thực hiện được thao tác gian hàng mẫu.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _showcaseBusy = false);
+    }
+  }
 
   Future<void> _loadReports({bool force = false}) async {
     if ((_busy && !force) || !widget.lease.valid) return;
@@ -2443,9 +2649,7 @@ class _AdminModerationPanelState extends State<_AdminModerationPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             color: p.surface,
-            border: Border(
-              bottom: BorderSide(color: p.line),
-            ),
+            border: Border(bottom: BorderSide(color: p.line)),
           ),
           child: Center(
             child: ConstrainedBox(
@@ -2476,9 +2680,125 @@ class _AdminModerationPanelState extends State<_AdminModerationPanel> {
             ),
           ),
         ),
+        if (!_reviewsTab)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+            decoration: BoxDecoration(
+              color: p.paperWarm,
+              border: Border(bottom: BorderSide(color: p.line)),
+            ),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1080),
+                child: Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const GhstAiIcon(
+                          style: Icon3dStyle.foodMarket,
+                          size: 26,
+                          borderRadius: 8,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            _showcase == null
+                                ? 'Quán ăn & Đồ uống Ảo (Showcase): Đang kiểm tra...'
+                                : 'Quán ăn & Đồ uống Ảo: ${_showcase!['shops_active'] ?? 0}/${_showcase!['shops_total'] ?? 0} quán mở bán · ${_showcase!['products_total'] ?? 0} món · Flash Sale: ${_showcase!['flash_sales_active'] ?? 0}',
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w800,
+                              color: p.ink,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        FilledButton.icon(
+                          key: const ValueKey('btn-admin-showcase-seed'),
+                          onPressed: _showcaseBusy
+                              ? null
+                              : () => _runShowcaseAction('seed'),
+                          icon: const GhstButtonIcon.glyph(
+                            GhstActionKind.plus,
+                            size: 15,
+                          ),
+                          label: Text(
+                            (_showcase?['shops_total'] as num? ?? 0) > 0
+                                ? 'Làm mới 6 quán mẫu'
+                                : 'Khởi tạo 6 quán mẫu',
+                          ),
+                        ),
+                        if ((_showcase?['shops_total'] as num? ?? 0) > 0) ...[
+                          OutlinedButton.icon(
+                            onPressed: _showcaseBusy
+                                ? null
+                                : () => _runShowcaseAction('set_paused', {
+                                    'paused':
+                                        (_showcase?['shops_active'] as num? ??
+                                            0) >
+                                        0,
+                                  }),
+                            icon: GhstButtonIcon.glyph(
+                              (_showcase?['shops_active'] as num? ?? 0) > 0
+                                  ? GhstActionKind.pause
+                                  : GhstActionKind.play,
+                              size: 15,
+                            ),
+                            label: Text(
+                              (_showcase?['shops_active'] as num? ?? 0) > 0
+                                  ? 'Tạm ẩn'
+                                  : 'Mở bán lại',
+                            ),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _showcaseBusy
+                                ? null
+                                : () =>
+                                      _runShowcaseAction('set_auto_dispatch', {
+                                        'enabled':
+                                            _showcase?['auto_dispatch'] != true,
+                                      }),
+                            icon: const GhstButtonIcon.glyph(
+                              GhstActionKind.scooter,
+                              size: 15,
+                            ),
+                            label: Text(
+                              'Auto gọi TX: ${_showcase?['auto_dispatch'] == true ? 'BẬT' : 'TẮT'}',
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _showcaseBusy
+                                ? null
+                                : () => _runShowcaseAction('purge'),
+                            icon: const GhstButtonIcon.glyph(
+                              GhstActionKind.delete,
+                              size: 15,
+                            ),
+                            label: const Text('Thu hồi mẫu'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         Expanded(
           child: !_reviewsTab
               ? MarketplaceView(
+                  key: ValueKey('admin-mod-$_catalogEpoch'),
                   session: widget.session,
                   view: MarketView.moderation,
                   lease: widget.lease,
@@ -2496,9 +2816,7 @@ class _AdminModerationPanelState extends State<_AdminModerationPanel> {
                             if (_busy)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
-                                child: LinearProgressIndicator(
-                                  color: p.violet,
-                                ),
+                                child: LinearProgressIndicator(color: p.violet),
                               ),
                             if (_error != null)
                               Padding(
@@ -2522,9 +2840,7 @@ class _AdminModerationPanelState extends State<_AdminModerationPanel> {
                                       decoration: BoxDecoration(
                                         color: p.acid,
                                         borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: p.line,
-                                        ),
+                                        border: Border.all(color: p.line),
                                       ),
                                       child: Center(
                                         child: GhstButtonIcon.glyph(
@@ -2558,9 +2874,7 @@ class _AdminModerationPanelState extends State<_AdminModerationPanel> {
                                       decoration: BoxDecoration(
                                         color: p.dangerSoft,
                                         borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: p.line,
-                                        ),
+                                        border: Border.all(color: p.line),
                                       ),
                                       child: Center(
                                         child: GhstButtonIcon.glyph(
@@ -2640,12 +2954,13 @@ class _AdminFinancePromoPanel extends StatefulWidget {
 class _AdminFinancePromoPanelState extends State<_AdminFinancePromoPanel> {
   Map<String, dynamic>? _promoSettings;
   Map<String, dynamic>? _promoSummary;
+  bool _driverWalletTab = false;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    _loadPromoStatus();
+    if (GhstFeatures.commerceEnabled) _loadPromoStatus();
   }
 
   Future<void> _loadPromoStatus() async {
@@ -2696,6 +3011,12 @@ class _AdminFinancePromoPanelState extends State<_AdminFinancePromoPanel> {
 
   @override
   Widget build(BuildContext context) {
+    if (!GhstFeatures.commerceEnabled) {
+      return AdminDriverWalletRequestsSection(
+        session: widget.session,
+        lease: widget.lease,
+      );
+    }
     final p = AdminStudioPalette.of(context);
     final enabled = _promoSettings?['enabled'] != false;
     final spins = (_promoSummary?['total_spins'] as num? ?? 0).toInt();
@@ -2710,9 +3031,7 @@ class _AdminFinancePromoPanelState extends State<_AdminFinancePromoPanel> {
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
           decoration: BoxDecoration(
             color: p.surface,
-            border: Border(
-              bottom: BorderSide(color: p.line),
-            ),
+            border: Border(bottom: BorderSide(color: p.line)),
           ),
           child: Center(
             child: ConstrainedBox(
@@ -2796,17 +3115,47 @@ class _AdminFinancePromoPanelState extends State<_AdminFinancePromoPanel> {
                       ),
                     ),
                   ],
+                  const SizedBox(height: 10),
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        icon: GhstButtonIcon.glyph(
+                          GhstActionKind.receipt,
+                          size: 16,
+                        ),
+                        label: Text('Đối soát đơn hàng & hoàn tiền'),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        icon: GhstAiIcon(
+                          style: Icon3dStyle.walletVault,
+                          size: 18,
+                          circular: true,
+                        ),
+                        label: Text('Duyệt Nạp / Rút Ví Tài xế'),
+                      ),
+                    ],
+                    selected: {_driverWalletTab},
+                    onSelectionChanged: (v) =>
+                        setState(() => _driverWalletTab = v.first),
+                  ),
                 ],
               ),
             ),
           ),
         ),
         Expanded(
-          child: MarketOrderServicesScreen(
-            session: widget.session,
-            lease: widget.lease,
-            operator: true,
-          ),
+          child: _driverWalletTab
+              ? AdminDriverWalletRequestsSection(
+                  session: widget.session,
+                  lease: widget.lease,
+                )
+              : MarketOrderServicesScreen(
+                  session: widget.session,
+                  lease: widget.lease,
+                  operator: true,
+                ),
         ),
       ],
     );

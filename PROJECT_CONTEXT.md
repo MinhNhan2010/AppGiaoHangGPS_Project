@@ -21,7 +21,7 @@ server-verified roles (`GhstRoleMode` in `GhstUserShell` / `MarketplaceScreen`):
   login (`CloudAuthScreen`).
 - **Driver (`hasRole('driver')`)**: opens the dedicated `GHST DRIVER` workspace
   defaulting to `Sàn chuyến chờ nhận` (`driverQueue`), with Driver navigation
-  (`Chờ nhận`, `Chuyến giao`, `Thu gom`, `Hiệu suất`, `Hồ sơ`).
+  (`Chờ nhận`, `Chuyến giao`, `Thu gom`, `Hiệu suất`, `Ví & Đối soát`, `Hồ sơ`).
 - **Merchant / Shop Staff (`hasMerchantAccess`)**: opens the dedicated
   `GHST MERCHANT` workspace defaulting to `Cửa hàng của tôi` (`workspace`), with
   Merchant B2B / staff navigation.
@@ -53,6 +53,8 @@ All paths below are relative to this repository root.
 | Bespoke AI 3D studio icon suite (`26` styles + `GhstButtonIcon` custom button/chip/dropdown icon system + Web/Windows launcher icons) | `gps_delivery_app/assets/icons_3d/`, `gps_delivery_app/lib/presentation/widgets/animated_3d_ui_icons.dart`, `gps_delivery_app/lib/presentation/widgets/ghst_button_icon.dart`, `gps_delivery_app/web/favicon.png`, `gps_delivery_app/web/icons/`, `gps_delivery_app/windows/runner/resources/app_icon.ico` |
 | Live Customer ↔ Driver ↔ Merchant shipping journey, Cloud UI prefs & AI history (`workflowVersion: 19`–`20`) | `gps_delivery_app/database/migrations/20261113_cloud_sync_and_journey.sql`, `20261114_merchant_cloud_suite.sql`, `gps_delivery_app/lib/presentation/screens/cloud_order_details_screen.dart`, `gps_delivery_app/lib/presentation/widgets/cloud_logistics_panels.dart` |
 | Dedicated Merchant & Shop Staff Cloud Suite (`GHST MERCHANT`, `workflowVersion: 20`) | `gps_delivery_app/database/migrations/20261114_merchant_cloud_suite.sql`, `gps_delivery_app/lib/presentation/widgets/merchant_cloud_panels.dart`, `marketplace_editor.dart`, `gps_delivery_app/lib/presentation/screens/marketplace_screen.dart`, `marketplace_view.dart` |
+| Driver 80/20 Wallet (VietQR escrow deposit & bank withdrawal) & Virtual Showcase Restaurants/Beverage Catalog (`workflowVersion: 21`) | `gps_delivery_app/database/migrations/20261115_driver_wallet_and_showcase_catalog.sql`, `gps_delivery_app/lib/presentation/widgets/driver_cloud_wallet_panel.dart`, `gps_delivery_app/lib/presentation/screens/marketplace_view.dart`, `admin_portal_screen.dart` |
+| Real-Time GPS Auto-Dispatch (28s Offer Countdown), Corridor Multi-Order Batching, Operator Dynamic Pricing & Polygon Geofences, Recipient Touch Signature POD & Masked Contact (`workflowVersion: 22`) | `gps_delivery_app/database/migrations/20261116_realtime_dispatch_pricing_and_pod_signature.sql`, `gps_delivery_app/lib/presentation/widgets/driver_dispatch_cockpit.dart`, `admin_pricing_geofence_panel.dart`, `recipient_signature_pad.dart`, `gps_delivery_app/lib/presentation/screens/cloud_order_details_screen.dart`, `cloud_orders_screen.dart`, `admin_portal_screen.dart` |
 | Original shared user login presentation | `gps_delivery_app/lib/presentation/widgets/studio_user_auth_frame.dart` |
 | Default canonical app and shopping | `gps_delivery_app/lib/presentation/screens/marketplace_screen.dart`, `marketplace_view.dart` |
 | Synchronized App Settings (`Cài đặt ứng dụng`) across Customer, Driver, Merchant & Operator | `gps_delivery_app/lib/presentation/screens/cloud_app_settings_screen.dart`, `gps_delivery_app/lib/core/theme/theme_controller.dart`, `gps_delivery_app/lib/presentation/customer/ghst_user_shell.dart` |

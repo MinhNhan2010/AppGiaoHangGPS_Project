@@ -18,6 +18,7 @@ import { createCloudOrders } from './cloud-orders.mjs';
 import { createPaymentGateway } from './payment-gateway.mjs';
 import { createGhnGateway } from './ghn-gateway.mjs';
 import { createPublicTracking, startMarketJobs } from './market-operations.mjs';
+import { migrateCloud } from './migrate-cloud.mjs';
 
 await loadIntegrationConfig({ env: process.env });
 
@@ -69,7 +70,7 @@ if (
 ) {
   app.set('trust proxy', 1);
 }
-app.use((req, res, next) => ['/delivery/ocr','/delivery/cloud/media','/delivery/cloud/attachments','/delivery/cloud/pod'].includes(req.path) ? next() : express.json({ limit: '32kb' })(req, res, next));
+app.use((req, res, next) => ['/delivery/ocr','/delivery/cloud/media','/delivery/cloud/attachments','/delivery/cloud/pod','/delivery/cloud/driver-application/upload_document'].includes(req.path) ? next() : express.json({ limit: '32kb' })(req, res, next));
 app.use(
   cors((req, callback) => {
     const origin = req.get('origin');
@@ -232,6 +233,10 @@ const server = app.listen(port, bindHost, () => {
   const actualPort = server.address()?.port ?? port;
   console.log(`GO-MAU OTP relay đang chạy tại http://${bindHost}:${actualPort}`);
   if (port !== 0) {
+    const dbUrl = configValue('DATABASE_URL', process.env);
+    if (dbUrl && process.env.AUTO_MIGRATE_ON_START !== 'false') {
+      migrateCloud({ env: { ...process.env, DATABASE_URL: dbUrl } }).catch(() => {});
+    }
     if (providerConfigured('supabase')) {
       fetch(new URL('/auth/v1/settings', process.env.SUPABASE_URL), { headers: { apikey: process.env.SUPABASE_ANON_KEY }, signal: AbortSignal.timeout(8000) }).then(r => r.arrayBuffer()).catch(() => {});
     }

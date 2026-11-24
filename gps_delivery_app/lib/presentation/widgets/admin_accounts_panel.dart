@@ -5,8 +5,10 @@ import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/network/public_json_api.dart';
 import '../../core/theme/admin_studio_theme.dart';
+import '../../core/utils/delivery_order_utilities.dart';
 import 'cloud_membership_decision_dialog.dart';
 import 'cloud_membership_panel.dart';
+import '../screens/driver_partner_application_screen.dart';
 import 'cloud_order_labels.dart';
 import 'cloud_profile_form.dart';
 import 'cloud_session_boundary.dart';
@@ -57,6 +59,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
   late String _filter = widget.initialFilter;
   bool _busy = false;
   bool _loaded = false;
+  bool _exportingCsv = false;
   String? _error;
   String? _notice;
 
@@ -235,6 +238,32 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
     );
   }
 
+  Future<void> _exportAccountsCsv() async {
+    final visible = _visibleAccounts;
+    if (_exportingCsv || visible.isEmpty) return;
+    setState(() => _exportingCsv = true);
+    try {
+      final saved = await exportAccountsCsvFile(visible);
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Đã xuất CSV ${visible.length} tài khoản: $saved'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Không xuất được CSV tài khoản: $e'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exportingCsv = false);
+    }
+  }
+
   Future<void> _editProfile(Map<String, dynamic> account) async {
     final uid = '${account['user_id']}';
     final result = await _showProtectedDialog<Map<String, String>>(
@@ -245,22 +274,19 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
     final hadCitizen = '${account['citizen_id'] ?? ''}'.trim().isNotEmpty;
     final nextBirth = result['birth_date'] ?? '';
     final nextCitizen = result['citizen_id'] ?? '';
-    await _runMutation(
-      () async {
-        await widget.session.service.adminAccounts('update_profile', {
-          'user_id': uid,
-          'full_name': result['full_name'],
-          'phone': result['phone'],
-          if (nextBirth.isNotEmpty || hadBirth) 'birth_date': nextBirth,
-          if (nextCitizen.isNotEmpty || hadCitizen) 'citizen_id': nextCitizen,
-          'reason': result['reason'] ?? '',
-        });
-        if (uid == widget.session.service.userId) {
-          await widget.session.refresh();
-        }
-      },
-      successMessage: 'Đã cập nhật hồ sơ danh tính.',
-    );
+    await _runMutation(() async {
+      await widget.session.service.adminAccounts('update_profile', {
+        'user_id': uid,
+        'full_name': result['full_name'],
+        'phone': result['phone'],
+        if (nextBirth.isNotEmpty || hadBirth) 'birth_date': nextBirth,
+        if (nextCitizen.isNotEmpty || hadCitizen) 'citizen_id': nextCitizen,
+        'reason': result['reason'] ?? '',
+      });
+      if (uid == widget.session.service.userId) {
+        await widget.session.refresh();
+      }
+    }, successMessage: 'Đã cập nhật hồ sơ danh tính.');
   }
 
   Future<void> _decideMembership(
@@ -288,22 +314,19 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
       ),
     );
     if (reason == null || !mounted || !widget.lease.valid) return;
-    await _runMutation(
-      () async {
-        await widget.session.service.request(
-          'accounts/$uid/memberships/$role',
-          body: {
-            'decision': decision,
-            'version': decision == 'grant' && current == null ? 0 : version,
-            'reason': reason,
-          },
-        );
-        if (uid == widget.session.service.userId) {
-          await widget.session.refresh();
-        }
-      },
-      successMessage: 'Đã cập nhật quyền đối tác $roleLabel.',
-    );
+    await _runMutation(() async {
+      await widget.session.service.request(
+        'accounts/$uid/memberships/$role',
+        body: {
+          'decision': decision,
+          'version': decision == 'grant' && current == null ? 0 : version,
+          'reason': reason,
+        },
+      );
+      if (uid == widget.session.service.userId) {
+        await widget.session.refresh();
+      }
+    }, successMessage: 'Đã cập nhật quyền đối tác $roleLabel.');
   }
 
   Future<void> _toggleBlocked(Map<String, dynamic> account) async {
@@ -406,11 +429,13 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                     decoration: BoxDecoration(
                       color: tint,
                       borderRadius: BorderRadius.circular(9),
-                      border: Border.all(
-                        color: p.line,
-                      ),
+                      border: Border.all(color: p.line),
                     ),
-                    child: GhstButtonIcon(icon, size: compact ? 16 : 18, color: accent),
+                    child: GhstButtonIcon(
+                      icon,
+                      size: compact ? 16 : 18,
+                      color: accent,
+                    ),
                   ),
                   SizedBox(width: compact ? 8 : 10),
                   Expanded(
@@ -444,10 +469,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                 detail,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: compact ? 11 : 12,
-                  color: p.muted,
-                ),
+                style: TextStyle(fontSize: compact ? 11 : 12, color: p.muted),
               ),
             ],
           ),
@@ -532,31 +554,11 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
     final reason = '${membership?['reason'] ?? ''}'.trim();
 
     final (statusText, fg, bg) = switch (state) {
-      'active' => (
-        '$roleLabel · Đã duyệt',
-        p.onAccentInk,
-        p.acid,
-      ),
-      'pending' => (
-        '$roleLabel · Chờ duyệt',
-        p.onAccentInk,
-        p.gold,
-      ),
-      'rejected' => (
-        '$roleLabel · Chưa được duyệt',
-        p.danger,
-        p.dangerSoft,
-      ),
-      'revoked' => (
-        '$roleLabel · Đã thu hồi',
-        p.muted,
-        p.paperWarm,
-      ),
-      _ => (
-        '$roleLabel · Chưa đăng ký',
-        p.muted,
-        p.surface,
-      ),
+      'active' => ('$roleLabel · Đã duyệt', p.onAccentInk, p.acid),
+      'pending' => ('$roleLabel · Chờ duyệt', p.onAccentInk, p.gold),
+      'rejected' => ('$roleLabel · Chưa được duyệt', p.danger, p.dangerSoft),
+      'revoked' => ('$roleLabel · Đã thu hồi', p.muted, p.paperWarm),
+      _ => ('$roleLabel · Chưa đăng ký', p.muted, p.surface),
     };
 
     return Container(
@@ -586,6 +588,25 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                     ? Icons.two_wheeler_rounded
                     : Icons.storefront_outlined,
               ),
+              if (role == 'driver' && state != null)
+                OutlinedButton.icon(
+                  key: ValueKey('review-driver-${account['user_id']}'),
+                  onPressed: () => showDriverApplicationReview(
+                    context,
+                    service: widget.session.service,
+                    userId: '${account['user_id']}',
+                    displayName: '${account['full_name'] ?? ''}',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  icon: const GhstButtonIcon(Icons.badge_outlined, size: 16),
+                  label: const Text('Xem hồ sơ tài xế'),
+                ),
               if (state == 'pending') ...[
                 FilledButton.tonalIcon(
                   onPressed: _busy || blocked || !hasProfile
@@ -594,9 +615,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                   style: FilledButton.styleFrom(
                     backgroundColor: p.acidSoft,
                     foregroundColor: p.acidInk,
-                    side: BorderSide(
-                      color: p.acidInk.withValues(alpha: 0.35),
-                    ),
+                    side: BorderSide(color: p.acidInk.withValues(alpha: 0.35)),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
@@ -615,10 +634,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                       : () => _decideMembership(account, role, 'reject'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: p.danger,
-                    side: BorderSide(
-                      color: p.danger,
-                      width: 1.3,
-                    ),
+                    side: BorderSide(color: p.danger, width: 1.3),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
@@ -635,17 +651,17 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                       : () => _decideMembership(account, role, 'revoke'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: p.danger,
-                    side: BorderSide(
-                      color: p.danger,
-                      width: 1.3,
-                    ),
+                    side: BorderSide(color: p.danger, width: 1.3),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
                     ),
                     visualDensity: VisualDensity.compact,
                   ),
-                  icon: const GhstButtonIcon(Icons.person_remove_outlined, size: 16),
+                  icon: const GhstButtonIcon(
+                    Icons.person_remove_outlined,
+                    size: 16,
+                  ),
                   label: Text('Thu hồi $roleLabel'),
                 )
               else if (hasProfile && !blocked)
@@ -655,10 +671,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                       : () => _decideMembership(account, role, 'grant'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: p.violet,
-                    side: BorderSide(
-                      color: p.violet,
-                      width: 1.3,
-                    ),
+                    side: BorderSide(color: p.violet, width: 1.3),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 8,
@@ -674,10 +687,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
             const SizedBox(height: 6),
             Text(
               'Ghi chú xét duyệt: $reason',
-              style: TextStyle(
-                fontSize: 12,
-                color: p.muted,
-              ),
+              style: TextStyle(fontSize: 12, color: p.muted),
             ),
           ],
         ],
@@ -1215,7 +1225,36 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                                     ),
                                   ),
                                   const SizedBox(width: 10),
-                                  if (compact)
+                                  if (compact) ...[
+                                    IconButton(
+                                      key: const ValueKey(
+                                        'admin-accounts-export-csv',
+                                      ),
+                                      tooltip: 'Xuất CSV tài khoản',
+                                      style: IconButton.styleFrom(
+                                        backgroundColor:
+                                            AdminStudioColors.shellElevated,
+                                        foregroundColor: Colors.white,
+                                        side: const BorderSide(
+                                          color: AdminStudioColors.shellLine,
+                                        ),
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                        ),
+                                      ),
+                                      onPressed:
+                                          _busy ||
+                                              _exportingCsv ||
+                                              _visibleAccounts.isEmpty
+                                          ? null
+                                          : _exportAccountsCsv,
+                                      icon: const GhstButtonIcon(
+                                        Icons.download_outlined,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
                                     IconButton(
                                       tooltip: 'Làm mới danh sách tài khoản',
                                       style: IconButton.styleFrom(
@@ -1234,9 +1273,37 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                                       onPressed: _busy
                                           ? null
                                           : () => _load(force: true),
-                                      icon: const GhstButtonIcon(Icons.refresh_rounded),
-                                    )
-                                  else
+                                      icon: const GhstButtonIcon(
+                                        Icons.refresh_rounded,
+                                      ),
+                                    ),
+                                  ] else ...[
+                                    OutlinedButton.icon(
+                                      key: const ValueKey(
+                                        'admin-accounts-export-csv',
+                                      ),
+                                      onPressed:
+                                          _busy ||
+                                              _exportingCsv ||
+                                              _visibleAccounts.isEmpty
+                                          ? null
+                                          : _exportAccountsCsv,
+                                      style: OutlinedButton.styleFrom(
+                                        foregroundColor: Colors.white,
+                                        backgroundColor:
+                                            AdminStudioColors.shellElevated,
+                                        side: const BorderSide(
+                                          color: AdminStudioColors.shellLine,
+                                        ),
+                                      ),
+                                      icon: const GhstButtonIcon(
+                                        Icons.download_outlined,
+                                        size: 18,
+                                        color: Colors.white,
+                                      ),
+                                      label: const Text('Xuất CSV'),
+                                    ),
+                                    const SizedBox(width: 8),
                                     FilledButton.icon(
                                       onPressed: _busy
                                           ? null
@@ -1251,6 +1318,7 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                                       ),
                                       label: const Text('Làm mới'),
                                     ),
+                                  ],
                                 ],
                               );
                             },
@@ -1414,16 +1482,19 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                               controller: _search,
                               onChanged: (_) => setState(() {}),
                               decoration: InputDecoration(
-                                labelText:
-                                    'Tìm theo họ tên, email, số điện thoại hoặc UUID',
-                                prefixIcon: const GhstButtonIcon(Icons.search_rounded),
+                                labelText: 'Tìm theo họ tên, email, số điện thoại hoặc UUID',
+                                prefixIcon: const GhstButtonIcon(
+                                  Icons.search_rounded,
+                                ),
                                 suffixIcon: _search.text.isEmpty
                                     ? null
                                     : IconButton(
                                         tooltip: 'Xóa tìm kiếm',
                                         onPressed: () =>
                                             setState(_search.clear),
-                                        icon: const GhstButtonIcon(Icons.close_rounded),
+                                        icon: const GhstButtonIcon(
+                                          Icons.close_rounded,
+                                        ),
                                       ),
                               ),
                             ),
@@ -1433,7 +1504,20 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                               runSpacing: 8,
                               children: [
                                 for (final opt in filterOptions)
-                                  ChoiceChip(showCheckmark: false, avatar: GhstButtonIcon.forLabel(opt.$2, size: 15, color: (_filter == opt.$1) ? p.onAccentInk : p.ink), label: Text(opt.$2), selected: _filter == opt.$1, selectedColor: p.acid, backgroundColor: p.surfaceSubtle, labelStyle: TextStyle(
+                                  ChoiceChip(
+                                    showCheckmark: false,
+                                    avatar: GhstButtonIcon.forLabel(
+                                      opt.$2,
+                                      size: 15,
+                                      color: (_filter == opt.$1)
+                                          ? p.onAccentInk
+                                          : p.ink,
+                                    ),
+                                    label: Text(opt.$2),
+                                    selected: _filter == opt.$1,
+                                    selectedColor: p.acid,
+                                    backgroundColor: p.surfaceSubtle,
+                                    labelStyle: TextStyle(
                                       fontSize: 12.5,
                                       fontWeight: _filter == opt.$1
                                           ? FontWeight.w800
@@ -1441,8 +1525,10 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                                       color: _filter == opt.$1
                                           ? p.onAccentInk
                                           : p.ink,
-                                    ), onSelected: (_) =>
-                                        setState(() => _filter = opt.$1),),
+                                    ),
+                                    onSelected: (_) =>
+                                        setState(() => _filter = opt.$1),
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 10),
@@ -1496,7 +1582,10 @@ class _AdminAccountsPanelState extends State<AdminAccountsPanel> {
                                   _filter = 'all';
                                   _search.clear();
                                 }),
-                                icon: const GhstButtonIcon.glyph(GhstActionKind.refresh, size: 16),
+                                icon: const GhstButtonIcon.glyph(
+                                  GhstActionKind.refresh,
+                                  size: 16,
+                                ),
 
                                 label: const Text('Đặt lại bộ lọc'),
                               ),
@@ -1772,12 +1861,11 @@ class _BlockAccountDialogState extends State<_BlockAccountDialog> {
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    [if (email.isNotEmpty) email, if (phone.isNotEmpty) phone]
-                        .join(' · '),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: p.muted,
-                    ),
+                    [
+                      if (email.isNotEmpty) email,
+                      if (phone.isNotEmpty) phone,
+                    ].join(' · '),
+                    style: TextStyle(fontSize: 13, color: p.muted),
                   ),
                 ),
               const SizedBox(height: 12),
@@ -1816,7 +1904,10 @@ class _BlockAccountDialogState extends State<_BlockAccountDialog> {
                 )
               : null,
           onPressed: () => Navigator.pop(context, _reason.text.trim()),
-          icon: const GhstButtonIcon.glyph(GhstActionKind.checkCircle, size: 16),
+          icon: const GhstButtonIcon.glyph(
+            GhstActionKind.checkCircle,
+            size: 16,
+          ),
 
           label: const Text('Xác nhận'),
         ),
@@ -1900,13 +1991,7 @@ class _AccountGovernanceDetailDialogState
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                label,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: p.muted,
-                ),
-              ),
+              Text(label, style: TextStyle(fontSize: 12, color: p.muted)),
               const SizedBox(height: 2),
               SelectableText(
                 display,
@@ -1926,10 +2011,7 @@ class _AccountGovernanceDetailDialogState
               width: 140,
               child: Text(
                 label,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: p.muted,
-                ),
+                style: TextStyle(fontSize: 12.5, color: p.muted),
               ),
             ),
             Expanded(
@@ -1979,10 +2061,7 @@ class _AccountGovernanceDetailDialogState
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Text(
                     _error!,
-                    style: TextStyle(
-                      color: p.danger,
-                      fontSize: 13,
-                    ),
+                    style: TextStyle(color: p.danger, fontSize: 13),
                   ),
                 ),
               Container(
@@ -1990,9 +2069,7 @@ class _AccountGovernanceDetailDialogState
                 decoration: BoxDecoration(
                   color: p.surfaceSubtle,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: p.line,
-                  ),
+                  border: Border.all(color: p.line),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2010,9 +2087,8 @@ class _AccountGovernanceDetailDialogState
                     ),
                     _infoRow(
                       'Ngày tháng năm sinh',
-                      formatIsoBirthDate(
-                        _account['birth_date'] as String?,
-                      ).isNotEmpty
+                      formatIsoBirthDate(_account['birth_date'] as String?)
+                              .isNotEmpty
                           ? formatIsoBirthDate(
                               _account['birth_date'] as String?,
                             )
@@ -2066,12 +2142,14 @@ class _AccountGovernanceDetailDialogState
                     decoration: BoxDecoration(
                       color: p.surfaceSubtle,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: p.line,
-                      ),
+                      border: Border.all(color: p.line),
                     ),
                     child: Text(
-                      '${s['name']} · ${s['status'] == 'active' ? 'Đang hoạt động' : s['status'] == 'pending' ? 'Chờ duyệt' : 'Tạm khóa'}${s['paused'] == true ? ' (Tạm nghỉ)' : ''}\n${s['address'] ?? ''}',
+                      '${s['name']} · ${s['status'] == 'active'
+                          ? 'Đang hoạt động'
+                          : s['status'] == 'pending'
+                          ? 'Chờ duyệt'
+                          : 'Tạm khóa'}${s['paused'] == true ? ' (Tạm nghỉ)' : ''}\n${s['address'] ?? ''}',
                       style: const TextStyle(fontSize: 12.5, height: 1.4),
                     ),
                   ),
@@ -2089,10 +2167,7 @@ class _AccountGovernanceDetailDialogState
               if (_audit.isEmpty && !_busy)
                 Text(
                   'Chưa có bản ghi kiểm toán nào cho tài khoản này.',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    color: p.muted,
-                  ),
+                  style: TextStyle(fontSize: 12.5, color: p.muted),
                 ),
               for (final e in _audit)
                 Container(
@@ -2101,15 +2176,14 @@ class _AccountGovernanceDetailDialogState
                   decoration: BoxDecoration(
                     color: p.surfaceSubtle,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: p.line,
-                    ),
+                    border: Border.all(color: p.line),
                   ),
                   child: Builder(
                     builder: (_) {
                       final after = e['after_value'] as Map?;
                       final reason = '${after?['reason'] ?? ''}'.trim();
-                      final actor = '${e['actor_email'] ?? ''}'.trim().isNotEmpty
+                      final actor =
+                          '${e['actor_email'] ?? ''}'.trim().isNotEmpty
                           ? '${e['actor_email']}'
                           : '${e['actor_id']}';
                       return SelectableText(

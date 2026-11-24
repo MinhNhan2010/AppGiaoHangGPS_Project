@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/network/public_json_api.dart';
+import '../screens/driver_partner_application_screen.dart';
 import 'ghst_button_icon.dart';
 
 const partnerRoleNames = {'merchant': 'Cửa hàng', 'driver': 'Tài xế'};
@@ -85,7 +87,9 @@ class _CloudMembershipPanelState extends State<CloudMembershipPanel> {
       children: [
         const Divider(height: 32),
         Text('Đăng ký đối tác', style: Theme.of(context).textTheme.titleMedium),
-        for (final role in partnerRoleNames.keys)
+        for (final role in partnerRoleNames.keys.where(
+          (r) => r != 'merchant' || GhstFeatures.commerceEnabled,
+        ))
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Builder(
@@ -109,7 +113,23 @@ class _CloudMembershipPanelState extends State<CloudMembershipPanel> {
                         ),
                         Text(partnerRoleNames[role]!),
                         if (state != null) Text(partnerStateNames[state]!),
-                        if (state != 'active' && state != 'pending')
+                        if (role == 'driver')
+                          TextButton.icon(
+                            key: const ValueKey('apply-driver'),
+                            onPressed: _busy
+                                ? null
+                                : () => openDriverPartnerApplication(
+                                    context,
+                                    widget.session,
+                                  ),
+                            icon: const GhstButtonIcon(Icons.badge_outlined),
+                            label: Text(switch (state) {
+                              null => 'Đăng ký tài xế',
+                              'rejected' || 'revoked' => 'Sửa & gửi lại hồ sơ',
+                              _ => 'Xem hồ sơ tài xế',
+                            }),
+                          )
+                        else if (state != 'active' && state != 'pending')
                           TextButton.icon(
                             key: ValueKey('request-$role'),
                             onPressed: _busy ? null : () => _request(role),

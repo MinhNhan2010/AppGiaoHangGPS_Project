@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/delivery_api_client.dart';
 import '../../core/integrations/push_notification_service.dart';
@@ -16,6 +17,8 @@ import '../widgets/cloud_logistics_panels.dart';
 import '../widgets/cloud_notification_center.dart';
 import '../widgets/cloud_profile_form.dart';
 import '../widgets/cloud_session_boundary.dart';
+import '../widgets/driver_cloud_wallet_panel.dart';
+import '../widgets/driver_dispatch_cockpit.dart';
 import '../widgets/ghst_button_icon.dart';
 import '../widgets/merchant_cloud_panels.dart';
 import '../widgets/studio_user_auth_frame.dart';
@@ -69,11 +72,18 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
 
   GhstRoleMode get _effectiveRoleMode => _roleMode ?? GhstRoleMode.customer;
 
+  /// Merchant storefront workspaces are part of the commerce scope, which is
+  /// hidden while the app focuses on GPS delivery (see [GhstFeatures]).
+  bool get _merchantAccess =>
+      GhstFeatures.commerceEnabled && _session.hasMerchantAccess;
+  bool get _merchantRole =>
+      GhstFeatures.commerceEnabled && _session.hasRole('merchant');
+
   List<GhstRoleMode> _unlockedModes() {
     if (!_session.verified) return const [GhstRoleMode.customer];
     return [
       if (_session.isOperator) GhstRoleMode.operator,
-      if (_session.hasMerchantAccess) GhstRoleMode.merchant,
+      if (_merchantAccess) GhstRoleMode.merchant,
       if (_session.hasRole('driver')) GhstRoleMode.driver,
       GhstRoleMode.customer,
     ];
@@ -86,7 +96,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
       final preferred = switch (saved) {
         'admin' || 'operator' =>
           allowOperator && _session.isOperator ? GhstRoleMode.operator : null,
-        'merchant' => _session.hasMerchantAccess ? GhstRoleMode.merchant : null,
+        'merchant' => _merchantAccess ? GhstRoleMode.merchant : null,
         'driver' => _session.hasRole('driver') ? GhstRoleMode.driver : null,
         'customer' => GhstRoleMode.customer,
         _ => null,
@@ -98,13 +108,13 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
     if (primary == 'driver' && _session.hasRole('driver')) {
       return GhstRoleMode.driver;
     }
-    if (primary == 'merchant' && _session.hasMerchantAccess) {
+    if (primary == 'merchant' && _merchantAccess) {
       return GhstRoleMode.merchant;
     }
-    if (_session.hasRole('driver') && !_session.hasMerchantAccess) {
+    if (_session.hasRole('driver') && !_merchantAccess) {
       return GhstRoleMode.driver;
     }
-    if (_session.hasMerchantAccess) {
+    if (_merchantAccess) {
       return GhstRoleMode.merchant;
     }
     return GhstRoleMode.customer;
@@ -150,7 +160,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
     }
     _knownUnlockedModes = unlocked;
 
-    if (!_session.hasMerchantAccess &&
+    if (!_merchantAccess &&
         [
           GhstUserSection.workspace,
           GhstUserSection.merchantOrders,
@@ -166,15 +176,16 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
           GhstUserSection.driverTrips,
           GhstUserSection.driverPickups,
           GhstUserSection.driverStats,
+          GhstUserSection.driverWallet,
         ].contains(_section)) {
       _section = GhstUserSection.profile;
     }
-    if (!_session.hasRole('merchant') &&
+    if (!_merchantRole &&
         [
           GhstUserSection.merchantCsvImport,
           GhstUserSection.merchantPickups,
         ].contains(_section)) {
-      _section = _session.hasMerchantAccess
+      _section = _merchantAccess
           ? GhstUserSection.workspace
           : GhstUserSection.profile;
     }
@@ -182,6 +193,10 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
         _section == GhstUserSection.shipping) {
       _section = GhstUserSection.profile;
     }
+    if (!GhstFeatures.commerceEnabled && _section == GhstUserSection.food) {
+      _section = GhstUserSection.home;
+    }
+    if (!GhstFeatures.commerceEnabled) _purchaseOrders = false;
   }
 
   void _selectRoleMode(GhstRoleMode mode) {
@@ -237,7 +252,9 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
     _pushAlertsSub = PushNotificationService.instance.incomingAlerts.listen((
       item,
     ) {
-      if (!mounted || !_foreground || _section == GhstUserSection.notifications) {
+      if (!mounted ||
+          !_foreground ||
+          _section == GhstUserSection.notifications) {
         return;
       }
       final title = '${item['title'] ?? 'Thông báo mới'}'.trim();
@@ -306,8 +323,17 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
 
   void _navigate(MarketView view) {
     if (!_session.canUseBusiness) return;
+    if (!GhstFeatures.commerceEnabled &&
+        [
+          MarketView.catalog,
+          MarketView.orders,
+          MarketView.workspace,
+          MarketView.merchantOrders,
+        ].contains(view)) {
+      return;
+    }
     if ([MarketView.workspace, MarketView.merchantOrders].contains(view) &&
-        !_session.hasMerchantAccess) {
+        !_merchantAccess) {
       return;
     }
     final target = switch (view) {
@@ -333,19 +359,22 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
 
   void _go(GhstUserSection section) {
     if (!_session.canUseBusiness) return;
+    if (!GhstFeatures.commerceEnabled && section == GhstUserSection.food) {
+      return;
+    }
     if ([
           GhstUserSection.workspace,
           GhstUserSection.merchantOrders,
           GhstUserSection.merchantOperations,
         ].contains(section) &&
-        !_session.hasMerchantAccess) {
+        !_merchantAccess) {
       return;
     }
     if ([
           GhstUserSection.merchantCsvImport,
           GhstUserSection.merchantPickups,
         ].contains(section) &&
-        !_session.hasRole('merchant')) {
+        !_merchantRole) {
       return;
     }
     if ([
@@ -353,6 +382,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
           GhstUserSection.driverTrips,
           GhstUserSection.driverPickups,
           GhstUserSection.driverStats,
+          GhstUserSection.driverWallet,
         ].contains(section) &&
         !_session.hasRole('driver')) {
       return;
@@ -376,6 +406,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
         GhstUserSection.driverTrips,
         GhstUserSection.driverPickups,
         GhstUserSection.driverStats,
+        GhstUserSection.driverWallet,
       ].contains(section)) {
         _userSelectedRole = true;
         _roleMode = GhstRoleMode.driver;
@@ -421,6 +452,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
           builder: (_, lease) => CloudOrderDetailsScreen(
             lease: lease,
             order: order,
+            onReorder: _createOrder,
           ),
         ),
       ),
@@ -693,9 +725,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
 
     final isWide = MediaQuery.sizeOf(context).width >= 860;
     final Widget shippingContent =
-        roleMode == GhstRoleMode.merchant &&
-            _session.hasRole('merchant') &&
-            !isWide
+        roleMode == GhstRoleMode.merchant && _merchantRole && !isWide
         ? Column(
             children: [
               Padding(
@@ -803,7 +833,8 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
               )
             : home,
       GhstUserSection.shipping => shippingContent,
-      GhstUserSection.food => market(MarketView.catalog),
+      GhstUserSection.food =>
+        GhstFeatures.commerceEnabled ? market(MarketView.catalog) : home,
       GhstUserSection.profile => market(MarketView.account),
       GhstUserSection.settings => CloudSessionBoundary(
         key: ValueKey('$scope:settings'),
@@ -842,13 +873,10 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
                       : GhstUserSection.orders;
                 });
               },
-              onOpenMarketOrder: (orderId) => openMarketOrderServices(
-                context,
-                _session,
-                orderId: orderId,
-              ),
+              onOpenMarketOrder: (orderId) =>
+                  openMarketOrderServices(context, _session, orderId: orderId),
               onOpenPickup: () {
-                if (_session.hasRole('merchant')) {
+                if (_merchantRole) {
                   _go(GhstUserSection.merchantPickups);
                 } else if (_session.hasRole('driver')) {
                   _go(GhstUserSection.driverPickups);
@@ -902,11 +930,44 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
         session: _session,
         embedded: true,
         initialQueue: true,
+        topBanner: CloudSessionBoundary(
+          key: ValueKey('$scope:driver-queue-dispatch'),
+          session: _session,
+          roles: const {'driver'},
+          builder: (_, lease) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              DriverDispatchPresenceBar(
+                lease: lease,
+                compact: true,
+                onOrderAccepted: (accepted) {
+                  setState(() => _section = GhstUserSection.driverTrips);
+                  _openShippingDetails(accepted);
+                },
+              ),
+              DriverBatchSuggestionsPanel(
+                lease: lease,
+                onBatchClaimed: (_) =>
+                    setState(() => _section = GhstUserSection.driverTrips),
+              ),
+            ],
+          ),
+        ),
       ),
       GhstUserSection.driverTrips => CloudOrdersScreen(
         key: ValueKey('$scope:driver-trips'),
         session: _session,
         embedded: true,
+        topBanner: CloudSessionBoundary(
+          key: ValueKey('$scope:driver-trips-dispatch'),
+          session: _session,
+          roles: const {'driver'},
+          builder: (_, lease) => DriverDispatchPresenceBar(
+            lease: lease,
+            compact: true,
+            onOrderAccepted: _openShippingDetails,
+          ),
+        ),
       ),
       GhstUserSection.driverPickups => CloudSessionBoundary(
         key: ValueKey('$scope:driver-pickups'),
@@ -928,16 +989,31 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    DriverCloudWalletPanel(session: _session, lease: lease),
+                    const SizedBox(height: 16),
                     CloudDeliveryStatsCard(
                       service: _session.service,
                       lease: lease,
                     ),
-                    DriverReviewsPanel(
-                      service: _session.service,
-                      lease: lease,
-                    ),
+                    DriverReviewsPanel(service: _session.service, lease: lease),
                   ],
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      GhstUserSection.driverWallet => CloudSessionBoundary(
+        key: ValueKey('$scope:driver-wallet'),
+        session: _session,
+        roles: const {'driver'},
+        builder: (_, lease) => ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 820),
+                child: DriverCloudWalletPanel(session: _session, lease: lease),
               ),
             ),
           ],
@@ -949,6 +1025,14 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
                 key: ValueKey('$scope:merchant-shipping'),
                 session: _session,
                 embedded: true,
+                onReorder: _createOrder,
+              )
+            : !GhstFeatures.commerceEnabled
+            ? CloudOrdersScreen(
+                key: ValueKey('$scope:shipping'),
+                session: _session,
+                embedded: true,
+                onReorder: _createOrder,
               )
             : Column(
                 children: [
@@ -987,6 +1071,7 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
                             key: ValueKey('$scope:shipping'),
                             session: _session,
                             embedded: true,
+                            onReorder: _createOrder,
                           ),
                   ),
                 ],
@@ -1005,8 +1090,8 @@ class _MarketplaceScreenState extends State<MarketplaceScreen>
         onRoleModeChanged: _selectRoleMode,
         name: '${_session.account?['full_name'] ?? ''}',
         address: _address,
-        merchant: _session.hasMerchantAccess,
-        merchantOwner: _session.hasRole('merchant'),
+        merchant: _merchantAccess,
+        merchantOwner: _merchantRole,
         driver: _session.hasRole('driver'),
         unreadNotifications: PushNotificationService.instance.unreadCount,
         onNavigate: _go,

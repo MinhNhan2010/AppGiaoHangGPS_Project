@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/config/feature_flags.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../widgets/animated_3d_ui_icons.dart';
@@ -67,6 +68,7 @@ enum GhstUserSection {
   driverTrips,
   driverPickups,
   driverStats,
+  driverWallet,
   merchantCsvImport,
   merchantPickups,
 }
@@ -125,8 +127,12 @@ class GhstUserShell extends StatelessWidget {
     GhstRoleMode.merchant =>
       merchantOwner ? 'ĐỐI TÁC CỬA HÀNG & B2B' : 'NHÂN SỰ GIAN HÀNG',
     GhstRoleMode.customer || GhstRoleMode.operator =>
-      'SUPER-APP GIAO NHẬN & ẨM THỰC',
+      GhstFeatures.commerceEnabled
+          ? 'SUPER-APP GIAO NHẬN & ẨM THỰC'
+          : 'GIAO HÀNG ĐỊNH VỊ GPS',
   };
+
+  bool get _merchantVisible => merchant && GhstFeatures.commerceEnabled;
 
   String get title => switch (section) {
     GhstUserSection.home => 'Trang chủ',
@@ -152,72 +158,59 @@ class GhstUserShell extends StatelessWidget {
     GhstUserSection.driverTrips => 'Chuyến giao của tôi',
     GhstUserSection.driverPickups => 'Lịch xe thu gom',
     GhstUserSection.driverStats => 'Hiệu suất giao hàng',
+    GhstUserSection.driverWallet => 'Ví & Đối soát',
     GhstUserSection.merchantCsvImport => 'Nhập đơn hàng loạt CSV',
     GhstUserSection.merchantPickups => 'Lịch xe thu gom kho',
   };
 
-  List<(Icon3dStyle, String, GhstUserSection)> get _bottomItems =>
-      switch (roleMode) {
-        GhstRoleMode.driver => const [
-          (Icon3dStyle.gpsPinRadar, 'Chờ nhận', GhstUserSection.driverQueue),
-          (
-            Icon3dStyle.scooterExpress,
-            'Chuyến giao',
-            GhstUserSection.driverTrips,
-          ),
-          (Icon3dStyle.cargoTruck, 'Thu gom', GhstUserSection.driverPickups),
-          (Icon3dStyle.analyticsChart, 'Hiệu suất', GhstUserSection.driverStats),
-          (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
-        ],
-        GhstRoleMode.merchant when merchantOwner => const [
-          (Icon3dStyle.merchantStore, 'Cửa hàng', GhstUserSection.workspace),
-          (
-            Icon3dStyle.parcelBox,
-            'Đơn shop',
-            GhstUserSection.merchantOrders,
-          ),
-          (
-            Icon3dStyle.analyticsChart,
-            'Kinh doanh',
-            GhstUserSection.merchantOperations,
-          ),
-          (Icon3dStyle.createPlus, 'Gửi hàng', GhstUserSection.shipping),
-          (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
-        ],
-        GhstRoleMode.merchant => const [
-          (Icon3dStyle.merchantStore, 'Cửa hàng', GhstUserSection.workspace),
-          (
-            Icon3dStyle.parcelBox,
-            'Đơn shop',
-            GhstUserSection.merchantOrders,
-          ),
-          (
-            Icon3dStyle.chatSupport,
-            'Hậu mãi',
-            GhstUserSection.merchantOperations,
-          ),
-          (
-            Icon3dStyle.notificationBell,
-            'Thông báo',
-            GhstUserSection.notifications,
-          ),
-          (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
-        ],
-        GhstRoleMode.customer || GhstRoleMode.operator => const [
-          (Icon3dStyle.homePortal, 'Trang chủ', GhstUserSection.home),
-          (Icon3dStyle.createPlus, 'Giao hàng', GhstUserSection.shipping),
-          (Icon3dStyle.foodMarket, 'Ăn uống', GhstUserSection.food),
-          (Icon3dStyle.orderReceipt, 'Đơn hàng', GhstUserSection.orders),
-          (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
-        ],
-      };
+  List<(Icon3dStyle, String, GhstUserSection)>
+  get _bottomItems => switch (roleMode) {
+    GhstRoleMode.driver => const [
+      (Icon3dStyle.gpsPinRadar, 'Chờ nhận', GhstUserSection.driverQueue),
+      (Icon3dStyle.scooterExpress, 'Chuyến giao', GhstUserSection.driverTrips),
+      (Icon3dStyle.cargoTruck, 'Thu gom', GhstUserSection.driverPickups),
+      (Icon3dStyle.analyticsChart, 'Hiệu suất', GhstUserSection.driverStats),
+      (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
+    ],
+    GhstRoleMode.merchant when merchantOwner => const [
+      (Icon3dStyle.merchantStore, 'Cửa hàng', GhstUserSection.workspace),
+      (Icon3dStyle.parcelBox, 'Đơn shop', GhstUserSection.merchantOrders),
+      (
+        Icon3dStyle.analyticsChart,
+        'Kinh doanh',
+        GhstUserSection.merchantOperations,
+      ),
+      (Icon3dStyle.createPlus, 'Gửi hàng', GhstUserSection.shipping),
+      (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
+    ],
+    GhstRoleMode.merchant => const [
+      (Icon3dStyle.merchantStore, 'Cửa hàng', GhstUserSection.workspace),
+      (Icon3dStyle.parcelBox, 'Đơn shop', GhstUserSection.merchantOrders),
+      (Icon3dStyle.chatSupport, 'Hậu mãi', GhstUserSection.merchantOperations),
+      (
+        Icon3dStyle.notificationBell,
+        'Thông báo',
+        GhstUserSection.notifications,
+      ),
+      (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
+    ],
+    GhstRoleMode.customer || GhstRoleMode.operator => [
+      (Icon3dStyle.homePortal, 'Trang chủ', GhstUserSection.home),
+      (Icon3dStyle.createPlus, 'Giao hàng', GhstUserSection.shipping),
+      GhstFeatures.commerceEnabled
+          ? (Icon3dStyle.foodMarket, 'Ăn uống', GhstUserSection.food)
+          : (Icon3dStyle.gpsPinRadar, 'Theo dõi', GhstUserSection.tracking),
+      (Icon3dStyle.orderReceipt, 'Đơn hàng', GhstUserSection.orders),
+      (Icon3dStyle.userProfile, 'Hồ sơ', GhstUserSection.profile),
+    ],
+  };
 
   int get _bottomIndex => switch (roleMode) {
     GhstRoleMode.driver => switch (section) {
       GhstUserSection.driverQueue || GhstUserSection.tracking => 0,
       GhstUserSection.driverTrips => 1,
       GhstUserSection.driverPickups => 2,
-      GhstUserSection.driverStats => 3,
+      GhstUserSection.driverStats || GhstUserSection.driverWallet => 3,
       GhstUserSection.aiAssistant => -1,
       _ => 4,
     },
@@ -244,45 +237,46 @@ class GhstUserShell extends StatelessWidget {
       GhstUserSection.home => 0,
       GhstUserSection.shipping => 1,
       GhstUserSection.food => 2,
-      GhstUserSection.orders || GhstUserSection.tracking => 3,
+      GhstUserSection.tracking => GhstFeatures.commerceEnabled ? 3 : 2,
+      GhstUserSection.orders => 3,
       GhstUserSection.aiAssistant => -1,
       _ => 4,
     },
   };
 
   GhstUserSection? get _mobileBackTarget => switch (roleMode) {
-    GhstRoleMode.driver =>
-      switch (section) {
-        GhstUserSection.settings => GhstUserSection.profile,
-        GhstUserSection.notifications ||
-        GhstUserSection.tracking ||
-        GhstUserSection.aiAssistant => GhstUserSection.driverQueue,
-        _ => null,
-      },
-    GhstRoleMode.merchant when merchantOwner =>
-      switch (section) {
-        GhstUserSection.settings => GhstUserSection.profile,
-        GhstUserSection.notifications || GhstUserSection.aiAssistant =>
-          GhstUserSection.workspace,
-        _ => null,
-      },
-    GhstRoleMode.merchant =>
-      switch (section) {
-        GhstUserSection.settings => GhstUserSection.profile,
-        GhstUserSection.aiAssistant => GhstUserSection.workspace,
-        _ => null,
-      },
-    GhstRoleMode.customer || GhstRoleMode.operator =>
-      switch (section) {
-        GhstUserSection.settings => GhstUserSection.profile,
-        GhstUserSection.notifications ||
-        GhstUserSection.tracking ||
-        GhstUserSection.aiAssistant ||
-        GhstUserSection.workspace ||
-        GhstUserSection.merchantOrders ||
-        GhstUserSection.merchantOperations => GhstUserSection.home,
-        _ => null,
-      },
+    GhstRoleMode.driver => switch (section) {
+      GhstUserSection.settings => GhstUserSection.profile,
+      GhstUserSection.driverWallet => GhstUserSection.driverStats,
+      GhstUserSection.notifications ||
+      GhstUserSection.tracking ||
+      GhstUserSection.aiAssistant => GhstUserSection.driverQueue,
+      _ => null,
+    },
+    GhstRoleMode.merchant when merchantOwner => switch (section) {
+      GhstUserSection.settings => GhstUserSection.profile,
+      GhstUserSection.driverWallet => GhstUserSection.driverStats,
+      GhstUserSection.notifications ||
+      GhstUserSection.aiAssistant => GhstUserSection.workspace,
+      _ => null,
+    },
+    GhstRoleMode.merchant => switch (section) {
+      GhstUserSection.settings => GhstUserSection.profile,
+      GhstUserSection.driverWallet => GhstUserSection.driverStats,
+      GhstUserSection.aiAssistant => GhstUserSection.workspace,
+      _ => null,
+    },
+    GhstRoleMode.customer || GhstRoleMode.operator => switch (section) {
+      GhstUserSection.settings => GhstUserSection.profile,
+      GhstUserSection.driverWallet => GhstUserSection.driverStats,
+      GhstUserSection.notifications ||
+      GhstUserSection.tracking ||
+      GhstUserSection.aiAssistant ||
+      GhstUserSection.workspace ||
+      GhstUserSection.merchantOrders ||
+      GhstUserSection.merchantOperations => GhstUserSection.home,
+      _ => null,
+    },
   };
 
   @override
@@ -360,45 +354,45 @@ class GhstUserShell extends StatelessWidget {
           key: ValueKey('ghst-role-${mode.name}'),
           borderRadius: BorderRadius.circular(999),
           onTap: () => onRoleModeChanged?.call(mode),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-          decoration: BoxDecoration(
-            color: active
-                ? chipAccent.withValues(alpha: 0.30)
-                : const Color(0xFF1E293B),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+            decoration: BoxDecoration(
               color: active
-                  ? chipHighlight.withValues(alpha: 0.72)
-                  : AppColors.techLine,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              GhstAiIcon(
-                style: mode.icon3d,
-                size: 20,
-                circular: true,
-                selected: active,
-                borderColor: active
-                    ? chipHighlight.withValues(alpha: 0.85)
+                  ? chipAccent.withValues(alpha: 0.30)
+                  : const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: active
+                    ? chipHighlight.withValues(alpha: 0.72)
                     : AppColors.techLine,
               ),
-              const SizedBox(width: 6),
-              Text(
-                mode.label,
-                maxLines: 1,
-                style: TextStyle(
-                  color: active ? Colors.white : AppColors.techMuted,
-                  fontSize: 11.5,
-                  fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GhstAiIcon(
+                  style: mode.icon3d,
+                  size: 20,
+                  circular: true,
+                  selected: active,
+                  borderColor: active
+                      ? chipHighlight.withValues(alpha: 0.85)
+                      : AppColors.techLine,
                 ),
-              ),
-            ],
+                const SizedBox(width: 6),
+                Text(
+                  mode.label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: active ? Colors.white : AppColors.techMuted,
+                    fontSize: 11.5,
+                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -517,6 +511,11 @@ class GhstUserShell extends StatelessWidget {
             'Hiệu suất giao hàng',
             GhstUserSection.driverStats,
           ),
+          item(
+            Icon3dStyle.walletVault,
+            'Ví & Đối soát',
+            GhstUserSection.driverWallet,
+          ),
         ]),
         group('HỖ TRỢ & TÀI KHOẢN', [
           item(
@@ -623,11 +622,12 @@ class GhstUserShell extends StatelessWidget {
             'Tạo đơn hàng mới',
             GhstUserSection.shipping,
           ),
-          item(
-            Icon3dStyle.foodMarket,
-            'Ăn uống & Mua sắm',
-            GhstUserSection.food,
-          ),
+          if (GhstFeatures.commerceEnabled)
+            item(
+              Icon3dStyle.foodMarket,
+              'Ăn uống & Mua sắm',
+              GhstUserSection.food,
+            ),
           item(
             Icon3dStyle.aiAssistant,
             'Trợ lý AI',
@@ -669,9 +669,9 @@ class GhstUserShell extends StatelessWidget {
             GhstUserSection.settings,
           ),
         ]),
-        if (merchant || driver)
+        if (_merchantVisible || driver)
           group('CÔNG VIỆC CỦA TÔI', [
-            if (merchant) ...[
+            if (_merchantVisible) ...[
               item(
                 Icon3dStyle.merchantStore,
                 'Cửa hàng của tôi',
@@ -812,51 +812,51 @@ class GhstUserShell extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(10),
           onTap: action,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-          decoration: BoxDecoration(
-            color: selected
-                ? _accent.withValues(alpha: .28)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            children: [
-              iconWidget,
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: selected ? Colors.white : AppColors.techMuted,
-                    fontSize: 12.5,
-                    letterSpacing: 0,
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
-                  ),
-                ),
-              ),
-              if (badgeCount > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 6,
-                    vertical: 1.5,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEF4444),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            decoration: BoxDecoration(
+              color: selected
+                  ? _accent.withValues(alpha: .28)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                iconWidget,
+                const SizedBox(width: 10),
+                Expanded(
                   child: Text(
-                    badgeCount > 99 ? '99+' : '$badgeCount',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w800,
+                    label,
+                    style: TextStyle(
+                      color: selected ? Colors.white : AppColors.techMuted,
+                      fontSize: 12.5,
+                      letterSpacing: 0,
+                      fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
                     ),
                   ),
                 ),
-            ],
+                if (badgeCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1.5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEF4444),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      badgeCount > 99 ? '99+' : '$badgeCount',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ),
         ),
       ),
     ),
@@ -895,7 +895,8 @@ class GhstUserShell extends StatelessWidget {
               ),
             ),
           ),
-          if (roleMode == GhstRoleMode.customer &&
+          if (GhstFeatures.commerceEnabled &&
+              roleMode == GhstRoleMode.customer &&
               constraints.maxWidth >= 800 &&
               section != GhstUserSection.food)
             TextButton.icon(
@@ -933,7 +934,7 @@ class GhstUserShell extends StatelessWidget {
               selected: section == GhstUserSection.aiAssistant,
             ),
           ),
-          if (roleMode == GhstRoleMode.customer)
+          if (GhstFeatures.commerceEnabled && roleMode == GhstRoleMode.customer)
             IconButton(
               tooltip: 'Giỏ hàng',
               onPressed: onCart,
@@ -1098,7 +1099,7 @@ class GhstUserShell extends StatelessWidget {
               selected: section == GhstUserSection.aiAssistant,
             ),
           ),
-          if (roleMode == GhstRoleMode.customer)
+          if (GhstFeatures.commerceEnabled && roleMode == GhstRoleMode.customer)
             IconButton(
               tooltip: 'Giỏ hàng',
               visualDensity: VisualDensity.compact,
@@ -1193,55 +1194,55 @@ class GhstUserShell extends StatelessWidget {
                     key: ValueKey('ghst-nav-${items[i].$3.name}'),
                     borderRadius: BorderRadius.circular(12),
                     onTap: () => onNavigate(items[i].$3),
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(
-                      horizontal: 4,
-                      vertical: 5,
-                    ),
-                    decoration: BoxDecoration(
-                      color: activeIdx == i
-                          ? _accent.withValues(alpha: 0.24)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Badge.count(
-                          count: unreadNotifications,
-                          isLabelVisible:
-                              items[i].$3 == GhstUserSection.notifications &&
-                              unreadNotifications > 0,
-                          child: GhstAiIcon(
-                            style: items[i].$1,
-                            size: 25,
-                            borderRadius: 8,
-                            selected: activeIdx == i,
-                            borderColor: activeIdx == i
-                                ? _highlight
-                                : AppColors.techLine,
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: activeIdx == i
+                            ? _accent.withValues(alpha: 0.24)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Badge.count(
+                            count: unreadNotifications,
+                            isLabelVisible:
+                                items[i].$3 == GhstUserSection.notifications &&
+                                unreadNotifications > 0,
+                            child: GhstAiIcon(
+                              style: items[i].$1,
+                              size: 25,
+                              borderRadius: 8,
+                              selected: activeIdx == i,
+                              borderColor: activeIdx == i
+                                  ? _highlight
+                                  : AppColors.techLine,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          items[i].$2,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: activeIdx == i
-                                ? _highlight
-                                : AppColors.techMuted,
-                            fontSize: 10.5,
-                            letterSpacing: 0,
-                            fontWeight: activeIdx == i
-                                ? FontWeight.w900
-                                : FontWeight.w600,
+                          const SizedBox(height: 2),
+                          Text(
+                            items[i].$2,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: activeIdx == i
+                                  ? _highlight
+                                  : AppColors.techMuted,
+                              fontSize: 10.5,
+                              letterSpacing: 0,
+                              fontWeight: activeIdx == i
+                                  ? FontWeight.w900
+                                  : FontWeight.w600,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
                 ),
               ),
             ),

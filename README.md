@@ -8,9 +8,9 @@
 
 [![Flutter](https://img.shields.io/badge/Flutter-3.x_Multi--Platform-02569B?style=for-the-badge&logo=flutter&logoColor=white)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-%5E3.13.2-0175C2?style=for-the-badge&logo=dart&logoColor=white)](https://dart.dev)
-[![Supabase Cloud](https://img.shields.io/badge/Supabase_PostgreSQL-Workflow_v13_RLS-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](gps_delivery_app/database/migrations/)
+[![Supabase Cloud](https://img.shields.io/badge/Supabase_PostgreSQL-Workflow_v22_RLS-3ECF8E?style=for-the-badge&logo=supabase&logoColor=white)](gps_delivery_app/database/migrations/)
 [![Offline Queue](https://img.shields.io/badge/SQLite_v9-Scoped_Queue-00B14F?style=for-the-badge&logo=sqlite&logoColor=white)](gps_delivery_app/lib/data/datasources/local/sqlite_offline_queue_datasource.dart)
-[![Tests](https://img.shields.io/badge/Automated_Tests-277_Flutter_%7C_111_Node_%7C_22_PG-EE4D2D?style=for-the-badge&logo=checkmarx&logoColor=white)](gps_delivery_app/test/)
+[![Tests](https://img.shields.io/badge/Automated_Tests-341_Flutter_%7C_130_Node_%7C_32_PG-EE4D2D?style=for-the-badge&logo=checkmarx&logoColor=white)](gps_delivery_app/test/)
 
 [**Tổng quan**](#-1-tổng-quan-dự-án) · [**Hệ sinh thái tính năng**](#-2-hệ-sinh-thái-tính-năng-nổi-bật) · [**4 Phân hệ nghiệp vụ**](#-3-kiến-trúc-4-phân-hệ-người-dùng) · [**Kiến trúc & Vòng đời đơn**](#-4-kiến-trúc-kỹ-thuật--vòng-đời-đơn-hàng) · [**Thuật toán cốt lõi**](#-5-các-thuật-toán-cốt-lõi-tại-tầng-edge--server) · [**Cài đặt & Khởi chạy**](#-7-hướng-dẫn-cài-đặt--khởi-chạy) · [**Kiểm thử**](#-8-kiểm-thử-tự-động--kiểm-chứng-thực-tế)
 
@@ -20,7 +20,7 @@
 
 ## 📌 1. Tổng Quan Dự Án
 
-**GO-MAU Delivery (GHST Express)** là nền tảng giao nhận chặng cuối (*Last-mile Logistics*) kết hợp sàn thương mại & đặt món đa cửa hàng (*Multi-Shop Marketplace*), phát triển từ một cơ sở mã nguồn **Flutter & Dart** duy nhất cho **Web, Android, iOS và Windows Desktop**, đi kèm cổng **Node.js Backend Gateway** (`backend/otp-relay`) và cơ sở dữ liệu đám mây **Supabase Auth + PostgreSQL (`workflowVersion: 13`)**.
+**GO-MAU Delivery (GHST Express)** là nền tảng giao nhận chặng cuối (*Last-mile Logistics*) kết hợp sàn thương mại & đặt món đa cửa hàng (*Multi-Shop Marketplace*), phát triển từ một cơ sở mã nguồn **Flutter & Dart** duy nhất cho **Web, Android, iOS và Windows Desktop**, đi kèm cổng **Node.js Backend Gateway** (`backend/otp-relay`) và cơ sở dữ liệu đám mây **Supabase Auth + PostgreSQL (`workflowVersion: 22`)**.
 
 Hệ thống giải quyết 5 bài toán cốt lõi của giao vận và thương mại điện tử đô thị:
 1. **Định danh thống nhất & phân quyền server (`Profile Schema 3`)**: Đăng nhập chính bằng **Supabase Auth** (Email/Mật khẩu & Google OAuth PKCE). Một khung giao diện **GHST EXPRESS** duy nhất phục vụ Khách hàng, Chủ shop, Nhân sự shop (`manager`/`staff`) và Tài xế theo quyền đã được server phê duyệt; cổng **Cloud Operator (`/admin`)** tách biệt hoàn toàn.
@@ -38,7 +38,7 @@ Hệ thống giải quyết 5 bài toán cốt lõi của giao vận và thươn
 | **Đề tài** | Xây dựng hệ thống ứng dụng giao hàng định vị GPS thời gian thực đa nền tảng |
 | **Giảng viên hướng dẫn** | **Võ Văn Lên** |
 | **Nhóm thực hiện (Nhóm 14)** | **Phạm Trí Hiển** · **Nguyễn Phương Nam** · **Nguyễn Minh Nhân** |
-| **Quy mô hệ thống** | **4 phân hệ Cloud + lưu trữ `/legacy`** · **12 bản di trú SQL (`workflowVersion: 13`)** · **35+ bảng RLS Cloud & 18 bảng cục bộ** |
+| **Quy mô hệ thống** | **4 phân hệ Cloud + lưu trữ `/legacy`** · **21 bản di trú SQL (`workflowVersion: 22`)** · **45+ bảng RLS Cloud & 18 bảng cục bộ** |
 
 ---
 
@@ -48,9 +48,12 @@ Hệ thống giải quyết 5 bài toán cốt lõi của giao vận và thươn
 | :--- | :--- |
 | 🗺️ **Chọn & Tìm Địa Chỉ Trực Tiếp Trên Bản Đồ**<br>*(Interactive Map Picker + Reverse Geocode)* | Trên form **Tạo đơn hàng (`CloudOrderForm`)**, người dùng ghim điểm lấy `[A]`, điểm giao `[B]` và tối đa 5 điểm dừng trung gian trực tiếp bằng thao tác chạm trên bản đồ (`/delivery/reverse`), nút `Vị trí hiện tại (GPS)`, hoặc tìm kiếm địa chỉ trực tiếp (`/delivery/places`) kèm xem trước lộ trình thực tế — loại bỏ hoàn toàn việc nhập tay Vĩ độ / Kinh độ. |
 | ⚡ **5 Chế Độ Giao Hàng Cloud & Đa Điểm Dừng** | Hỗ trợ đầy đủ trên PostgreSQL: **Tiêu chuẩn (`standard`)**, **Giao nhanh (`express`)**, **Tiết kiệm 4h (`saving`)**, **Ghép đơn 2H (`same_day_2h`)** và **Xe tải nhẹ (`truck`)**; tính trọng lượng quy đổi `D×R×C / 5000`, đa điểm dừng (`+5.000đ/điểm`), khứ hồi (`+60%`), bảo hiểm khai giá (`0,5%`, kẹp `2.000đ..150.000đ`), ưu tiên xe điện EV (`48g CO₂/km`) và Quỹ Xanh (`+1.000đ`). |
-| 🛍️ **Sàn Đặt Món & Mua Sắm Đa Cửa Hàng (`delivery_market_*`)** | Gian hàng có ảnh bìa, bán kính phục vụ (`service_radius_km`), lịch mở cửa theo múi giờ `Asia/Ho_Chi_Minh`, phân quyền nhân sự (`manager` / `staff`), biến thể đa SKU, nhóm tùy chọn/topping, giỏ hàng khóa phiên bản và đặt mua nguyên tử nhiều cửa hàng cùng lúc (COD hoặc trả trước `payOS`). |
+| 🛍️ **Sàn Đặt Món, Quán Ảo Mẫu & Mua Sắm Đa Cửa Hàng (`delivery_market_*` & `delivery_showcase_catalog`)** | Gian hàng có ảnh bìa, bán kính phục vụ (`service_radius_km`), lịch mở cửa theo múi giờ `Asia/Ho_Chi_Minh`, phân quyền nhân sự (`manager` / `staff`), biến thể đa SKU, nhóm mức đường/đá/topping, đặt mua nguyên tử nhiều cửa hàng cùng lúc, cùng **6 quán ăn/trà sữa/tiện lợi ảo** (`25` món, `18` biến thể, `showcase_auto_dispatch` tự động đẩy đơn sang hàng đợi Tài xế ngay sau khi đặt). |
+| 💳 **Ví Tài Xế Đối Soát 80/20, Ký Quỹ VietQR & Rút Ngân Hàng (`delivery_driver_wallet`)** | Tự động chia **80% doanh thu tài xế / 20% chiết khấu nền tảng** khi giao thành công (tự động khấu trừ cước mặt đã thu `-cash_collected_fee`), tạo lệnh nạp ký quỹ quét mã **VietQR (`NAPAS 247`)**, liên kết tài khoản ngân hàng, khóa số dư nguyên tử khi chờ rút (`locked_balance`) và sổ cái bất biến chặn sửa/xóa. |
 | 🎟️ **Voucher Ngân Sách, Flash Sale & Ví Xu Server** | Quản lý ngân sách Voucher nền tảng/cửa hàng (`delivery_market_vouchers`), khung giờ & hạn mức Flash Sale nguyên tử (`delivery_market_flash_sales`), và sổ cái Xu phía server (`delivery_market_coin_ledger`: đổi tối đa `20%`, tích `1%` sau quyết toán, tự động thu hồi khi hủy/hoàn). |
-| 🔒 **Xác Thực POD / OTP 6 Số, Tệp Riêng Tư & Tra Cứu `/track`** | Lưu mật khẩu OTP 6 số người nhận trong bảng bảo mật riêng (`delivery_cloud_order_secrets`), đính kèm chứng từ riêng tư (`chat`, `return`, `finance`) vào kho RLS `'delivery-private-evidence'`, tạo link chia sẻ thu hồi được (`SHA-256` token 256-bit tại `/share` & `delivery_cloud_shares`) và tra cứu vận đơn công khai tại `/track` không lộ địa chỉ/SĐT/tiền. |
+| 📡 **Điều Phối Đẩy Cuốc GPS 28s & Ghép Đơn Cùng Tuyến (`delivery_driver_dispatch`)** | Trạm trực tuyến GPS của tài xế (`delivery_driver_presence`) kết hợp bộ đẩy cuốc độc quyền **đếm ngược 28 giây** (`delivery_driver_offers`) ưu tiên tài xế Online gần nhất trong bán kính `<= 8 km`, tự động chuyển tiếp cho tài xế kế tiếp nếu từ chối/hết giờ; hỗ trợ **Gợi ý & nhận gộp chuyến cùng tuyến (`Trip Bundle`, `<= 3 km` & góc lệch `<= 55°`)** kèm hiển thị thu nhập thực nhận `80%`. |
+| 📈 **Bảng Giá Động, Phụ Phí Cao Điểm/Mưa Bão & Vùng Đa Giác Geofence (`delivery_admin_pricing`)** | Operator chỉnh trực tiếp đơn giá 5 gói cước, bật/tắt 1 chạm phụ phí **Giờ cao điểm** / **Mưa lớn**, và vẽ vùng đa giác **Geofence** trên bản đồ 3D (`delivery_point_in_polygon` ray-casting) tự động cộng `surge_fee` & `geofence_fee` vào báo giá khách hàng. |
+| ✍️ **Chữ Ký Điện Tử POD, OTP 6 Số, Che SĐT `0912***678` & Tra Cứu `/track`** | Cổng bàn giao hỗ trợ đồng thời **Ảnh chụp POD**, **Chữ ký tay cảm ứng người nhận (`RecipientSignaturePad` xuất PNG lên kho riêng tư)** và **mã OTP 6 số** (`delivery_cloud_order_secrets`); hiển thị số điện thoại che bảo mật (`0912***678`) kèm hộp thoại liên hệ an toàn & tin nhắn mẫu nhanh, link chia sẻ `SHA-256` tại `/share` và tra cứu công khai `/track`. |
 
 ---
 
@@ -75,7 +78,7 @@ Hệ thống giải quyết 5 bài toán cốt lõi của giao vận và thươn
         <li>Gửi yêu cầu đăng ký đối tác tài xế độc lập ngay trong hồ sơ Cloud, kích hoạt khi Operator phê duyệt.</li>
         <li>Xem hàng đợi <b>Chờ nhận</b> đã ẩn thông tin nhạy cảm trước khi nhận chuyến; khóa nhận chuyến nguyên tử chống trùng.</li>
         <li>Thực hiện chu trình <code>Đã đến lấy hàng -> Đã lấy hàng -> Giao thành công</code> kèm tải ảnh POD và nhập mã OTP 6 số từ người nhận.</li>
-        <li>Xử lý giao thất bại có lý do, giao lại, hoàn hàng về người gửi và đề xuất thu tiền COD có chứng từ.</li>
+        <li>Xử lý giao thất bại có lý do, giao lại, hoàn hàng về người gửi, theo dõi <b>Ví & Đối soát 80/20</b>, nạp ký quỹ bằng mã <b>VietQR</b> và gửi lệnh rút tiền ngân hàng.</li>
       </ul>
     </td>
   </tr>
@@ -97,7 +100,7 @@ Hệ thống giải quyết 5 bài toán cốt lõi của giao vận và thươn
         <li>Tách biệt hoàn toàn tại <code>/admin</code> (hoặc <code>/#/admin</code>), yêu cầu phiên Supabase có quyền <code>operator</code> từ server.</li>
         <li>Bảng phân tích <code>admin_analytics</code> thời gian thực (tách bạch GMV ước tính và doanh thu đã quyết toán).</li>
         <li>Phê duyệt / thu hồi tư cách Merchant & Driver, duyệt gian hàng, kiểm duyệt báo cáo đánh giá vi phạm.</li>
-        <li>Đối soát tài chính phê duyệt chéo 2 người (COD, hoàn tiền, quyết toán shop), quản lý Voucher / Flash Sale, chạy tiến trình <code>market_jobs</code> và cấu hình khóa API phía backend.</li>
+        <li>Đối soát tài chính phê duyệt chéo 2 người (COD, hoàn tiền, quyết toán shop), phê duyệt Nạp/Rút Ví Tài xế, khởi tạo/quản lý 6 quán ăn & đồ uống ảo (<code>delivery_showcase_catalog</code>), quản lý Voucher / Flash Sale, chạy tiến trình <code>market_jobs</code> và cấu hình khóa API phía backend.</li>
       </ul>
     </td>
   </tr>
@@ -193,7 +196,7 @@ DoAn_PhatTrienUngDungDiDongDaNenTang/
     │   ├── MARKETPLACE.md                    # Đặc tả Marketplace, đối soát kế toán & bộ thương mại v13
     │   ├── COMMERCE.md                       # Đặc tả tích hợp payOS, GHN & kiểm tra sẵn sàng
     │   └── INTEGRATIONS.md                   # Quản lý tích hợp tập trung (Photon/Google Maps, OSRM, SMTP, FCM)
-    ├── database/migrations/                  # 12 bản di trú SQL bổ sung (20261027 -> 20261107, workflow 13)
+    ├── database/migrations/                  # 20 bản di trú SQL bổ sung (20261027 -> 20261115, workflow 21)
     ├── lib/
     │   ├── main.dart                         # Định tuyến chung phiên Cloud (/, /cloud, /admin, /track, /share, /legacy)
     │   ├── core/                             # Supabase Auth/OAuth PKCE, CloudAccountSession, GPS, GeoMath
@@ -248,7 +251,7 @@ Các đường dẫn truy cập trên trình duyệt (`http://127.0.0.1:8080/`):
 Dự án duy trì kiểm chứng nhiều lớp từ PostgreSQL gốc, Node.js Gateway, Flutter Analyzer/Test đến trình duyệt thực tế:
 
 ```powershell
-# 1. Kiểm thử Backend (111/111 bài kiểm thử SQL/Gateway/Security) & PostgreSQL 17 độc lập (22/22 nhóm)
+# 1. Kiểm thử Backend (130/130 bài kiểm thử SQL/Gateway/Security) & PostgreSQL 17 độc lập (31/31 nhóm)
 cd gps_delivery_app/backend/otp-relay
 npm test
 npm run test:postgres
@@ -265,7 +268,7 @@ node tool/check-admin-browser.cjs
 node tool/check-full-ui-acceptance.cjs
 ```
 
-- **Kiểm thử cô lập & Hồi quy giao diện**: `22/22` nhóm PostgreSQL 17 gốc, `111/111` bài test Node backend, `0` lỗi phân tích tĩnh, `277` bài test Flutter và `62` ảnh chụp nghiệm thu giao diện đa vai trò (`build/verification/acceptance/`).
+- **Kiểm thử cô lập & Hồi quy giao diện**: `31/31` nhóm PostgreSQL 17 gốc, `130/130` bài test Node backend, `0` lỗi phân tích tĩnh, `338` bài test Flutter và `62` ảnh chụp nghiệm thu giao diện đa vai trò (`build/verification/acceptance/`).
 - **Kiểm thử thực chiến Zero-Mock trên Cloud thật (`2026-11-01`)**: Đã xác minh luồng đa vai trò trực tiếp trên Microsoft Edge + Backend `:8787` + Supabase Auth/PostgreSQL thật (`buyer`, `merchant`, `driver`, `operator`, `/#/track`, chọn & tìm địa chỉ trực tiếp trên bản đồ không nhập tọa độ tay, xác thực OTP 6 số khi giao và khôi phục nguyên trạng CSDL sau kiểm thử tại `build/verification/live-e2e/live-e2e-report.json`).
 - **Giới hạn trước mở bán thương mại**: Các nhà cung cấp bên thứ ba (`payOS`, `GHN`, FCM) và tên miền `PUBLIC_BASE_URL` HTTPS công khai cần được cấp khóa thật và nghiệm thu trên thiết bị vật lý độc lập theo [`EXECUTION_CHECKLIST.md`](gps_delivery_app/EXECUTION_CHECKLIST.md).
 
