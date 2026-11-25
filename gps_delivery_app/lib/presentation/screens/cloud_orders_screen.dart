@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../core/gps/driver_multi_trip_planner.dart';
 import '../../core/integrations/cloud_orders_service.dart';
 import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/delivery_api_client.dart';
@@ -13,6 +14,7 @@ import '../../core/theme/admin_studio_theme.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/delivery_order_utilities.dart';
+import '../../data/datasources/local/app_state_store.dart';
 import '../../domain/entities/vehicle_class.dart';
 import '../../data/repositories/cloud_orders_repository.dart';
 import '../widgets/animated_3d_ui_icons.dart';
@@ -26,6 +28,7 @@ import '../widgets/cloud_membership_panel.dart';
 import '../widgets/cloud_membership_decision_dialog.dart';
 import '../widgets/cloud_session_boundary.dart';
 import '../widgets/cloud_order_labels.dart';
+import '../widgets/delivery_utilities_widgets.dart';
 import '../widgets/ghst_button_icon.dart';
 import 'cloud_address_book_screen.dart';
 import 'cloud_order_details_screen.dart';
@@ -667,6 +670,21 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
       ),
     );
     if (mounted && identity == _api.identityScope) await _load();
+  }
+
+  Future<void> _openDriverMultiTripPlanner(DriverMultiTripPlan plan) async {
+    await showDriverMultiTripPlanDialog(
+      context,
+      plan: plan,
+      onOpenOrder: (orderId) {
+        final match = _orders
+            .where((o) => '${o['id'] ?? ''}' == orderId)
+            .firstOrNull;
+        if (match != null && mounted) {
+          unawaited(_history(match));
+        }
+      },
+    );
   }
 
   Future<void> _pricing() => _run(() async {
@@ -2071,6 +2089,40 @@ class _CloudOrdersScreenState extends State<CloudOrdersScreen>
                             ? null
                             : () => openCloudDeliveryStats(context, _session),
                         icon: const GhstButtonIcon(Icons.insights_outlined),
+                      ),
+                    if (!widget.admin && _session.hasRole('driver') && !_queue)
+                      Builder(
+                        builder: (context) {
+                          final activeDriverPlan = buildOptimalDriverTripPlan(
+                            orders: _orders,
+                            driverUserId: _api.userId,
+                            driverLocation:
+                                AppStateStore.instance.liveDeviceLocation,
+                          );
+                          if (activeDriverPlan.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return OutlinedButton.icon(
+                            key: const ValueKey(
+                              'driver-multi-trip-planner-btn',
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            onPressed: _busy
+                                ? null
+                                : () => _openDriverMultiTripPlanner(
+                                    activeDriverPlan,
+                                  ),
+                            icon: const GhstButtonIcon(
+                              Icons.route_outlined,
+                              size: 17,
+                            ),
+                            label: Text(
+                              'Lộ trình gộp (${activeDriverPlan.activeOrderCount})',
+                            ),
+                          );
+                        },
                       ),
                     if (_session.hasRole('driver'))
                       SegmentedButton<bool>(

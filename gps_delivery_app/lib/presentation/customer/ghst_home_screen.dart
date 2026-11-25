@@ -7,12 +7,16 @@ import '../../core/integrations/cloud_account_session.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
+import '../../core/utils/delivery_order_utilities.dart';
 import '../../domain/entities/geo_point.dart';
+import '../../domain/entities/vehicle_class.dart';
 import '../screens/cloud_order_details_screen.dart';
 import '../screens/cloud_promo_events_screen.dart';
+import '../screens/public_order_tracking_screen.dart';
 import '../widgets/animated_3d_ui_icons.dart';
 import '../widgets/cloud_order_labels.dart';
 import '../widgets/cloud_session_boundary.dart';
+import '../widgets/delivery_utilities_widgets.dart';
 import '../widgets/ghst_button_icon.dart';
 import '../widgets/motion_3d_effects.dart';
 import '../widgets/system_state_screens.dart';
@@ -1072,11 +1076,218 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
     );
   }
 
+  Widget _deliveryInsightsCard(GhstThemeTokens tokens) {
+    final orders = _data['orders'] ?? const [];
+    final insights = summarizeCustomerDeliveryInsights(orders);
+    final co2Label = insights.co2SavedGrams >= 1000
+        ? '${(insights.co2SavedGrams / 1000).toStringAsFixed(2)} kg'
+        : '${insights.co2SavedGrams.round()} g';
+
+    final statItems = <(String, String, TonePair)>[
+      ('Đang giao', '${insights.activeOrders}', tokens.sapphire),
+      ('Hoàn tất', '${insights.deliveredOrders}', tokens.emerald),
+      (
+        'Tổng cước',
+        CurrencyFormatter.formatVnd(insights.totalShippingSpendVnd),
+        tokens.amber,
+      ),
+      ('CO₂ xanh EV', co2Label, tokens.cyan),
+    ];
+
+    return _panel(
+      accentGlow: tokens.emerald.glow,
+      Column(
+        key: const ValueKey('home-delivery-insights-card'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _heading(tokens, 'Tiện ích giao hàng & Dấu chân Xanh'),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final cols = constraints.maxWidth >= 460 ? 4 : 2;
+              final tileWidth = (constraints.maxWidth - 8 * (cols - 1)) / cols;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final item in statItems)
+                    SizedBox(
+                      width: tileWidth,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: item.$3.fill,
+                          borderRadius: BorderRadius.circular(11),
+                          border: Border.all(color: item.$3.border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.$1,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: tokens.inkMuted,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              item.$2,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                                color: item.$3.foreground,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('home-quick-fare-compare'),
+                onPressed: widget.session.canCreateShippingOrder
+                    ? () => showDeliveryFareComparisonSheet(
+                        context,
+                        initialDistanceKm: 5,
+                        initialWeightKg: 2,
+                        selectedVehicle: VehicleClass.motorbike,
+                        selectedServiceType: 'standard',
+                        onSelect: (vehicle, tier) => widget.onCreateOrder({
+                          'vehicle_type': vehicle.id,
+                          'service_type': tier,
+                          if (vehicle == VehicleClass.evScooter)
+                            'prefer_ev': true,
+                        }),
+                      )
+                    : null,
+                icon: const GhstButtonIcon(
+                  Icons.table_chart_outlined,
+                  size: 17,
+                ),
+                label: const Text('So sánh cước 5 loại xe'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('home-quick-public-track'),
+                onPressed: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute(
+                    builder: (_) => PublicOrderTrackingScreen(
+                      cloudService: widget.session.service,
+                    ),
+                  ),
+                ),
+                icon: const GhstButtonIcon(
+                  Icons.qr_code_scanner_outlined,
+                  size: 17,
+                ),
+                label: const Text('Tra cứu mã vận đơn'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _frequentRoutesCard(
+    GhstThemeTokens tokens,
+    List<FrequentDeliveryRoute> routes,
+  ) => _panel(
+    accentGlow: tokens.cyan.glow,
+    Column(
+      key: const ValueKey('home-frequent-routes-card'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _heading(tokens, 'Tuyến giao thường xuyên'),
+        const SizedBox(height: 8),
+        for (final (idx, route) in routes.indexed)
+          Container(
+            margin: EdgeInsets.only(bottom: idx == routes.length - 1 ? 0 : 8),
+            padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+            decoration: BoxDecoration(
+              color: tokens.cardSubtle,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: tokens.border),
+            ),
+            child: Row(
+              children: [
+                GhstButtonIcon(
+                  route.vehicle.heavy
+                      ? Icons.local_shipping_outlined
+                      : Icons.two_wheeler_rounded,
+                  size: 18,
+                  color: tokens.sapphire.icon,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${route.pickupAddress} → ${route.dropoffAddress}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: tokens.ink,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${route.recipientName} · ${route.vehicle.shortLabel} · ${route.orderCount} lần',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: tokens.inkSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton.tonal(
+                  key: ValueKey('home-frequent-route-send-$idx'),
+                  onPressed: () => widget.onCreateOrder(
+                    buildReorderInitialDetails(route.sampleOrder),
+                  ),
+                  child: const Text('Gửi nhanh'),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
     if (!_lease.valid) return const SizedBox.shrink();
     final tokens = GhstThemeTokens.of(context);
     final activeBanner = _activeOrderBanner(tokens);
+    final frequentRoutes = widget.session.canCreateShippingOrder
+        ? extractFrequentRoutes(_data['orders'] ?? const [])
+        : const <FrequentDeliveryRoute>[];
     return RefreshIndicator(
       onRefresh: _load,
       child: SingleChildScrollView(
@@ -1111,6 +1322,12 @@ class _GhstHomeScreenState extends State<GhstHomeScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _services(tokens),
+                    const SizedBox(height: 12),
+                    _deliveryInsightsCard(tokens),
+                    if (frequentRoutes.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _frequentRoutesCard(tokens, frequentRoutes),
+                    ],
                     if (GhstFeatures.commerceEnabled) ...[
                       const SizedBox(height: 12),
                       _promoHub(tokens),

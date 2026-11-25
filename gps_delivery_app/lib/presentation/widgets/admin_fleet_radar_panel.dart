@@ -48,6 +48,7 @@ class _AdminFleetRadarPanelState extends State<AdminFleetRadarPanel> {
   Map<String, Map<String, dynamic>> _driverByOrderId = const {};
   String? _vehicleFilter;
   String _statusFilter = 'all';
+  bool _staleOnly = false;
   String? _selectedOrderId;
   bool _loading = false;
   bool _exporting = false;
@@ -223,11 +224,173 @@ class _AdminFleetRadarPanelState extends State<AdminFleetRadarPanel> {
     }
   }
 
+  Widget _buildSlaMetricsCard(
+    BuildContext context,
+    GhstThemeTokens tokens,
+    AdminFleetOperationsMetrics metrics,
+  ) {
+    final co2Label = metrics.totalEvCo2SavedGrams >= 1000
+        ? '${(metrics.totalEvCo2SavedGrams / 1000).toStringAsFixed(2)} kg'
+        : '${metrics.totalEvCo2SavedGrams.round()} g';
+    final kpis = <(String, String, TonePair)>[
+      (
+        'Tỷ lệ hoàn tất',
+        '${metrics.completionRatePct.toStringAsFixed(1)}%',
+        tokens.emerald,
+      ),
+      (
+        'Lỗi / Hoàn hàng',
+        '${metrics.failureReturnRatePct.toStringAsFixed(1)}%',
+        metrics.failedOrReturned > 0 ? tokens.rose : tokens.sapphire,
+      ),
+      (
+        'Tỷ lệ xe xanh EV',
+        '${metrics.evAdoptionPct.toStringAsFixed(1)}%',
+        tokens.cyan,
+      ),
+      ('CO₂ xanh tiết kiệm', co2Label, tokens.emerald),
+    ];
+    final activeVehicleRevs = VehicleClass.all
+        .where((vc) => (metrics.revenueByVehicle[vc.id] ?? 0) > 0)
+        .toList();
+
+    return GhstLuminousCard(
+      key: const ValueKey('admin-fleet-sla-metrics-card'),
+      padding: const EdgeInsets.all(14),
+      borderRadius: 16,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              GhstButtonIcon(
+                Icons.analytics_outlined,
+                size: 18,
+                color: tokens.sapphire.icon,
+              ),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  'Phân tích SLA & Cơ cấu đội xe',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: tokens.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          LayoutBuilder(
+            builder: (context, box) {
+              final cols = box.maxWidth >= 640 ? 4 : 2;
+              final tileWidth = (box.maxWidth - 8 * (cols - 1)) / cols;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final kpi in kpis)
+                    SizedBox(
+                      width: tileWidth,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: kpi.$3.fill,
+                          borderRadius: BorderRadius.circular(11),
+                          border: Border.all(color: kpi.$3.border),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              kpi.$1,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: tokens.inkMuted,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              kpi.$2,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w800,
+                                color: kpi.$3.foreground,
+                                fontFeatures: const [
+                                  FontFeature.tabularFigures(),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: 10),
+          if (activeVehicleRevs.isEmpty)
+            Text(
+              'Chưa phát sinh doanh thu cước.',
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            )
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final vc in activeVehicleRevs)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: tokens.cardSubtle,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: tokens.border),
+                    ),
+                    child: Text(
+                      '${vc.shortLabel}: ${CurrencyFormatter.formatVnd(metrics.revenueByVehicle[vc.id] ?? 0)}',
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.inkSecondary,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = GhstThemeTokens.of(context);
-    final filtered = _filteredOrders;
-    final summary = summarizeAdminOrders(filtered);
+    final fleetMetrics = computeAdminFleetMetrics(_orders);
+    final allSummary = summarizeAdminOrders(_orders);
+    final baseFiltered = _filteredOrders;
+    final filtered = _staleOnly
+        ? baseFiltered
+              .where(
+                (o) =>
+                    fleetMetrics.staleSearchingIds.contains('${o['id'] ?? ''}'),
+              )
+              .toList()
+        : baseFiltered;
     final vehicleCounts = <String, int>{
       for (final vc in VehicleClass.all) vc.id: 0,
     };
@@ -319,8 +482,11 @@ class _AdminFleetRadarPanelState extends State<AdminFleetRadarPanel> {
                     avatar: const GhstButtonIcon(Icons.gps_fixed, size: 16),
                     label: Text('Xe có GPS live: ${fleetDrivers.length}'),
                   ),
-                  if (summary.staleSearching > 0)
-                    Chip(
+                  if (allSummary.staleSearching > 0 || _staleOnly)
+                    FilterChip(
+                      key: const ValueKey('radar-stale-sla-filter'),
+                      selected: _staleOnly,
+                      selectedColor: tokens.amber.fill,
                       backgroundColor: tokens.amber.fill,
                       side: BorderSide(color: tokens.amber.border),
                       avatar: GhstButtonIcon(
@@ -329,12 +495,13 @@ class _AdminFleetRadarPanelState extends State<AdminFleetRadarPanel> {
                         color: tokens.amber.foreground,
                       ),
                       label: Text(
-                        'Đơn chờ >15p: ${summary.staleSearching}',
+                        'Đơn chờ >15p: ${allSummary.staleSearching}',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           color: tokens.amber.foreground,
                         ),
                       ),
+                      onSelected: (sel) => setState(() => _staleOnly = sel),
                     ),
                   OutlinedButton.icon(
                     onPressed: _loading ? null : _load,
@@ -409,6 +576,8 @@ class _AdminFleetRadarPanelState extends State<AdminFleetRadarPanel> {
             ],
           ),
         ),
+        const SizedBox(height: 12),
+        _buildSlaMetricsCard(context, tokens, fleetMetrics),
         if (_error != null) ...[
           const SizedBox(height: 8),
           Container(

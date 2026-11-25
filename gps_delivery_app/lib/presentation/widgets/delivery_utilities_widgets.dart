@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/gps/driver_multi_trip_planner.dart';
 import '../../core/theme/ghst_theme_tokens.dart';
 import '../../core/utils/currency_formatter.dart';
 import '../../core/utils/delivery_order_utilities.dart';
@@ -568,3 +570,244 @@ class _DriverIncidentDialogState extends State<_DriverIncidentDialog> {
     );
   }
 }
+
+/// Dialog displaying an optimized precedence-constrained multi-trip route
+/// sequence for a driver partner, with total distance/ETA savings and 1-tap
+/// external Google Maps navigation.
+Future<void> showDriverMultiTripPlanDialog(
+  BuildContext context, {
+  required DriverMultiTripPlan plan,
+  void Function(String orderId)? onOpenOrder,
+}) => showDialog<void>(
+  context: context,
+  builder: (dialogContext) {
+    final tokens = GhstThemeTokens.of(dialogContext);
+
+    TonePair toneForKind(DriverStopKind kind) => switch (kind) {
+      DriverStopKind.pickup => tokens.emerald,
+      DriverStopKind.extraStop => tokens.amber,
+      DriverStopKind.dropoff => tokens.rose,
+      DriverStopKind.returnPickup => tokens.violet,
+    };
+
+    return AlertDialog(
+      title: Text('Lộ trình gộp đa chuyến (${plan.activeOrderCount} đơn)'),
+      content: SizedBox(
+        width: 560,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                key: const ValueKey('driver-multi-trip-summary'),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: tokens.cardSubtle,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: tokens.border),
+                ),
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const GhstButtonIcon(
+                        Icons.pin_drop_outlined,
+                        size: 16,
+                      ),
+                      label: Text('${plan.stops.length} điểm'),
+                    ),
+                    Chip(
+                      visualDensity: VisualDensity.compact,
+                      avatar: const GhstButtonIcon(
+                        Icons.route_outlined,
+                        size: 16,
+                      ),
+                      label: Text(
+                        '${plan.optimizedDistanceKm.toStringAsFixed(1)} km · ~${plan.estimatedTotalMinutes} phút',
+                        style: const TextStyle(
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    if (plan.savedDistanceKm >= 0.1)
+                      Container(
+                        key: const ValueKey('driver-multi-trip-saved-badge'),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: tokens.emerald.fill,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: tokens.emerald.border),
+                        ),
+                        child: Text(
+                          'Tiết kiệm ${plan.savedDistanceKm.toStringAsFixed(1)} km',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800,
+                            color: tokens.emerald.foreground,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (plan.stops.isEmpty)
+                Text(
+                  'Chưa có điểm dừng nào có tọa độ GPS hợp lệ.',
+                  style: TextStyle(color: tokens.inkMuted),
+                )
+              else
+                for (final stop in plan.stops) ...[
+                  Builder(
+                    builder: (context) {
+                      final tone = toneForKind(stop.kind);
+                      return Container(
+                        key: ValueKey(
+                          'multi-trip-stop-${stop.orderId}-${stop.stopIndex}',
+                        ),
+                        margin: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.all(11),
+                        decoration: BoxDecoration(
+                          color: tokens.cardSurface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: tokens.border),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 28,
+                              height: 28,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: tone.fill,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: tone.border),
+                              ),
+                              child: Text(
+                                '${stop.stopIndex}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: tone.foreground,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 4,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: tone.fill,
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                          border: Border.all(
+                                            color: tone.border,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          stop.label,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: tone.foreground,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        stop.trackingCode,
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w800,
+                                          color: tokens.ink,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    stop.address,
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: tokens.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${stop.recipientName} · +${stop.legDistanceKm.toStringAsFixed(1)} km · tích lũy ${stop.cumulativeKm.toStringAsFixed(1)} km (~${stop.etaMinutes}p)',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      color: tokens.inkSecondary,
+                                      fontFeatures: const [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (onOpenOrder != null)
+                              TextButton(
+                                key: ValueKey(
+                                  'multi-trip-open-${stop.orderId}-${stop.stopIndex}',
+                                ),
+                                onPressed: () {
+                                  Navigator.of(dialogContext).pop();
+                                  onOpenOrder(stop.orderId);
+                                },
+                                child: const Text('Chi tiết'),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        if (plan.googleMapsDirectionsUri != null)
+          OutlinedButton.icon(
+            key: const ValueKey('driver-multi-trip-open-maps'),
+            onPressed: () => launchUrl(
+              plan.googleMapsDirectionsUri!,
+              mode: LaunchMode.externalApplication,
+            ),
+            icon: const GhstButtonIcon(Icons.map_outlined, size: 17),
+            label: const Text('Mở Google Maps'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Đóng'),
+        ),
+      ],
+    );
+  },
+);

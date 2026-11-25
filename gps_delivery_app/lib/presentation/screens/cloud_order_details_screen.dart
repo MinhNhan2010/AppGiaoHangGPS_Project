@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config/env_config.dart';
+import '../../core/gps/delivery_live_telemetry.dart';
 import '../../core/integrations/cloud_session_lease.dart';
 import '../../core/integrations/delivery_weather_service.dart';
 import '../../core/network/public_json_api.dart';
@@ -327,8 +328,9 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
             enriched['sender_profile'] as Map,
           );
         }
-        if (enriched['latest_gps'] is Map) {
-          _liveGps = Map<String, dynamic>.from(enriched['latest_gps'] as Map);
+        final rawLiveGps = enriched['latest_gps'] ?? snap['gps'];
+        if (rawLiveGps is Map) {
+          _liveGps = Map<String, dynamic>.from(rawLiveGps);
         }
         if (enriched['driver_review'] is Map) {
           _driverReview = Map<String, dynamic>.from(
@@ -1647,6 +1649,118 @@ class _CloudOrderDetailsScreenState extends State<CloudOrderDetailsScreen> {
                 fontWeight: FontWeight.w700,
               ),
             ),
+            if (_isActiveJourney)
+              Builder(
+                builder: (context) {
+                  final telemetry = computeLiveTripTelemetry(
+                    order: {..._order, 'status': _effectiveStatus},
+                    liveGps: _liveGps!,
+                    completedCheckpoints: _completedCheckpoints,
+                  );
+                  if (telemetry == null) return const SizedBox.shrink();
+                  Widget telemetryPill(String text, TonePair tone) => Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: tone.fill,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: tone.border),
+                    ),
+                    child: Text(
+                      text,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: tone.foreground,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  );
+
+                  final etaText = telemetry.etaMinutes == 0
+                      ? 'ETA: Đã gần tới'
+                      : 'ETA: ~${telemetry.etaMinutes} phút (${formatTelemetryClock(telemetry.estimatedArrival)})';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (telemetry.isArrivingSoon) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          key: const ValueKey('order-arriving-soon-banner'),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 11,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: tokens.emerald.fill,
+                            borderRadius: BorderRadius.circular(11),
+                            border: Border.all(color: tokens.emerald.border),
+                          ),
+                          child: Row(
+                            children: [
+                              GhstButtonIcon(
+                                Icons.notifications_active_outlined,
+                                size: 17,
+                                color: tokens.emerald.icon,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Tài xế sắp đến ${telemetry.targetLabel} (còn ~${formatTelemetryDistance(telemetry.straightDistanceMeters)})${_details['require_otp'] == true ? ' — vui lòng chuẩn bị mã OTP 6 số.' : ' — vui lòng chú ý điện thoại.'}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: tokens.emerald.foreground,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 8),
+                      Container(
+                        key: const ValueKey('order-live-telemetry-strip'),
+                        padding: const EdgeInsets.all(9),
+                        decoration: BoxDecoration(
+                          color: tokens.cardSubtle,
+                          borderRadius: BorderRadius.circular(11),
+                          border: Border.all(color: tokens.border),
+                        ),
+                        child: Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            telemetryPill(
+                              'Đích: ${telemetry.targetLabel}',
+                              tokens.sapphire,
+                            ),
+                            telemetryPill(
+                              'Còn ~${formatTelemetryDistance(telemetry.estimatedRoadMeters)}',
+                              tokens.violet,
+                            ),
+                            telemetryPill(etaText, tokens.cyan),
+                            if (telemetry.usedLiveSpeed)
+                              telemetryPill(
+                                '${telemetry.effectiveSpeedKmh.round()} km/h',
+                                tokens.sapphire,
+                              ),
+                            telemetryPill(
+                              formatGpsAgeLabel(telemetry.gpsAgeSeconds),
+                              telemetry.isSignalStale
+                                  ? tokens.amber
+                                  : tokens.emerald,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
           ],
           if (widget.weatherService != null ||
               EnvConfig.deliveryApiBaseUrl.isNotEmpty) ...[
